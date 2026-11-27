@@ -1216,13 +1216,14 @@ def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
 
 
 #: BOSS's own stores with ONE GLOBAL key space (secret_material.ref_key is the primary key; the
-#: local vault is one file). A reference may read only material that is ITS OWN: the master key
-#: never, and never a key an OLDER reference of another project, org or workspace already names —
-#: naming someone else's key is how a project would read their secret (BOSSAPP-1286).
+#: local vault is one file). Their keys are named by BOSS for a scope (secrets_service.ref_key_for)
+#: and a reference to one can only be CREATED for its own scope (SecretRefService.create_secret_ref,
+#: BOSSAPP-1286). At read time the store's own master key never resolves, and a db/<id> slot only
+#: for its own reference.
 _GLOBAL_KEY_STORES = frozenset({"database", "local_vault"})
 
 
-def _material_belongs_to(connection: Any, row: Any, secret_ref_id: str) -> bool:
+def _material_belongs_to(row: Any, secret_ref_id: str) -> bool:
     backend = str(row.get("storage_backend") or row.get("ref_kind") or "").lower()
     if backend not in _GLOBAL_KEY_STORES:
         return True
@@ -1231,13 +1232,7 @@ def _material_belongs_to(connection: Any, row: Any, secret_ref_id: str) -> bool:
         return False
     if key.startswith("db/"):
         return key == f"db/{secret_ref_id}"
-    older = connection.execute(sql(
-        "SELECT 1 FROM secret_refs o, secret_refs me WHERE me.id = :i AND o.id <> me.id "
-        "AND o.ref_key = me.ref_key AND COALESCE(o.storage_backend, o.ref_kind) = :b "
-        "AND (o.scope_type, o.scope_id) IS DISTINCT FROM (me.scope_type, me.scope_id) "
-        "AND o.created_at < me.created_at LIMIT 1"),
-        {"i": secret_ref_id, "b": backend}).first()
-    return older is None
+    return True
 
 
 def _tag_github_by_origin(value: Any, row: Any) -> Any:
@@ -1299,7 +1294,7 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
     subject = _access.scope_admits(row, who)
     if subject is not None:
         raise _refuse(subject, f"secret ref {secret_ref_id} is {subject}")
-    if not _material_belongs_to(connection, row, secret_ref_id):
+    if not _material_belongs_to(row, secret_ref_id):
         raise _refuse("material of another scope",
                       f"secret ref {secret_ref_id} names material it was not written for")
     backend = backend_for(row["storage_backend"] or row["ref_kind"], settings)

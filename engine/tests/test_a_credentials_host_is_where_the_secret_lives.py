@@ -225,32 +225,22 @@ def test_the_real_adapter_path_mints_with_its_own_app_and_refuses_the_install_ke
 
 
 def test_a_project_cannot_read_another_scopes_material_by_naming_its_key(eng, monkeypatch):
-    """Finding 2: secret_material is keyed globally. A project's reference naming a key an older
-    reference of another project owns is refused, and the master key never resolves."""
-    import time
-
+    """Finding 2: secret_material is keyed globally. A reference into a global-key store can be
+    CREATED only for its own scope's keys, and the store's master key never resolves."""
     from boss_engine.config import get_settings
     from boss_engine.services import secret_backends
+    from boss_engine.services.secret_refs import SecretRefService
 
     owner, thief = make_project(eng), make_project(eng)
-    secret_backends.DatabaseBackend(eng).put("BOSS_OWNER_GITHUB_TOKEN", "the-owners-token")
-
-    def ref(project, rid, key):
-        with eng.begin() as c:
-            c.execute(text(
-                "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
-                "provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, "
-                "'database', :k, 'github', 'database', 'ceo')"), {"i": rid, "p": project, "k": key})
-
-    ref(owner, f"sref_o_{owner}", "BOSS_OWNER_GITHUB_TOKEN")
-    time.sleep(0.01)
-    ref(thief, f"sref_t_{thief}", "BOSS_OWNER_GITHUB_TOKEN")
-    ref(thief, f"sref_m_{thief}", "__boss_master_key__")
-    monkeypatch.setattr(secret_backends, "backend_for",
-                        lambda kind, settings=None: secret_backends.DatabaseBackend(eng))
+    owner_key = f"BOSS_{owner.upper()}_GITHUB_TOKEN"
+    refs = SecretRefService()
+    with eng.begin() as c, pytest.raises(ValueError):
+        refs.create_secret_ref(c, project_id=thief, ref_kind="database", ref_key=owner_key,
+                               provider="github", status="active", metadata={}, actor="ceo")
     with eng.begin() as c:
-        assert secret_backends.resolve_secret_ref(
-            c, f"sref_o_{owner}", get_settings(), project_id=owner) == "the-owners-token"
-    for rid in (f"sref_t_{thief}", f"sref_m_{thief}"):
-        with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):
-            secret_backends.resolve_secret_ref(c, rid, get_settings(), project_id=thief)
+        c.execute(text(
+            "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
+            "provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, 'database', "
+            "'__boss_master_key__', 'github', 'database', 'ceo')"), {"i": f"sref_m_{thief}", "p": thief})
+    with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):
+        secret_backends.resolve_secret_ref(c, f"sref_m_{thief}", get_settings(), project_id=thief)

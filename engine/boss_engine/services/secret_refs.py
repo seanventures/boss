@@ -203,6 +203,17 @@ class SecretRefService:
                 f"An env reference ({ref_key})" if ref_kind == "env"
                 else f"A host file reference ({ref_key})" if ref_kind == "local_runner"
                 else f"A reference scoped to the {normalized_scope_type}")
+        # A reference into BOSS's own global-key stores names only material written for ITS
+        # scope (secrets_service.ref_key_for: BOSS_<SCOPE>_…): naming another project's or
+        # org's key is how a project would read their secret (BOSSAPP-1286).
+        if ref_kind in ("database", "local_vault"):
+            from .secrets_service import ref_key_for
+
+            own = ref_key_for(normalized_scope_id, "x")[:-1]
+            if not str(ref_key or "").startswith(own) or ref_key == "__boss_master_key__":
+                raise ValueError(
+                    f"A {ref_kind} reference names only this scope's own secrets ({own}…); store "
+                    "the value through BOSS instead of naming another key.")
         normalized_secret_kind = secret_kind.strip().lower()
         if normalized_secret_kind not in self.ALLOWED_SECRET_KINDS:
             raise ValueError(
