@@ -118,15 +118,19 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
     stop = time.monotonic() + args.minutes * 60
 
-    def caller() -> None:
+    def caller(mix: list) -> None:
         with httpx.Client(base_url=f"http://127.0.0.1:{args.port}", timeout=300) as c:
             while time.monotonic() < stop:
-                for method, path, body in MIX:
+                for method, path, body in mix:
                     r = c.get(path) if method == "get" else c.post(path, json=body)
                     if r.status_code >= 500:
                         failures.append(f"{path} {r.status_code}")
                 time.sleep(random.uniform(0, 12))    # pool threads retire after 10 s idle
-    callers = [threading.Thread(target=caller, daemon=True) for _ in range(args.callers)]
+    # ONE worker sends the ticks (as an install's worker does: they are not built to race each
+    # other); the other callers are console tabs polling the screens' reads.
+    console = [call for call in MIX if call[0] == "get"]
+    callers = [threading.Thread(target=caller, args=(MIX if i == 0 else console,), daemon=True)
+               for i in range(args.callers)]
     for t in callers:
         t.start()
     samples: list[tuple[float, int]] = []
