@@ -56,13 +56,21 @@ _spec.loader.exec_module(harness)
 
 FIXTURE = harness.FIXTURE
 FAILING_TEST = "slug lowercases and joins words with hyphens"
-#: The most builds one attempt at a case may take: the first, its repair, a follow-up, its repair.
-MAX_BUILDS = 4
-#: The plan's cap for the same cause (ENT-REC-52: "at most 3 attempts in total").
+#: The plan's cap for the same cause (ENT-REC-52: "at most 3 attempts in total"): BOSS's one
+#: cap per lineage (services/lineage_cap.py) across the build, its repairs and follow-ups.
 PLAN_ATTEMPTS = 3
+#: The most builds one attempt at a case may take.
+MAX_BUILDS = PLAN_ATTEMPTS
 
 pytestmark = pytest.mark.skipif(not os.environ.get("BOSS_TEST_DATABASE_URL"),
                                 reason="needs the bench database (BOSS_TEST_DATABASE_URL)")
+
+
+class _NoModel:
+    """The decision seat with no model: every typed decision falls back to BOSS's own rule."""
+
+    def decide(self, *_a, **_k):
+        raise RuntimeError("no model in this test")
 
 
 @pytest.fixture(scope="module")
@@ -74,10 +82,14 @@ def pipe(tmp_path_factory):
     os.environ["BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS"] = "1"
     from boss_engine.config import get_settings
     from boss_engine.identity import consent, lineage
-    from boss_engine.services import playwright_cache
+    from boss_engine.services import playwright_cache, typed_decisions
 
     get_settings.cache_clear()
     mp = pytest.MonkeyPatch()
+    # NO MODEL DECIDES EITHER. The typed decision seat (the risk tier, plan coverage) is not an
+    # engine: left alone it reached the laptop's real Claude CLI, and where a lineage parked
+    # (a follow-up waiting on a plan approval, or not) varied with what that model answered.
+    mp.setattr(typed_decisions, "make_decider", lambda *_a, **_k: _NoModel())
     mp.setattr(playwright_cache, "ensure", lambda *_a, **_k: {
         "ok": True, "cached": True, "seconds": 0.0, "path": None,
         "detail": "harness: the browser cache is warm"})
@@ -301,16 +313,36 @@ def test_rec01_the_lineage_ends_no_loop(rec01):
 
 
 def test_rec52_the_same_cause_gets_at_most_three_builds(rec01):
-    """The plan's cap. How many builds the lineage takes depends on where it parks (a draft, or
-    a follow-up waiting on a plan approval), so this reports an xfail — a product bug — only on
-    the runs that exceed it."""
+    """The plan's cap, one for the lineage: the build, its repair and the checks-failing
+    follow-up — never the follow-up's own repair (it used to restart the count at 1)."""
     same = [r["id"] for r in rec01["runs"] if any(
         "written_tests_pass" in (g["gates_failed"] or [])
         for g in rec01["gates"] if g["code_task_run_id"] == r["id"])]
-    if len(same) > PLAN_ATTEMPTS:
-        pytest.xfail(f"ENT-REC-52: one failing existing test took {len(same)} builds (the build, "
-                     "its review-repair child, the checks-failing follow-up and its own repair "
-                     "child), each failing on the same gate; the plan caps the same cause at 3")
+    assert len(same) == len(rec01["runs"]) == PLAN_ATTEMPTS, [r["id"] for r in rec01["runs"]]
+
+
+def test_rec52_the_lineage_parks_the_same_way_every_time(rec01):
+    """Deterministic: the follow-up keeps the lineage's risk tier (BOSS's own finding text says
+    "auth" and re-deciding the tier from it parked the follow-up on a plan approval, as the
+    decider happened to answer), so it never waits on a plan approval; it ends as a draft."""
+    followup = next(r for r in rec01["runs"] if (r["finalize_ctx"] or {}).get("is_followup"))
+    assert (followup["spec"] or {}).get("risk_tier") == 1
+    assert not [r for r in rec01["runs"] if r["phase"] == "awaiting_plan_approval"]
+    assert rec01["runs"][-1]["id"] == followup["id"] and followup["status"] == "completed"
+
+
+def test_rec52_at_the_cap_a_person_decides_with_a_next_step(rec01):
+    """The third build is the last BOSS makes by itself: no repair child, no follow-up, and the
+    draft's card says BOSS already tried that for this same cause and what a person does next."""
+    from boss_engine.services import lineage_cap
+
+    spent = _of(rec01, "code_task.lineage_attempts_spent")
+    assert len(spent) == 1 and spent[0]["entity_id"] == rec01["runs"][-1]["id"], spent
+    assert spent[0]["data"]["attempts"] == lineage_cap.CAP
+    stopped = (rec01["runs"][-1]["finalize_ctx"]["checks_failing"] or {}).get("stopped") or {}
+    assert stopped.get("reason") == lineage_cap.REASON and stopped.get("no_followup")
+    assert "BOSS already tried that for this same cause" in stopped["words"]
+    assert lineage_cap.NEXT_STEP in stopped["words"]
 
 
 def test_rec01_the_ledger_reads_attempts_and_times_back(pipe, rec01):
@@ -348,18 +380,15 @@ def _attempts(pipe, lin: dict) -> list[dict]:
     return out
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ENT-REC-52: the recovery agent's cause signature for open findings is every failing gate "
-    "joined (step_recovery.cause_signature: build:open_findings:<gates>), so the SAME broken "
-    "test reads as a new cause as soon as another gate joins it on a later attempt (code_written "
-    "after a repair round that changed nothing) — and the same-cause rule never fires"))
 def test_rec52_every_attempt_at_the_same_failing_test_has_one_cause_signature(pipe, rec01):
     from boss_engine.services import step_recovery as sr
 
     attempts = _attempts(pipe, rec01)
     assert len(attempts) >= 2, "the cause came back at least once"
     sigs = {sr.cause_signature(sr.FINDINGS_KIND, f)[0] for f in attempts}
-    assert len(sigs) == 1, sigs
+    assert sigs == {"build:open_findings:written_tests_pass"}, sigs
+    # ...although the gates beside it differ between attempts (a round that wrote nothing).
+    assert len({tuple(f["failing_gates"]) for f in attempts}) > 1, attempts
 
 
 def test_rec52_the_same_cause_twice_is_one_question_never_the_same_action(pipe, rec01):
@@ -480,14 +509,58 @@ def test_rec51_a_persons_retry_and_the_follow_ups_stay_on_the_failing_app(pipe, 
             assert app == "recipe-box", f"{run['id']} builds on {app!r}, not recipe-box/"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ENT-REC-51: BOSS scopes the coder's prompt to one app ('Work ONLY under `<app>/`. Do not "
-    "edit sibling apps.') only for a pinned benchmark app (verification_target.official_app_id); "
-    "for the app a brief or a lineage names (verification_target.app_scope) no writing turn — "
-    "build, repair round or follow-up — is told to stay inside it"))
 def test_rec51_every_writing_turn_is_told_to_stay_inside_the_failing_app(rec51):
     turns = [(rid, x["stage"]) for rid, r in rec51["writes"].items() for x in r]
     unscoped = [(rid, x["stage"]) for rid, r in rec51["writes"].items() for x in r
                 if "Work ONLY under `recipe-box/`" not in x["full_prompt"]]
     assert turns and not unscoped, f"writing turns not scoped to recipe-box/: {unscoped}"
+    # ...on every kind of build of the lineage: the build, a repair, the follow-up, the Retry.
+    kinds = {}
+    for run in rec51["runs"]:
+        fctx = run.get("finalize_ctx") or {}
+        kind = ("build" if run["id"] == rec51["root"] else "retry" if run["id"] == rec51["retry"]
+                else "follow-up" if fctx.get("is_followup") and not fctx.get("attempt")
+                else "repair")
+        if rec51["writes"].get(run["id"]):
+            kinds.setdefault(kind, []).append(run["id"])
+    assert set(kinds) == {"build", "repair", "follow-up", "retry"}, kinds
+
+
+def test_rec51_every_build_of_the_lineage_passes_the_stays_in_its_app_gate(rec51):
+    """`stayed_in_app` is judged on every build of the lineage, and none changed another app."""
+    judged = [g for g in rec51["gates"] if (g["evidence"] or {}).get("app_scope")]
+    assert len(judged) == len(rec51["gates"]) >= 2
+    for g in judged:
+        assert g["evidence"]["app_scope"] == {"app": "recipe-box", "other_app_files": []}
+        assert "stayed_in_app" not in (g["gates_failed"] or [])
+
+
+
+@pytest.fixture(scope="module")
+def rec51_stray(pipe):
+    """The same two apps; the brief names Recipe box, and the coder writes into Neighborhood
+    board instead (a model that wandered): the diff changes another app's files."""
+    run_id, repo = start(pipe, tag="rec51s", seed={**_tree(FIXTURE, "recipe-box/"),
+                                                   **_tree(FIXTURE, "neighborhood-board/")},
+                         fixture=_new_work_fixture(pipe), app_dir="neighborhood-board",
+                         brief_extra=" Build it in the `recipe-box/` folder of this repository.",
+                         test_command="npm --prefix recipe-box test")
+    return {**run_lineage(pipe, run_id, repo), "root": run_id}
+
+
+def test_rec51_a_diff_that_changes_another_app_fails_its_gate(rec51_stray):
+    first = rec51_stray["runs"][0]
+    gate = next(g for g in rec51_stray["gates"] if g["code_task_run_id"] == first["id"])
+    assert "stayed_in_app" in (gate["gates_failed"] or []), gate["gates_failed"]
+    named = [e["data"] for e in _of(rec51_stray, "code_task.other_app_changed")]
+    assert named and named[0]["app"] == "recipe-box"
+    assert "neighborhood-board/test/slug-more.test.js" in named[0]["files"]
+    # A fact, not a reviewer's opinion: never advisory. Every build of the lineage — the follow-
+    # up too, whose own diff no longer touches those files — judges the pull request's whole
+    # change, so the gate holds until the files are restored, and the lineage ends at the cap.
+    assert all("stayed_in_app" in (g["gates_failed"] or []) for g in rec51_stray["gates"])
+    assert rec51_stray["queued_jobs"] == 0 and len(rec51_stray["ran"]) == MAX_BUILDS
+    last = rec51_stray["runs"][-1]
+    held = json.dumps((last.get("finalize_ctx") or {}).get("checks_failing") or {})
+    assert last["status"] != "completed" or "stayed_in_app" in held, (last["status"], held)
 

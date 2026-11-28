@@ -57,6 +57,7 @@ FAILED_WORDS: dict[str, str] = {
     "web_package_honest": "Package not honest",
     "template_tests": "Template tests fail",
     "no_committed_secrets": "A secret was committed",
+    "stayed_in_app": "Changed another app",
 }
 
 

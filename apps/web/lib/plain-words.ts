@@ -28,6 +28,7 @@ export const GATE_LABELS: Record<string, string> = {
   web_package_honest: "Package honest",
   template_tests: "Template tests",
   no_committed_secrets: "No secrets",
+  stayed_in_app: "Stayed in app",
 };
 
 /** A failed gate as what went wrong. THE SAME TABLE as engine plain_words.FAILED_WORDS. */
@@ -49,6 +50,7 @@ export const FAILED_WORDS: Record<string, string> = {
   web_package_honest: "Package not honest",
   template_tests: "Template tests fail",
   no_committed_secrets: "A secret was committed",
+  stayed_in_app: "Changed another app",
 };
 
 /** "Review asked for changes", never "Review passed" beside a ✗. */

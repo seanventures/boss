@@ -378,6 +378,8 @@ GATE_LABELS: dict[str, tuple[str, str]] = {
     # An applied template's two gates (F2 §2.3; unwaivable, see UNWAIVABLE_GATES).
     "template_tests": ("Template tests", "check"),
     "no_committed_secrets": ("No secrets", "check"),
+    # The diff stays inside the app the build is for (ENT-REC-51).
+    "stayed_in_app": ("Stayed in app", "build"),
 }
 #: Gates a waiver can never open a PR past: the app must start, and an applied template's own
 #: tests must pass and its diff must hold no secret (governed_code_task_service.TEMPLATE_GATES).
@@ -422,6 +424,7 @@ GATE_NOUNS: dict[str, str] = {
     "web_package_honest": "package",
     "template_tests": "template tests",
     "no_committed_secrets": "secrets",
+    "stayed_in_app": "app scope",
 }
 def gate_noun(name: str) -> str:
     """A failing gate in one or two lower-case words ("review", "must-haves", "infra: vpc")."""

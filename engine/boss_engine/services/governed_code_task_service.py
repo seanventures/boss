@@ -35,6 +35,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
+from . import lineage_cap as _lineage_cap
 from . import brief_items as _brief_items
 from . import brief_tests as _brief_tests
 from . import input_fidelity as _input_fidelity
@@ -842,7 +843,7 @@ _TEST_GATES = frozenset({
 # Every gate the pipeline can report. Used to detect a gate name this build does not know.
 _ALL_GATE_NAMES = _TEST_GATES | frozenset({
     "code_written", "code_review_passed", "security_clean", "nothing_broke", "consistent",
-    "app_serves",
+    "app_serves", "stayed_in_app",
 })
 
 
@@ -967,7 +968,9 @@ _FAIL_CLOSED_TEST_GATES = ("written_tests_pass", "nothing_broke", "coder_did_not
 # `acceptance_met` is here so an advisory build gets its repair rounds and then a labelled
 # checks-failing draft PR with a follow-up carrying the missing items — never a clean card.
 _ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_committed_secrets",
-                        *_FAIL_CLOSED_TEST_GATES, "acceptance_met")
+                        *_FAIL_CLOSED_TEST_GATES, "acceptance_met",
+                        # Another app's files in the diff are a fact, not a reviewer's opinion.
+                        "stayed_in_app")
 
 # Gates no autonomy setting may ship past. `app_serves` is not a reviewer's opinion: BOSS
 # started the build's own run command and nothing answered HTTP. The Lead Triage Inbox build
@@ -2771,6 +2774,92 @@ FIRST_PASS_CHECKLIST = (
 )
 
 
+class AppScopedAgent:
+    """A code agent whose WRITING turns carry the build's app scope (`scope(prompt)`,
+    app_scope_rule): every other attribute — and every read-only turn — is the agent's own."""
+
+    def __init__(self, agent: Any, scope: Callable[[str], str]) -> None:
+        object.__setattr__(self, "_agent", agent)
+        object.__setattr__(self, "_scope", scope)
+
+    def run_role(self, prompt: str, cwd: Any, *args: Any, **kwargs: Any) -> Any:
+        if not kwargs.get("read_only"):
+            prompt = self._scope(prompt)
+        return self._agent.run_role(prompt, cwd, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._agent, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._agent, name, value)
+
+
+def _lineage_brief(engine, spec: dict, fctx: dict, run: Optional[dict]) -> str:
+    """The brief the lineage was started with: this run's own, else (a findings follow-up, or a
+    retry of one, whose instructions are findings) its root's. Iteration notes are cut."""
+    text = str((spec or {}).get("instructions") or "")
+    root_id = str((fctx or {}).get("root_run_id") or "")
+    if verification_target.is_continuation_of_findings(fctx) and root_id:
+        try:
+            with _transaction(engine) as c:
+                root_run = load_code_task_run(c, root_id) or {}
+            text = str((root_run.get("spec") or {}).get("instructions") or "")
+        except Exception:  # noqa: BLE001 — no root brief: none is named
+            _log_caught(logger)
+            text = ""
+    return text.split("\n\n=== ITERATION FEEDBACK", 1)[0]
+
+
+def _scope_for_writing(engine, run_id: str, project_id: str, root, spec: dict, fctx: dict,
+                       run: Optional[dict], app_id: Optional[str], scope: Optional[str],
+                       exempt: list) -> Optional[str]:
+    """The app every writing turn stays in, or None. A brief that names OTHER deployable apps
+    beside it ("move the login from `crm/` to `helpdesk/`") is cross-app work by design: no
+    scope then (a pinned benchmark app keeps its own). Every folder the brief names is recorded
+    in `exempt` — never another app's for the gate."""
+    from . import app_root
+
+    if not scope:
+        return None
+    try:
+        named = app_root.named_folders(root, _lineage_brief(engine, spec, fctx, run))
+    except Exception:  # noqa: BLE001 — nothing named: the scope stands
+        _log_caught(logger)
+        named = []
+    exempt[:] = named
+    apps = set(app_root.subfolder_apps(root))
+    others = sorted(d for d in named if d in apps and d != scope
+                    and not d.startswith(scope + "/") and not scope.startswith(d + "/")
+                    and not app_root.is_shared_package(root, d))
+    if others and not app_id:
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.app_scope_off", "boss", "code_task_run",
+                           run_id, {"app": scope, "also_named": others[:10],
+                                    "why": "the brief names several apps: cross-app work"})
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+        return None
+    return scope
+
+
+#: The gate a diff that changes another app's files fails (ENT-REC-51).
+STAYED_IN_APP_GATE = "stayed_in_app"
+
+
+def app_scope_rule(scope: Optional[str], prompt: str) -> str:
+    """`prompt` with the app scope ahead of it: the app's folder, and that other apps' files are
+    not this change's. Unchanged with no scope, or when the prompt already says it."""
+    if not scope:
+        return prompt
+    scope = scope.strip("/")
+    if f"Work ONLY under `{scope}/`" in (prompt or ""):
+        return prompt
+    return (f"APP SCOPE: this change is to the app in `{scope}/`.\n"
+            f"- Work ONLY under `{scope}/`. Do not edit sibling apps: a change to another app's "
+            f"files fails BOSS's `{STAYED_IN_APP_GATE}` check.\n\n" + (prompt or ""))
+
+
 def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=False, ui=False, app_root=None):
     tf = ", ".join(test_files) or "(the test files in this repo)"
     scope = (
@@ -4278,6 +4367,15 @@ def _spawn_deferred_findings_task(
     When the ledger cannot be read the task is built from ``findings`` as before.
     """
     from .code_task_service import start_code_task
+    # ONE CAP PER CAUSE (lineage_cap): the follow-up would be one attempt too many at the
+    # cause its parent stopped on.
+    with _transaction(engine) as c:
+        _made, _cap = _lineage_cap.standing(c, parent_run_id)
+        if _made >= _cap:
+            emit_event(c, project_id, "code_task.followup_skipped", "boss", "code_task_run",
+                       parent_run_id, {"reason": _lineage_cap.words(_made),
+                                       "attempts": _made, "cap": _cap})
+            return None
     limit = 40 if checks_failing else 20
     plan = _ledger_followup(engine, project_id=project_id, parent_run_id=parent_run_id,
                             parent_root=parent_root or parent_run_id, findings=findings)
@@ -4319,6 +4417,7 @@ def _spawn_deferred_findings_task(
         _pfctx = (_parent.get("finalize_ctx") if isinstance(_parent, dict) else None) or {}
         _app_identity = str(_pfctx.get("app_id") or _pfctx.get("root_run_id")
                             or parent_root or parent_run_id)
+        _lineage_tier = _lineage_cap.risk_tier(_parent if isinstance(_parent, dict) else {}, spec)
         new_run = start_code_task(
             c, project_id=project_id, task_id=task_id,
             title=f"{title_lead} — {parent_title}"[:160],
@@ -4344,6 +4443,7 @@ def _spawn_deferred_findings_task(
             # follow-up), and it cloned the base branch instead of the branch holding the code
             # it was sent to fix. Carrying the root fixes both at the source.
             finalize_ctx={"deferred_from_run": parent_run_id, "is_followup": True,
+                          _lineage_cap.STARTED_BY: _lineage_cap.BOSS,
                           "root_run_id": parent_root or parent_run_id,
                           "parent_run_id": parent_run_id,
                           "app_id": _app_identity,
@@ -4368,6 +4468,12 @@ def _spawn_deferred_findings_task(
                           # The ledger rows it was sent to fix (acceptance/ledger.py).
                           **({"ledger_ids": plan["ledger_ids"]} if plan is not None else {})},
             jobs=jobs, profile=spec.get("profile"),
+            # THE LINEAGE'S RISK TIER, never one re-decided from the findings' wording. BOSS's
+            # own finding text says "none on a P0 path (startup, auth, health)", and the keyword
+            # rule read "auth" as sensitive work: the follow-up of a tier-1 change became tier 3
+            # and parked on a plan approval (ENT-REC-52). A security finding still blocks it at
+            # its gate; it does not make the same change a different one.
+            risk_tier=_lineage_tier,
             # THE SAME REPOSITORY HOST as the build it follows: a follow-up of a build on this
             # machine's local repository is local too (crun_47c3aea2 lost it, 2026-11-18).
             repo_host=spec.get("repo_host") or None,
@@ -6140,6 +6246,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                detail={"run_id": run_id, "data_boundary": data_boundary})
 
     agents: dict[str, object] = {}  # one CodeAgent per engine name, reused across steps
+    #: THE APP THIS BUILD MAY WRITE IN (ENT-REC-51): the named app, the brief's folder, else the
+    #: folder the lineage recorded — set once the checkout says which. Every writing turn of
+    #: every engine is told it (_scoped_prompt), and `stayed_in_app` gates the diff on it.
+    _write_scope: list[Optional[str]] = [None]
+    #: The folders the lineage's brief names: never "another app's" (stayed_in_app).
+    _write_exempt: list[str] = []
+
+    def _scoped_prompt(prompt: str) -> str:
+        return app_scope_rule(_write_scope[0], prompt)
     stage_routes: dict[str, dict] = {}  # step -> {"engine", "model"} resolved (evidence)
 
     _agents_lock = threading.RLock()
@@ -6236,6 +6351,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # (engine_contract._default_ceiling): set once here, enforced by the engine itself
             # where it can be (budget_limit), at the stage boundary where it cannot.
             a.budget_ceiling = (lambda _a=a: _session_budget_ceiling(_a))
+            # EVERY WRITING TURN IS TOLD WHICH APP IT IS IN (ENT-REC-51): the build, each repair
+            # and fix round, a follow-up and a person's Retry, on every engine. Only the pinned
+            # benchmark app's implement and solo prompts used to say it.
+            a = AppScopedAgent(a, _scoped_prompt)
             agents[engine_name] = a
         # A LOCAL REPOSITORY'S reviewers read the tree, never a GitHub connector (BOSSAPP-1350).
         a.local_repo = _is_local_owner_early(owner)
@@ -6491,8 +6610,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "task_id": f"{run_id}-{step}", "owner": owner, "repo": repo,
             "base_branch": guest_base, "work_branch": work_branch,
             "title": stage_title,
-            "instructions": (f"{prompt}\n\nWhen your role's work is complete, set done=true "
-                             "in your JSON reply."),
+            "instructions": (f"{_scoped_prompt(prompt)}\n\nWhen your role's work is complete, "
+                             "set done=true in your JSON reply."),
             "acceptance_criteria": [], "test_commands": test_cmds,
             "token": token, "timeout": settings.code_agent_timeout_seconds,
             "github_web": guest_web,
@@ -7504,6 +7623,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                      if _known.path != Path(root) else "."))
         except Exception:  # noqa: BLE001 — recording is a convenience; the plan above stands
             _log_caught(logger)
+        # THE APP EVERY WRITING TURN STAYS IN (ENT-REC-51): named or the brief's folder, else
+        # the folder this lineage recorded (a follow-up's brief is findings, never a folder).
+        _write_scope[0] = _scope_for_writing(
+            engine, run_id, project_id, root, spec, fctx, run, _app_id,
+            _app_root_mod.clean_rel(_app_id or _app_scope)
+            or _app_root_mod.clean_rel(_recorded_app), _write_exempt)
         # CONTINUE FROM THE FAILED ATTEMPT'S WORKSPACE (saved_workspace_files). Seeded after the
         # verify manifest is pinned, exactly as the parent's agents wrote after it. A seeded run
         # skips the design chain, write_tests and the first implement: its first pass is the
@@ -11033,6 +11158,91 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if do_separate_tests:
             gates["tests_written_first"] = bool(test_files)
             gates["coder_did_not_edit_tests"] = tests_untouched
+        _other_app_files: list[str] = []
+        _app_scope_note: list[Optional[str]] = [None]
+        _app_scope_said = [False]
+
+        def _app_scope_record() -> dict:
+            return {"app": _write_scope[0], "other_app_files": _other_app_files[:40],
+                    **({"unjudged": _app_scope_note[0]} if _app_scope_note[0] else {})}
+
+        def _whole_change_paths() -> Optional[list[str]]:
+            """THE PULL REQUEST'S WHOLE CHANGE, not this attempt's (whole_change): the tree
+            against the merge base of the PR's base branch and the work, renames off — never a
+            two-dot diff against the base's tip, which counts what other apps merged since. A
+            shallow checkout is deepened to reach it. None without one (the micro-VM substrate,
+            no history to be had): what still differs cannot be told, so the gate is not judged
+            rather than judged on paths an earlier attempt may have restored."""
+            fallback = None
+            base = str((_release_target or {}).get("pr_base") or repo_base_branch or "").strip()
+            if use_microvm or not base or sandbox is None:
+                return fallback
+            ref = f"refs/remotes/origin/{base}"
+            from . import whole_change
+            from .git_safety import tree_git
+
+            def _fetch(*args: str) -> None:
+                sandbox._git(["fetch", *args], redact=token or None)  # noqa: SLF001
+
+            try:
+                have = tree_git(root, "rev-parse", "--verify", "--quiet", ref, timeout=20)
+                if have is None or have.returncode != 0:
+                    _fetch("--depth", "50", "origin", f"{base}:{ref}")
+
+                def _deepen() -> None:
+                    _fetch("--deepen", "200", "origin", f"{base}:{ref}")
+                    try:
+                        _fetch("--deepen", "200", "origin", work_branch)
+                    except Exception:  # noqa: BLE001 — a first build's branch is not pushed yet
+                        pass
+
+                paths = whole_change.paths_since_base(root, ref, deepen=_deepen)
+            except Exception:  # noqa: BLE001 — the lineage's own record still judges
+                _log_caught(logger)
+                paths = None
+            return paths if paths is not None else fallback
+
+        def _judge_stayed_in_app() -> None:
+            """THE DIFF STAYS IN ITS APP (ENT-REC-51): a change to another app's files — a
+            sibling of the app this build is for, in a repository of several — fails
+            `stayed_in_app`, whichever turn wrote it. No scope, no gate."""
+            if not _write_scope[0]:
+                return
+            _change = _whole_change_paths()
+            if _change is None:
+                # NOT JUDGED, SAID SO: no merge base to measure the pull request's change from.
+                _app_scope_note[0] = ("not judged: BOSS could not find where this branch left "
+                                      "its base, so it cannot tell which files the pull request "
+                                      "still changes")
+                gates.pop(STAYED_IN_APP_GATE, None)
+                if not _app_scope_said[0]:
+                    _app_scope_said[0] = True
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.app_scope_unjudged", "boss",
+                                   "code_task_run", run_id,
+                                   {"app": _write_scope[0], "why": _app_scope_note[0]})
+                return
+            _app_scope_note[0] = None
+            _other_app_files[:] = _app_root_mod.foreign_app_paths(
+                root, _change, _write_scope[0], exempt=_write_exempt)
+            gates[STAYED_IN_APP_GATE] = not _other_app_files
+            try:
+                evidence["app_scope"] = _app_scope_record()
+            except NameError:  # the first judgement runs before `evidence` exists (below)
+                pass
+            if _other_app_files:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.other_app_changed", "boss",
+                               "code_task_run", run_id,
+                               {"app": _write_scope[0], "files": _other_app_files[:40]})
+
+        def _other_app_note() -> str:
+            return (f"THE CHANGE EDITS ANOTHER APP'S FILES. This build is for `{_write_scope[0]}/`;"
+                    " restore each of these to the base branch and make the change inside "
+                    f"`{_write_scope[0]}/` instead:\n"
+                    + "\n".join(f"- {f}" for f in _other_app_files[:40]))
+
+        _judge_stayed_in_app()
         _brief_missing: list[str] = []
         if _named_tests and not _recheck:
             # HELD TO ITS OWN BRIEF (BOSSAPP-1330): every test the brief or its plan names exists
@@ -11253,6 +11463,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
+            **({"app_scope": _app_scope_record()} if _write_scope[0] else {}),
             **({"web_package_contract": _web_contract} if _web_contract is not None else {}),
             # A multi-service app: its services, the backend BOSS started and what ran against it.
             **({"stack_verify": dict(_stack_record)} if _stack_record else {}),
@@ -11557,6 +11768,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "branch; deliver each one for real — no stubs, no hard-coded demo "
                             "answers, in the required stack):\n"
                             + _acceptance_gate.findings_summary(_acceptance_record))
+                    if STAYED_IN_APP_GATE in failing and _other_app_files:
+                        finding_bits.append(_other_app_note())
                     if "app_serves" in failing:
                         # The app's OWN error, not "preview timed out": this is what lets the
                         # implementer fix an ImportError instead of guessing at a port.
@@ -11661,6 +11874,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:
                         _set_nothing_broke(tests_passed)
+                    _judge_stayed_in_app()
                     if tests_passed and "app_serves" in gates:
                         # Green again: re-prove the app against the code as it now stands.
                         app_serves_record = _check_app_serves(
@@ -12114,6 +12328,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # THE LIGHT LANE: at most one cold repair round below production, then hand over.
             max_repair_rounds = _quality_bar.fix_rounds(getattr(gates, "bar", _qbar),
                                                         max_repair_rounds)
+            # ONE CAP PER CAUSE (lineage_cap, ENT-REC-52). `attempt` restarts at 1 on a
+            # follow-up, so its rounds read as unspent and the same broken test took a fourth
+            # build. This build records the cause it stopped on, and the lineage's count of
+            # builds that stopped on it decides: at the cap no repair child starts, and the PR
+            # opens with no follow-up for a person to decide (_env_stop below).
+            _stop_cause = _lineage_cap.cause_gate(failing)
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                    "|| jsonb_build_object(CAST(:k AS text), CAST(:v AS text)) WHERE id = :id"),
+                    {"k": _lineage_cap.STOP_CAUSE, "v": _stop_cause, "id": run_id})
+                _lineage_made, _lineage_cap_n = _lineage_cap.standing(c, run_id, _stop_cause)
+            _lineage_spent = _lineage_made >= _lineage_cap_n
+            if _lineage_spent:
+                rounds_used = max(rounds_used, max_repair_rounds)
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
             if verification_target.install_environment_failure(_install_fail[0]):
                 evidence["install_failure"] = _install_fail[0]
@@ -12417,6 +12646,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _env_stop = (_checks_failing.environment_stop(failing, faults=gate_faults,
                                                           reason=_sup_reason)
                          if action == _checks_failing.ACTION else None)
+            if action == _checks_failing.ACTION and _env_stop is None and _lineage_spent:
+                _env_stop = _lineage_cap.REASON
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.lineage_attempts_spent", "boss",
+                               "code_task_run", run_id,
+                               {"attempts": _lineage_made, "cap": _lineage_cap_n,
+                                "cause": _stop_cause, "failing_gates": failing,
+                                "why": _lineage_cap.words(_lineage_made),
+                                "next_step": _lineage_cap.NEXT_STEP})
             if action == "ship" and failing and advisory_gate:
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
                 # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the
@@ -12455,6 +12693,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         _install_fail[0])[:700]
                 if "app_serves" in failing:
                     _details["app_serves"] = _app_serves_sentence(app_serves_record)[:700]
+                if STAYED_IN_APP_GATE in failing and _other_app_files:
+                    _details[STAYED_IN_APP_GATE] = ("another app's files changed: "
+                                                    + ", ".join(_other_app_files[:5]))[:700]
                 if "existing_tests_intact" in failing and _weakened:
                     # "Old tests broke" NAMES the tests: a file deleted, or fewer tests in it.
                     _details["existing_tests_intact"] = "; ".join(_weakened[:5])
@@ -12471,7 +12712,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "hard": action == _checks_failing.ACTION,
                     "rounds_used": rounds_used, "quality_gate_id": qg_id,
                     **({"stopped": _checks_failing.stopped_record(
-                        _env_stop, failing,
+                        _env_stop, failing, attempts=(_lineage_made if _lineage_spent else None),
                         needs=((app_serves_record or {}).get("needs_secret")
                                if "app_serves" in failing
                                and gate_faults.get("app_serves") == "PERSON" else None),
@@ -12591,6 +12832,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               + (" 'app_serves' failed: "
                                  + _app_serves_sentence(app_serves_record)[:1600]
                                  if "app_serves" in failing else "")
+                              # The other app's files, by name, so the repair restores them.
+                              + ("\n\n" + _other_app_note()
+                                 if STAYED_IN_APP_GATE in failing and _other_app_files else "")
                               # The must-haves the acceptance check found undelivered.
                               + ("\n\nMUST-HAVES NOT DELIVERED (the acceptance check read the "
                                  "whole branch; deliver each one for real):\n"

@@ -86,7 +86,7 @@ import logging
 import re
 import shlex
 from datetime import timedelta
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -435,6 +435,14 @@ def port_held(failure: Mapping[str, Any]) -> Optional[int]:
     return int(next(g for g in found.groups() if g))
 
 
+def cause_gate(gates: Iterable[str]) -> str:
+    """THE ONE GATE that names why a build stopped on its checks (lineage_cap.cause_gate: the
+    same rule the lineage's attempt cap counts by)."""
+    from .lineage_cap import cause_gate as _cause_gate
+
+    return _cause_gate(gates)
+
+
 def cause_signature(kind: str, failure: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     """A stable name for WHY it failed — the same cause gets the same signature across attempts
     and runs ("deploy:port_held:8000", "deploy:missing_tool:npm", "build:secret_scan"), and a
@@ -449,8 +457,9 @@ def cause_signature(kind: str, failure: Mapping[str, Any]) -> tuple[str, dict[st
         # First: a review finding can quote anything (a port, a host name, "secret"), and it
         # is still the reviewers' finding, not that.
         gates = sorted({str(g) for g in failure.get("failing_gates") or [] if g}) or ["review"]
-        return (f"build:open_findings:{'+'.join(gates)}",
-                {"pattern": "open_findings", "gates": gates})
+        cause = cause_gate(gates)
+        return (f"build:open_findings:{cause}",
+                {"pattern": "open_findings", "gates": gates, "cause": cause})
     said = _failure_text(failure)
     port = port_held(failure)
     if port:
@@ -1476,7 +1485,8 @@ __all__ = ["ACTIONS", "ASK_PERSON", "AWAIT_KIND", "BOSS_SIDE_ACTIONS", "CLEAN_AN
            "FINDINGS_KIND", "GATE_WAIT_PHASE", "findings_note", "open_findings", "waiver_ask",
            "KINDS", "PENDING_KEY", "RESUMED_EVENT", "RETRY", "STATE_KEY", "WAIT_FOR_BOSS",
            "agent_of", "ask_model", "boss_build", "boss_update_handle", "budget_left",
-           "build_evidence", "cause_signature", "coded_decision", "decide", "deploy_evidence",
+           "build_evidence", "cause_gate", "cause_signature", "coded_decision", "decide",
+           "deploy_evidence",
            "due", "enabled", "host_state", "last_decision", "limits", "open_window",
            "flatten", "ask_error", "record_ask", "resumes_on_update",
            "recommend_boss_fix", "routed_adapter", "run_again_handle", "sentence", "spent",

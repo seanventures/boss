@@ -116,6 +116,95 @@ def _app_of(base: Path, rel: PurePosixPath) -> Optional[PurePosixPath]:
     return None
 
 
+#: Folders whose subfolders are SHARED code (libraries, tooling, test harnesses), never a
+#: sibling deployable app: a change to `packages/ui/` is not a change to another app.
+SHARED_DIRS = frozenset({"packages", "libs", "lib", "shared", "common", "tools", "e2e",
+                         "tests", "test", "scripts", "internal", "pkg"})
+#: A file that says a folder is run on its own (a deployable app), whatever its stack.
+_RUN_FILES = ("Dockerfile", "boss.preview.command", "Procfile", "docker-compose.yml",
+              "compose.yaml", "boss.deploy.yaml")
+
+
+def _deployable(d: Path) -> bool:
+    if any((d / f).is_file() for f in _RUN_FILES):
+        return True
+    try:
+        scripts = json.loads((d / "package.json").read_text(encoding="utf-8")).get("scripts")
+    except (OSError, ValueError, AttributeError):
+        scripts = None
+    return isinstance(scripts, dict) and any(k in scripts for k in ("start", "dev", "serve"))
+
+
+def is_shared_package(root: Path | str, app: str) -> bool:
+    """Is `app` (a folder _app_of found) shared code rather than a sibling deployable app: under
+    a shared folder (SHARED_DIRS), or a workspace member that nothing runs on its own."""
+    rel = PurePosixPath(app)
+    if rel.parts and rel.parts[0] in SHARED_DIRS:
+        return True
+    base = Path(root)
+    return _workspaces_root(base) and not _deployable(base / rel)
+
+
+#: A mention that says the folder is NOT to be changed ("don't touch `api/`", "without changing
+#: apps/web"): never a folder the brief asks to work in.
+_NEGATED = re.compile(r"(?:\bdo(?:n'?t| not)\s+(?:touch|change|edit|modify)|\bwithout\s+"
+                      r"(?:touching|changing|editing|modifying)|\bleave\b|\bnot\s+(?:in|"
+                      r"under|inside)|\bnever\s+(?:touch|change|edit))[^.;:,\n]*$", re.I)
+#: A path-like mention: backticked (`crm`, `crm/`, `apps/admin`) or a bare path with a slash
+#: (crm/, apps/admin). A bare word ("calls the api") is never a folder.
+_FOLDER_MENTION = re.compile(r"`([A-Za-z0-9][\w.-]*(?:/[\w.-]+)*)/?`"
+                             r"|(?<![\w./`-])([A-Za-z0-9][\w.-]*(?:/[\w.-]+)*/|[A-Za-z0-9][\w.-]*"
+                             r"(?:/[\w.-]+)+)(?![\w`])")
+
+
+def named_folders(root: Path | str, text: Any) -> list[str]:
+    """The folders of this repository a brief names AS PLACES TO WORK: path-like mentions
+    (`crm/`, `apps/admin`, crm/) that are folders of the tree. A bare word is never one ("calls
+    the api" in a monorepo with an `api/` app), nor is a negated mention ("don't touch
+    `api/`", "without changing apps/web")."""
+    base = Path(root)
+    words = str(text or "")
+    out: set[str] = set()
+    for m in _FOLDER_MENTION.finditer(words):
+        rel = clean_rel(m.group(1) or m.group(2))
+        if not rel or not (base / rel).is_dir():
+            continue
+        # The clause the mention is in: a negation earlier in it is about this folder.
+        start = max(words.rfind(stop, 0, m.start()) for stop in (".", "\n", ";", ",", " but "))
+        if _NEGATED.search(words[start + 1:m.start()]):
+            continue
+        out.add(rel)
+    return sorted(out)
+
+
+def foreign_app_paths(root: Path | str, paths: Optional[Iterable[str]],
+                      scope: Optional[str], *, exempt: Iterable[str] = ()) -> list[str]:
+    """The changed `paths` that belong to ANOTHER deployable app than `scope` (ENT-REC-51):
+    inside a subfolder app (_app_of) that is neither `scope`, inside it, nor holds it. Never
+    foreign: a root file, CI config or docs (no app); shared code (is_shared_package); a folder
+    the brief names (`exempt`). [] when there is no scope."""
+    scope = clean_rel(scope)
+    if not scope:
+        return []
+    base = Path(root)
+    free = [e for e in (clean_rel(x) for x in exempt) if e]
+    out: set[str] = set()
+    for rel in _rels(paths):
+        app = _app_of(base, rel)
+        if app is None:
+            continue
+        a = app.as_posix()
+        if a == scope or a.startswith(scope + "/") or scope.startswith(a + "/"):
+            continue
+        p = rel.as_posix()
+        if any(p == e or p.startswith(e + "/") or a == e for e in free):
+            continue
+        if is_shared_package(base, a):
+            continue
+        out.add(p)
+    return sorted(out)
+
+
 # ---- is the root a home for several apps -------------------------------------------------------
 
 def subfolder_apps(root: Path | str) -> list[str]:
