@@ -402,7 +402,7 @@ RUN --mount=type=secret,id=boss_build_ca \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
-       iptables libcap2-bin curl build-essential \
+       iptables libcap2-bin curl build-essential procps \
     && rm -rf /var/lib/apt/lists/*
 
 # THE CODING CLIS AND pnpm, FROM A LOCKFILE (scripts/install/cli-lock): every package, the

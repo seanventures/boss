@@ -1171,10 +1171,48 @@ def _err(rid: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
 
 
-def _tool_result(payload: dict, *, is_error: bool = False) -> dict:
-    """MCP tools/call result: content blocks + isError flag."""
+#: PE-Phase 3 (BOSSAPP-791, §3I): default compact character budget for MCP tool results so
+#: the server never dumps unbounded JSON into an agent's context window.
+DEFAULT_TOOL_OUTPUT_BUDGET_CHARS = 16_000
+
+
+def budget_tool_payload(
+    payload: Any,
+    *,
+    max_chars: int = DEFAULT_TOOL_OUTPUT_BUDGET_CHARS,
+    more_handle: Optional[str] = None,
+) -> tuple[str, bool]:
+    """Serialize an MCP tool payload within ``max_chars``; when over budget, return a compact
+    envelope with ``truncated=True`` and a ``more_handle`` pointer instead of unbounded JSON."""
+    raw = json.dumps(payload, default=str)
+    cap = max(256, int(max_chars))
+    if len(raw) <= cap:
+        return raw, False
+    handle = more_handle or f"more:{abs(hash(raw)) % 10_000_000:07d}"
+    preview_len = max(120, cap - 240)
+    envelope: dict[str, Any] = {
+        "truncated": True,
+        "total_chars": len(raw),
+        "budget_chars": cap,
+        "more_handle": handle,
+        "preview": raw[:preview_len],
+    }
+    if isinstance(payload, dict):
+        envelope["keys"] = sorted(str(k) for k in payload.keys())[:40]
+    return json.dumps(envelope, default=str), True
+
+
+def _tool_result(
+    payload: dict,
+    *,
+    is_error: bool = False,
+    max_chars: int = DEFAULT_TOOL_OUTPUT_BUDGET_CHARS,
+    more_handle: Optional[str] = None,
+) -> dict:
+    """MCP tools/call result: budgeted content blocks + isError flag."""
+    text_out, _truncated = budget_tool_payload(payload, max_chars=max_chars, more_handle=more_handle)
     return {
-        "content": [{"type": "text", "text": json.dumps(payload, default=str)}],
+        "content": [{"type": "text", "text": text_out}],
         "isError": bool(is_error),
     }
 

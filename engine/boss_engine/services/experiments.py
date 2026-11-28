@@ -30,9 +30,18 @@ ARM_KNOBS: dict[str, dict[str, Any]] = {
     # value, measured on the same score as every other harness change rather than asserted.
     "routing": {"label": "Model routing", "setting": "model_routing_mode", "kind": "choice",
                 "choices": ("fixed", "shadow", "smart")},
+    # PE-Phase 3 (BOSSAPP-791, §3I): measure skills, standards, instructions, and knowledge mode.
+    "skill": {"label": "Skill variant", "setting": "experiment_skill_variant", "kind": "text"},
+    "standard": {"label": "Standard variant", "setting": "experiment_standard_variant", "kind": "text"},
+    "instructions": {"label": "Role instructions", "setting": "experiment_instructions_variant", "kind": "text"},
+    "knowledge_mode": {"label": "Knowledge mode", "setting": "knowledge_graph", "kind": "choice",
+                       "choices": ("off", "keyword", "on")},
 }
 #: Spec keys an arm writes. Asserted disjoint from APPROVAL_KEYS by a test.
-ARM_SPEC_KEYS = frozenset({"model_config", "review_rounds", "routing_mode", "experiment"})
+ARM_SPEC_KEYS = frozenset({
+    "model_config", "review_rounds", "routing_mode", "experiment",
+    "skill_variant", "standard_variant", "instructions_variant", "knowledge_mode",
+})
 APPROVAL_KEYS = frozenset({"risk_tier", "profile", "open_pr", "auto_merge", "auto_approve",
                            "approval", "approvals", "gates", "waived_gates", "data_boundary"})
 #: Promote needs this many finished units in EACH arm and a verdict that is not "too close to
@@ -70,6 +79,11 @@ def _coerce(knob: str, value: Any) -> Any:
         if name not in spec["choices"]:
             raise ExperimentError(f"{spec['label']} is one of: {', '.join(spec['choices'])}.")
         return name
+    if spec["kind"] == "text":
+        text_val = str(value or "").strip()
+        if not text_val or len(text_val) > 500:
+            raise ExperimentError(f"{spec['label']} must be 1–500 characters.")
+        return text_val
     try:
         number = int(value)
     except (TypeError, ValueError) as error:
