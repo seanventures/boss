@@ -7,15 +7,14 @@ the preview are given) must then say WHICH failure it is, in words a person and 
 act on:
 
     REC-09 crash on start        "the app exited (code N) before serving HTTP", the app's own error
-    REC-10 wrong port            "did not answer HTTP" (the app never served on the $PORT BOSS gave)
-    REC-11 404 at / (and at its  "GET / returned 404": it runs but serves nothing — never "live"
-           health routes)
+    REC-10 wrong port            "did not answer HTTP" on the $PORT BOSS gave; when the app logs
+                                 the port it chose: "listening on 5999, expected $PORT (N)"
+    REC-11 404 at / (and at its  "GET / returned 404": it runs but serves nothing and has no health
+           health routes)        route of its own — never "live"
     REC-12 a missing variable    the crash names PAGE_SIZE; the coder's to fix, never a person's
     REC-13 a secret only a       "needs a secret: PAYMENTS_API_KEY", the app not started, a person
-           person has            asked — never a repair round
-
-Where the product does not do what the plan says yet, the test is an xfail(strict) naming the case:
-it turns into a failure the day the product changes, so the expectation is revisited.
+           person has            asked — never a repair round; declared by a template OR by the
+                                 app's own .env.example ("Required secret")
 """
 from __future__ import annotations
 
@@ -35,17 +34,6 @@ import qa_fault  # noqa: E402
 FIXTURES = {"node": REPO / "tests/e2e/fixtures/plain-node/plain",
             "python": REPO / "tests/e2e/fixtures/fault-kit/python",
             "go": REPO / "tests/e2e/fixtures/fault-kit/go"}
-
-#: Where the product parts from the plan (each listed in the PR as a product bug).
-LOGGED_PORT_IS_FOLLOWED = pytest.mark.xfail(strict=True, reason=(
-    "ENT-REC-10: the serve proof finds the app on the port it LOGS (5999) and passes it, so a "
-    "server that ignores the $PORT BOSS gave is never reported as 'did not answer HTTP' nor "
-    "repaired (preview_service._discover_working_port reads the port from the log)"))
-APP_CANNOT_DECLARE_A_SECRET = pytest.mark.xfail(strict=True, reason=(
-    "ENT-REC-13: an existing app's own files cannot declare a secret only a person has: "
-    ".env.example names are optional and boss.deploy.yaml {secret} is the deploy's "
-    "(templates/run_env.py), so PAYMENTS_API_KEY is sent to the coder ('must start without "
-    "it') instead of a secret card; only an applied template's SecretSpec asks a person"))
 
 
 def _need(stack: str) -> None:
@@ -104,18 +92,23 @@ def test_rec09_a_crash_on_start_is_exited_before_serving_with_the_apps_own_error
     assert record["harness"] is False, "the app's fault, not BOSS's"
 
 
-@pytest.mark.parametrize("stack", [
-    "node", pytest.param("python", marks=LOGGED_PORT_IS_FOLLOWED),
-    pytest.param("go", marks=LOGGED_PORT_IS_FOLLOWED)])
+@pytest.mark.parametrize("stack", STACKS)
 def test_rec10_a_wrong_port_did_not_answer_http(tmp_path, stack):
+    """The proof asks the port BOSS assigned. A server that logs (and serves on) a port of its
+    own is named with both ports, so the repair round knows what to change."""
     record = _prove(tmp_path, stack, "REC-10")
     assert kind(record) == "did not answer HTTP", record
+    assert record["harness"] is False
+    if record.get("wrong_port"):          # the python and go samples log the port they chose
+        assert record["error"].startswith(
+            f"the app is listening on {qa_fault.WRONG_PORT}, expected $PORT ("), record["error"]
 
 
 @pytest.mark.parametrize("stack", STACKS)
 def test_rec11_an_app_that_serves_nothing_is_failed_not_live(tmp_path, stack):
-    """The kit's REC-11 takes / AND the health routes away: an app that still answered /healthz
-    would be up by design (an API service routes only its own paths, BOSSAPP-1308)."""
+    """The kit's REC-11 takes / AND the health routes away. THE RULE (preview_service._serving):
+    a 404 at / is up only for a service that HAS a health route — declared, or a /healthz|/readyz
+    that is a route of its own, not a catch-all (test_preview_says_the_app_is_listening)."""
     record = _prove(tmp_path, stack, "REC-11")
     assert kind(record) == "404 at /", record
     assert record["harness"] is False
@@ -139,11 +132,14 @@ def test_rec13_a_secret_a_template_declares_asks_a_person_and_never_starts_the_a
     assert "BOSS did not start it" in record["error"]
 
 
-@APP_CANNOT_DECLARE_A_SECRET
-@pytest.mark.parametrize("stack", ["node", "python"])
+@pytest.mark.parametrize("stack", STACKS)
 def test_rec13_a_secret_the_app_declares_itself_asks_a_person(tmp_path, stack):
+    """.env.example marks PAYMENTS_API_KEY a required secret: no template needed, the app is
+    not started, and a person is asked (the same needs_secret an applied template raises)."""
     record = _prove(tmp_path, stack, "REC-13")
     assert kind(record) == "needs a secret", record
+    assert record["needs_secret"] == ["PAYMENTS_API_KEY"]
+    assert "BOSS did not start it" in record["error"]
 
 
 def test_the_preview_faults_have_five_different_names(tmp_path):

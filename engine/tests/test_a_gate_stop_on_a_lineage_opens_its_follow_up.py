@@ -190,6 +190,20 @@ def test_a_person_stop_names_the_secret_and_where_to_set_it():
     assert "Set STRIPE_KEY for environments" in cf.decision_summary(rec)
 
 
+def test_a_person_stop_carries_whose_file_or_start_error_asked():
+    """ENT-REC-13: the card names the app and where the ask came from, not only the name."""
+    headline = ("the app needs a secret: PAYMENTS_API_KEY (declared by helpdesk/.env.example, "
+                "which marks it required)")
+    stopped = cf.stopped_record("person", ["app_serves"], needs=["PAYMENTS_API_KEY"],
+                                headline=headline)
+    assert stopped["headline"] == headline
+    assert stopped["words"].startswith("stopped: needs a person, ")
+    assert f": {headline}. Set PAYMENTS_API_KEY" in stopped["words"], stopped["words"]
+    assert "use a test key" in stopped["action"]
+    src = inspect.getsource(governed)
+    assert "headline=(_app_serves_headline_of(app_serves_record)" in src
+
+
 def test_an_agent_refusal_reads_as_a_refusal_not_a_person():
     stopped = cf.stopped_record("refusal", ["code_review_passed"],
                                 why="the reviewer refused to read the vendored keys")

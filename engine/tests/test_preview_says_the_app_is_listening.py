@@ -99,3 +99,85 @@ def test_the_shepherd_files_it_as_a_preview_failure_not_an_infrastructure_retry(
     assert task_shepherd.classify(
         "the app IS listening on port 49005, but GET / returned 404."
     ) != task_shepherd.PREVIEW_FAILED
+
+
+# ── ENT-REC-11: a 404 at / on a service is up only when it has a health route ────────────────
+
+def _answering(routes: dict[str, int], default: int):
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            status = routes.get(self.path.split("?")[0], default)
+            body = b'{"ok": true}' if status < 400 else b"no"
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    return _Handler
+
+
+def test_a_service_with_a_real_health_route_is_up_despite_a_404_at_home():
+    """BOSSAPP-1308's gateway: 404 at /, 200 at /healthz, 404 everywhere else — up."""
+    server = _serve(_answering({"/healthz": 200}, 404))
+    try:
+        assert ps._serving(server.server_address[1], "/", service=True) is True
+    finally:
+        server.shutdown()
+
+
+def test_a_declared_health_path_is_the_apps_word():
+    server = _serve(_answering({"/api/health": 200}, 404))
+    try:
+        assert ps._serving(server.server_address[1], "/api/health", service=True) is True
+    finally:
+        server.shutdown()
+
+
+def test_a_catch_all_that_404s_only_at_home_has_no_health_route(tmp_path):
+    """The REC-11 node sample: every path answers 200 JSON except /. Its /healthz is the
+    catch-all, not a route, so it is NOT up, and the reason says so."""
+    server = _serve(_answering({"/": 404}, 200))
+    try:
+        port = server.server_address[1]
+        assert ps._serving(port, "/", service=True) is False
+        log = tmp_path / "_preview.log"
+        log.write_text("")
+        detail = ps._diagnose_listening_port(str(log), port)
+        assert "GET / returned 404" in detail and "catch-all" in detail
+    finally:
+        server.shutdown()
+
+
+# ── ENT-REC-10: the serve proof asks the port BOSS assigned ──────────────────────────────────
+
+def test_a_logged_port_that_serves_is_returned_only_after_the_assigned_port_stays_silent(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "WRONG_PORT_GRACE_SECONDS", 0.5)
+    server = _serve(_answering({}, 200))
+    try:
+        port = server.server_address[1]
+        log = tmp_path / "_app.log"
+        log.write_text(f"listening on http://0.0.0.0:{port}\n")
+        silent = ps._free_port()
+        assert ps._discover_working_port(str(log), silent, timeout=5, assigned_first=True) == port
+        # The preview keeps following the logged port, as before (it shows what the app serves).
+        assert ps._discover_working_port(str(log), silent, timeout=5) == port
+        # A log naming another URL never outruns $PORT when $PORT serves.
+        other = _serve(_answering({}, 200))
+        try:
+            log.write_text(f"proxying to http://127.0.0.1:{port}\n")
+            assert ps._discover_working_port(str(log), other.server_address[1], timeout=5,
+                                             assigned_first=True) == other.server_address[1]
+        finally:
+            other.shutdown()
+    finally:
+        server.shutdown()
+
+
+def test_a_preview_on_a_port_of_its_own_says_a_deploy_will_fail():
+    note = ps.wrong_port_note(5999, 41234)
+    assert note.startswith("the app is listening on 5999, not $PORT (41234)") and "deploy" in note
+    assert ps.wrong_port_note(41234, 41234) is None

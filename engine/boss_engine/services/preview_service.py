@@ -1233,6 +1233,37 @@ def lineage_impl_files(engine, run: dict) -> list[str]:
     `git diff base...HEAD` is not an option: the preview clones --depth 1 --branch X, so the
     base ref does not exist in that workdir.)
     """
+    root = _lineage_root(engine, run)
+    if not root:
+        return list((run.get("state") or {}).get("impl_files") or [])
+    with begin(engine) as c:
+        rows = c.execute(
+            text(f"""
+                SELECT state->'impl_files' AS f
+                FROM code_task_runs
+                WHERE {_LINEAGE_WHERE}
+                ORDER BY created_at DESC
+            """),
+            {"root": root},
+        ).mappings().all()
+    out: list[str] = []
+    for r in rows:
+        for path in (r["f"] or []):
+            if isinstance(path, str) and path not in out:
+                out.append(path)
+    return out
+
+
+#: The runs of one lineage (bound :root): the root, its retries and repairs, and the
+#: deferred-findings follow-ups spawned from any of them (lineage_impl_files).
+_LINEAGE_WHERE = """(COALESCE(finalize_ctx->>'root_run_id', id) = :root
+                   OR finalize_ctx->>'deferred_from_run' IN (
+                        SELECT id FROM code_task_runs
+                        WHERE COALESCE(finalize_ctx->>'root_run_id', id) = :root))"""
+
+
+def _lineage_root(engine, run: dict) -> Optional[str]:
+    """The root run id of `run`'s lineage (see lineage_impl_files)."""
     fctx = run.get("finalize_ctx") or {}
     root = fctx.get("root_run_id")
     if not root and fctx.get("deferred_from_run"):
@@ -1251,28 +1282,43 @@ def lineage_impl_files(engine, run: dict) -> list[str]:
             root = parent["r"]
     # Follow base_branch as well, so work started as its own task on an existing app's branch
     # inherits that app's files instead of only what this attempt touched.
-    root = root or app_root_run_id(engine, run) or run.get("id")
+    return root or app_root_run_id(engine, run) or run.get("id")
+
+
+#: Serve-proof records that say nothing about whether the app starts: nothing was started.
+_NOT_A_START_VERDICT = ("no_runnable_change", "not_declared")
+
+
+def lineage_start_failure(engine, run: dict) -> Optional[dict]:
+    """The lineage's LAST real app-start verdict, when it was a failure; else None.
+
+    ENT-REC-09: a repair build seeded from a parent whose app crashed on start wrote nothing
+    runnable, so its proof took the "nothing this build wrote can change what starts" shortcut,
+    passed, and the build completed green with an ordinary pull request — about an app that
+    still crashed. The shortcut is only true when what the build sits on is not already known
+    not to start: "unchanged" inherits the base's verdict, and a failed one is not a pass. A
+    record that started nothing (a shortcut, an undeclared build, a check BOSS could not run)
+    is not a verdict, and the newest real one wins: a later green start clears an older crash.
+    The run's own earlier proofs count too: a convergence round that writes nothing runnable
+    after its first proof failed has not fixed anything either.
+    """
+    root = _lineage_root(engine, run)
     if not root:
-        return list((run.get("state") or {}).get("impl_files") or [])
+        return None
     with begin(engine) as c:
-        rows = c.execute(
-            text("""
-                SELECT state->'impl_files' AS f
-                FROM code_task_runs
-                WHERE COALESCE(finalize_ctx->>'root_run_id', id) = :root
-                   OR finalize_ctx->>'deferred_from_run' IN (
-                        SELECT id FROM code_task_runs
-                        WHERE COALESCE(finalize_ctx->>'root_run_id', id) = :root)
-                ORDER BY created_at DESC
-            """),
-            {"root": root},
-        ).mappings().all()
-    out: list[str] = []
-    for r in rows:
-        for path in (r["f"] or []):
-            if isinstance(path, str) and path not in out:
-                out.append(path)
-    return out
+        rows = c.execute(text(f"""
+            SELECT e.data FROM events e
+            WHERE e.event_type = 'code_task.app_serve_checked'
+              AND e.entity_id IN (SELECT id FROM code_task_runs WHERE {_LINEAGE_WHERE})
+            ORDER BY e.created_at DESC, e.id DESC
+            LIMIT 50
+        """), {"root": root}).mappings().all()
+    for row in rows:
+        data = row["data"] if isinstance(row["data"], dict) else {}
+        if data.get("harness") or data.get("source") in _NOT_A_START_VERDICT:
+            continue
+        return None if data.get("ok") else data
+    return None
 
 
 #: A file a browser opens: a build that wrote one is an APP to preview; one that wrote none is a
@@ -2249,13 +2295,34 @@ def _serving(port: int, health_path: str = "/", *, service: bool = False) -> boo
     asked in that order and a 2xx on any is up. northgate-gateway answered 404 at `/` and 200 at
     /healthz, and its preview was failed as "no page at the site root" (BOSSAPP-1308). A UI
     never passes on its /healthz: a web app whose static build is missing answers 404 at `/`
-    and must still fail."""
+    and must still fail.
+
+    THE RULE FOR A 404 AT `/` ON A SERVICE (ENT-REC-11): it is up only when it HAS a health
+    route — one it declared that answers 2xx, or a /healthz or /readyz that answers 2xx while a
+    path no app routes (NO_SUCH_ROUTE) does not. An app that answers 2xx at every path but 404s
+    at `/` has no health route at all: its /healthz is its catch-all, and its one missing route
+    is the home it lost. That is failed ("GET / returned 404"), never up."""
     if _http_ok(port, health_path):
         return True
     declared = health_path not in ("", "/")
     if not (declared or service):
         return False
-    return any(_answers_2xx(port, p) for p in service_health_paths(health_path))
+    if declared and _answers_2xx(port, health_path):
+        return True     # the app's own word for its health route
+    return _has_health_route(port, health_path)
+
+
+#: A path no app routes: what a catch-all handler answers (_serving's rule for a service).
+NO_SUCH_ROUTE = "/__boss_no_such_route__"
+
+
+def _has_health_route(port: int, health_path: str = "/") -> bool:
+    """Does a conventional health path (/healthz, /readyz) answer 2xx as a ROUTE of its own,
+    rather than as a catch-all that answers 2xx at every path?"""
+    fallbacks = [p for p in service_health_paths(health_path) if p != health_path]
+    if not any(_answers_2xx(port, p) for p in fallbacks):
+        return False
+    return not _answers_2xx(port, NO_SUCH_ROUTE)
 
 
 #: Statuses that say the ROUTE is not there, as opposed to "not ready yet". An app answering
@@ -2268,6 +2335,11 @@ ABSENT_ROUTE_STATUSES = (404, 410)
 #: preview answered 404 at `/` from its first second and was polled for 600 s, holding its
 #: build's job (and the build's follow-ups) the whole time.
 ABSENT_ROUTE_GRACE_SECONDS = 15.0
+
+#: How long the serve proof waits for the ASSIGNED port once the app already serves on a port
+#: of its own choosing (_discover_working_port `assigned_first`): an app that bound 5999 is not
+#: about to bind $PORT as well, but a log naming another URL a moment before $PORT binds is.
+WRONG_PORT_GRACE_SECONDS = 5.0
 
 
 def _route_absent(port: int, path: str = "/") -> Optional[int]:
@@ -2332,6 +2404,12 @@ def _diagnose_listening_port(log_path: str, port_hint: int,
                         f"{http_error.code}. It serves no health route at the path it declares "
                         f"(boss.deploy.yaml health / boss.preview.health) — fix the route or the "
                         f"declaration.")
+            if http_error.code in ABSENT_ROUTE_STATUSES and _answers_2xx(port, NO_SUCH_ROUTE):
+                return (f"the app IS listening on port {port}, but GET / returned "
+                        f"{http_error.code} while every other path answers 2xx (a catch-all), "
+                        f"so it has no health route either: the home route `/` is missing. "
+                        f"Serve `/` (or declare the service's health path in "
+                        f"boss.preview.health / boss.deploy.yaml health).")
             return (f"the app IS listening on port {port}, but GET / returned "
                     f"{http_error.code}, and neither "
                     f"{' nor '.join(SERVICE_HEALTH_PATHS)} answered 2xx. It serves no page "
@@ -2493,7 +2571,8 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
                            proc: Optional[subprocess.Popen] = None,
                            health_path: str = "/", listener_uid: Optional[int] = None,
                            absent_grace: float = ABSENT_ROUTE_GRACE_SECONDS,
-                           service: bool = False) -> Optional[int]:
+                           service: bool = False,
+                           assigned_first: bool = False) -> Optional[int]:
     """Return the port the app actually serves HTTP on — its log-announced port first, then the
     injected PORT — each health-checked, so a neighboring local service is never mistaken for it.
 
@@ -2503,9 +2582,18 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
     STOP WAITING THE MOMENT THE ANSWER IS "NO SUCH ROUTE", too. A port that keeps answering
     404/410 at the health path for ABSENT_ROUTE_GRACE_SECONDS has bound and is routing; it is
     not slow, it has nothing there. That was polled every 0.8 s for the whole window — 600 s
-    for a build — before it was reported, while the caller held its job."""
+    for a build — before it was reported, while the caller held its job.
+
+    `assigned_first` (the build's serve proof): THE PORT BOSS ASSIGNED is asked first, and a
+    logged port that serves is returned only once the assigned one has stayed silent for
+    WRONG_PORT_GRACE_SECONDS — so the caller can tell "serves on $PORT" from "serves, but on a
+    port of its own" (ENT-REC-10), and a log line naming some other URL never outruns $PORT."""
+    elsewhere_since: Optional[float] = None
+
     def candidates() -> list[int]:
         ports = _candidate_ports(log_path, port_hint)
+        if assigned_first:
+            ports = [port_hint] + [p for p in ports if p != port_hint]
         if listener_uid is None:
             return ports
         # A SANDBOXED preview's port is one ITS uid listens on. The log is the app's to write:
@@ -2518,7 +2606,12 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
     while time.time() < deadline:
         for port in candidates():
             if _serving(port, health_path, service=service):
-                return port
+                if not assigned_first or port == port_hint:
+                    return port
+                elsewhere_since = elsewhere_since or time.time()
+                if time.time() - elsewhere_since >= WRONG_PORT_GRACE_SECONDS:
+                    return port
+                continue
             if _route_absent(port, health_path) is None:
                 absent_since.pop(port, None)
             elif time.time() - absent_since.setdefault(port, time.time()) >= absent_grace:
@@ -2618,6 +2711,16 @@ def launch_app(workdir: Path, command: list[str], log_path: str, *,
     finally:
         logf.close()
     return proc, port_hint
+
+
+def wrong_port_note(port: Optional[int], assigned: Optional[int]) -> Optional[str]:
+    """The preview's note when the app serves on a port of its own instead of the $PORT BOSS
+    gave it (ENT-REC-10), else None."""
+    if not port or not assigned or int(port) == int(assigned):
+        return None
+    return (f"the app is listening on {port}, not $PORT ({assigned}): the preview follows it, "
+            f"but a deploy gives the app its port and will find nothing there. Read the port "
+            f"from the PORT environment variable.")
 
 
 def _serve_failure(log_path: str, port_hint: int, health_path: str = "/") -> str:
@@ -2832,7 +2935,8 @@ def _build_services_env(owner) -> dict[str, str]:
 
 
 def app_start_environment(app_dir: Optional[Path], *, needs: Optional[dict] = None,
-                          bound: Optional[dict[str, str]] = None, purpose: str = "proof"):
+                          bound: Optional[dict[str, str]] = None, purpose: str = "proof",
+                          label: Optional[str] = None):
     """THE ONE RESOLVER for an app BOSS starts to check it (templates.run_env): what its templates
     declare (`needs`), what its own boss.deploy.yaml and .env.example declare (names only — a
     value in .env.example is never passed), the values a person bound, and the run's build
@@ -2842,8 +2946,11 @@ def app_start_environment(app_dir: Optional[Path], *, needs: Optional[dict] = No
     were never minted there (crun_f246d330)."""
     from ..templates.run_env import merge, needs_from_app_dir, resolve
 
-    return resolve(merge(needs or {}, needs_from_app_dir(app_dir)), purpose=purpose, bound=bound,
-                   supplied=_build_services_env(owned_process.current_owner()))
+    env = resolve(merge(needs or {}, needs_from_app_dir(app_dir, label=label)), purpose=purpose,
+                  bound=bound, supplied=_build_services_env(owned_process.current_owner()))
+    if label:
+        env.app_label = label
+    return env
 
 
 def start_record(*, path: str, command, cwd, run_env, log_path: str, exit_code: Optional[int],
@@ -2867,7 +2974,8 @@ def start_record(*, path: str, command, cwd, run_env, log_path: str, exit_code: 
 def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                      lineage: Optional[list[str]] = None, known_service: bool = False,
                      timeout: float = 180.0, probe_paths: Optional[list[str]] = None,
-                     needs: Optional[dict] = None, bound: Optional[dict[str, str]] = None) -> dict:
+                     needs: Optional[dict] = None, bound: Optional[dict[str, str]] = None,
+                     base_failed: Optional[dict] = None) -> dict:
     """START what the build built and require it to answer HTTP — before the build may pass.
 
     WITH THE ENVIRONMENT THE APP DECLARES (templates.run_env). `needs` is what its templates
@@ -2910,7 +3018,9 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
     what to launch for an undeclared repo — it never blocks a build. `web_app_build` is not
     evidence either: it is set on every build-on-existing/extend, CLIs and libraries included.
     A build whose diff changes nothing that can alter how an app starts (docs, tests) has
-    nothing to prove.
+    nothing to prove — UNLESS what it builds on is already known not to start (`base_failed`,
+    lineage_start_failure): "unchanged" inherits that verdict, so the app is started again and a
+    repair build that wrote nothing runnable cannot complete green (ENT-REC-09).
 
     A DECLARED command is held to serving whatever it prints — the build said it serves.
 
@@ -2926,9 +3036,12 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
     tree = None
     try:
         if changed is not None and not touches_runnable_source(this_build):
-            # Docs/tests only: nothing this build wrote can change what starts.
-            record.update(source="no_runnable_change")
-            return record
+            if not base_failed:
+                # Docs/tests only: nothing this build wrote can change what starts.
+                record.update(source="no_runnable_change")
+                return record
+            # ...and what it starts from did not start: prove it again, do not inherit a pass.
+            record["base_failed"] = str(base_failed.get("error") or "the app did not start")[:300]
         tree = _proof_tree(workdir)
         # The boss.preview.app this run will push (governed _declare_preview_app computes it
         # the same way), so the derived step sees what the preview will see.
@@ -2971,7 +3084,9 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         record["source"] = plan.source
         record["command"] = plan.shell()
         app_dir = _app_dir_of_plan(tree, plan)
-        run_env = app_start_environment(app_dir, needs=needs, bound=bound, purpose="proof")
+        _rel = app_dir.relative_to(tree).as_posix() if app_dir != tree else ""
+        run_env = app_start_environment(app_dir, needs=needs, bound=bound, purpose="proof",
+                                        label=_rel or None)
         record["environment"] = run_env.evidence()
         if run_env.needs:
             record.update(ok=False, needs_secret=[n.name for n in run_env.needs], error=(
@@ -2985,6 +3100,10 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         def _app_text() -> str:
             return _app_start.split_output(_read_log(log_path))[1]
 
+        # BOSS's own sentence naming the variable, kept out of the redaction below: "needs a
+        # secret: PAYMENTS_API_KEY" reads as a key and its value to the pattern pass, and the
+        # person was asked to set "[REDACTED]".
+        boss_words = ""
         try:
             health = preview_health_path(tree)
             port = _discover_working_port(log_path, port_hint,
@@ -2993,9 +3112,19 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                                           proc=proc,
                                           health_path=health,
                                           service=app_tree_kind(
-                                              _app_dir_of_plan(tree, plan))[0] == "service")
+                                              _app_dir_of_plan(tree, plan))[0] == "service",
+                                          assigned_first=True)
             exit_code = proc.poll()
-            if port is not None:
+            if port is not None and port != port_hint:
+                # THE PORT BOSS ASSIGNED, NOT THE ONE THE APP CHOSE (ENT-REC-10). The proof
+                # followed the port the app logged and passed it, so a server ignoring $PORT
+                # was never reported nor repaired — and every runner that gives it a port (a
+                # deploy, a container, a sandboxed preview) finds nothing there.
+                record.update(ok=False, port=port, wrong_port=port, error=(
+                    f"the app is listening on {port}, expected $PORT ({port_hint}): it did not "
+                    f"answer HTTP on the port BOSS assigned. Read the port from the PORT "
+                    f"environment variable (and bind 0.0.0.0) instead of a fixed {port}."))
+            elif port is not None:
                 record.update(proven=True, port=port)
                 if probe_paths:
                     # A CONNECTOR'S WIRING SMOKE CHECK (templates.gate.connector_smoke): its
@@ -3008,15 +3137,24 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                     f"the app exited (code {exit_code}) before serving HTTP: "
                     + why_it_failed_text(_app_text())))
                 log_text = _app_text()
-                named = run_env.unset_named_in(log_text)
+                # A declared variable it was not given, or a credential only a person has that
+                # its start error names as missing and nothing declares (ENT-REC-13).
+                named = run_env.unset_named_in(log_text) or run_env.missing_secret_named_in(log_text)
                 if named:
+                    boss_words = f"the app {run_env.explain_crash(log_text)}. "
                     # A person's act ONLY for a secret only a person can supply; a crash on a
                     # listed/optional variable is the code's (WORK: the coder's repair round).
                     if run_env.crash_needs_person(log_text):
                         record["needs_secret"] = [named]
+                        if named not in run_env.declared:
+                            # DECLARED BY THE START ERROR, on the record: the app's Secrets
+                            # read the run's evidence (app_declared_env) to accept a value for
+                            # build and preview, which the card asks for.
+                            run_env.declare_named(
+                                named, f"{run_env.app_label}'s start error")
+                            record["environment"] = run_env.evidence()
                     else:
                         record["optional_unset"] = [named]
-                    record["error"] = f"the app {run_env.explain_crash(log_text)}. {record['error']}"
             else:
                 listening = _diagnose_listening_port(log_path, port_hint, health)
                 # ONE STORY. "did not answer HTTP" followed by "GET / returned 200" contradicted
@@ -3037,7 +3175,7 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                     # The error quotes the app's log, and an app may print what it was given: no
                     # value BOSS handed it (a generated key, the run's database password) is kept
                     # on the record, the app_serve_checked event or the repair prompt.
-                    record["error"] = _app_start.redactor(
+                    record["error"] = boss_words + _app_start.redactor(
                         [*run_env.values.values(),
                          *_build_services_env(owned_process.current_owner()).values()]
                     )(record["error"])
@@ -3450,11 +3588,12 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             f"the app exited (code {exit_code}) before serving HTTP: " + why_it_failed_text(_own)
             if exit_code is not None else _serve_failure(log_path, port_hint, health)
         )
+        # No value the preview was given survives into its failure (an app may print its env);
+        # BOSS's own sentence naming the variable is added after, so its name is not redacted.
+        why = _app_start.redactor(list(app_env.values.values()))(why)
         needed = app_env.explain_crash(_own)
         if needed:
             why = f"the app {needed}. {why}"
-        # No value the preview was given survives into its failure (an app may print its env).
-        why = _app_start.redactor(list(app_env.values.values()))(why)
         _kill(proc.pid)
         try:
             _app_start.publish(start_record(
@@ -3476,6 +3615,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         return _fail(f"expose: {exc}", command=" ".join(command), exited=False)
 
     url = f"http://127.0.0.1:{port}"
+    # SHOWN, BUT SAID (ENT-REC-10): the preview follows the port the app chose so a person sees
+    # what it serves; every runner that hands it a port (a deploy, a container) finds nothing.
+    port_note = wrong_port_note(port, port_hint)
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     with begin(engine) as c:
         c.execute(text(
@@ -3487,7 +3629,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
              "sub": ExecutionSubstrate.PREVIEW_HOST.value, "build": build_substrate,
              "lg": log_path, "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
-                   {"run_id": run_id, "url": url, "repo": f"{owner}/{repo}", "branch": branch})
+                   {"run_id": run_id, "url": url, "repo": f"{owner}/{repo}", "branch": branch,
+                    **({"note": port_note} if port_note else {})})
     demo_logins = record_demo_logins(engine, preview_id, app_env)
     return _with_exposed(engine, preview_id, _exposed, publicize_preview({
         "id": preview_id, "status": "running", "url": url, "port": port, "demo_logins": demo_logins,
@@ -3495,6 +3638,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
         "build_substrate": build_substrate,
+        **({"note": port_note} if port_note else {}),
     }, settings=settings))
 
 
