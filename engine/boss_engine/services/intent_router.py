@@ -185,13 +185,15 @@ _DECIDED_MEANS = {
                         "which capability. If something truly has no capability, say 'BOSS "
                         "has no step that does X; closest: …' and offer the custom step."),
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
-                        "change, start_workflow for a whole delivery — both come back as a "
-                        "button the person presses; say it is offered, not started. Do not "
-                        "retry or redeploy existing work in its place. When they ask to run a "
-                        "workflow BY NAME (one this project has — describe_workflow lists them), "
-                        "offer start_workflow with THAT workflow_key and its declared inputs as "
-                        "`inputs` values; never substitute the default Build path for it, and "
-                        "if an input is missing say which."),
+                        "change (with lane='quick' when the ask is a small, well-specified bug "
+                        "or fix with reproduction/evidence inside this project — no new workflow "
+                        "needed, same quality-bar gates), start_workflow for a whole delivery or "
+                        "larger feature — both come back as a button the person presses; say it is "
+                        "offered, not started. Do not retry or redeploy existing work in its place. "
+                        "When they ask to run a workflow BY NAME (one this project has — "
+                        "describe_workflow lists them), offer start_workflow with THAT workflow_key "
+                        "and its declared inputs as `inputs` values; never substitute the default "
+                        "Build path for it, and if an input is missing say which."),
 }
 
 

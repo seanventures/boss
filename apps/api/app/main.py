@@ -33748,6 +33748,9 @@ app.include_router(build_subscription_fees_router())
 from .routes_mcp_oauth import build_mcp_oauth_router  # noqa: E402  (BOSSAPP-862)
 
 app.include_router(build_mcp_oauth_router())
+from .routers.quick_lane import router as quick_lane_router  # noqa: E402  (BOSSAPP-795..799)
+
+app.include_router(quick_lane_router)
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

@@ -1471,6 +1471,19 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "frontier-model pipeline — a one-line change then "
                                    "costs the same ~9 agent sessions as a whole feature.",
                 },
+                "lane": {
+                    "type": "string",
+                    "enum": ["auto", "quick", "full"],
+                    "description": "Execution lane. Use 'quick' for a small, well-specified fix "
+                                   "that runs in the dedicated quick-lane queue with full context "
+                                   "and independent validation (BOSSAPP-799); 'full' forces the "
+                                   "full pipeline; 'auto' lets triage decide.",
+                },
+                "repro": {
+                    "type": "string",
+                    "description": "Reproduction steps, failing command, or observed error evidence "
+                                   "for bug fixes (used by quick-lane triage and builder context).",
+                },
                 "project_id": {"type": "string"},
             },
             ["title", "instructions"],
@@ -1483,6 +1496,31 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         cts = services_module("code_task_service")
         task_id = args.get("task_id")
         instructions = args.get("instructions") or ""
+        requested_lane = str(args.get("lane") or "").strip().lower()
+        if requested_lane == "quick":
+            from ..services.quick_lane import start_quick_fix
+
+            with ctx.begin() as connection:
+                return start_quick_fix(
+                    connection,
+                    project_id=pid,
+                    title=str(args.get("title") or "Quick fix"),
+                    instructions=instructions,
+                    actor=actor,
+                    source="mcp",
+                    requested_by_person=True,
+                    task_id=task_id,
+                    spec_extra={
+                        "kind": "bug",
+                        "repro": args.get("repro"),
+                        "acceptance_criteria": args.get("acceptance_criteria") or [],
+                        "test_commands": args.get("test_commands") or [],
+                        "repository": args.get("repository"),
+                        "base_branch": args.get("base_branch"),
+                        "extends_run_id": args.get("extends_run_id"),
+                        "reference_links": args.get("reference_links") or [],
+                    },
+                )
         # NO BRANCH ASKED FOR STAYS NONE: the pipeline resolves it (build_base_branch) — the
         # project's bound branch, else the host default. A "main" here was written into the spec
         # as if chosen, so every workflow build step cloned main and PR'd into it
