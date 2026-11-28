@@ -33,6 +33,11 @@ class PullRequestResult:
     number: int
 
 
+class MergeHeadUnverifiable(RuntimeError):
+    """A repository host cannot tell which commit a pull request holds, so a merge cannot be
+    bound to the approved one. Nothing was merged; only a person's force merges the tip."""
+
+
 @dataclass
 class PullRequestMergeResult:
     sha: str

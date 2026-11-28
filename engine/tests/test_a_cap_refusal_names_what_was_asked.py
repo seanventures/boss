@@ -31,4 +31,4 @@ def test_the_reserve_refusal_uses_it():
     from pathlib import Path
 
     src = (Path(__file__).resolve().parents[1] / "boss_engine/services/budget.py").read_text()
-    assert "cap_refusal_sentence(refusal, amount_usd_micros)" in src
+    assert "cap_refusal_sentence(period, amount_usd_micros)" in src  # money_check: quote and reserve
