@@ -328,9 +328,23 @@ def pre_approval(connection: Connection, project_id: str, environment: Any, *,
             return {"source": "gate", "decision_id": str(found["decision_id"]),
                     "approved_by": str(found.get("approved_by") or "unknown")}
     elif gate_decision_id:
-        found = _gate_approval(connection, project_id, str(gate_decision_id),
-                               person_only=gate_by_person)
-        if found:
+        # BOSSAPP-1481: generic deploy path uses the same atomic one-use claim row
+        # (deployment_gate_uses PK + ON CONFLICT) bound to run + capability + target.
+        found = _gate_approval(
+            connection,
+            project_id,
+            str(gate_decision_id),
+            person_only=gate_by_person,
+            capabilities=("deploy",),
+            run_id=gate_run_id,
+        )
+        if found and _claim_gate(
+            connection,
+            project_id,
+            found,
+            target_id=target_id,
+            bundle_sha256=bundle_sha256,
+        ):
             return {k: found[k] for k in ("source", "decision_id", "approved_by")}
     if person_required:
         return None

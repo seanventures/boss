@@ -17497,3 +17497,35 @@ CREATE TABLE IF NOT EXISTS zero_token_job_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_zero_token_job_runs_job
   ON zero_token_job_runs (job_id, created_at DESC);
+
+-- BOSSAPP-1489: record material owner_scope on secret_material at write time (system | project:<id>
+-- | org:<id> | workspace:<id>) so a project ref can never read another project's or the install's
+-- secret material.
+ALTER TABLE secret_material ADD COLUMN IF NOT EXISTS owner_scope TEXT;
+
+-- BOSSAPP-1481: allow 'rejected' terminal status on workflow_runs so rejected onboarding runs
+-- are counted as rejected rather than completed/succeeded.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'workflow_runs'::regclass
+      AND contype = 'c'
+      AND pg_get_constraintdef(oid) LIKE '%compensated%'
+      AND pg_get_constraintdef(oid) NOT LIKE '%rejected%'
+  ) THEN
+    EXECUTE (
+      SELECT 'ALTER TABLE workflow_runs DROP CONSTRAINT ' || quote_ident(conname)
+      FROM pg_constraint
+      WHERE conrelid = 'workflow_runs'::regclass
+        AND contype = 'c'
+        AND pg_get_constraintdef(oid) LIKE '%compensated%'
+      LIMIT 1
+    );
+    ALTER TABLE workflow_runs ADD CONSTRAINT workflow_runs_status_check
+      CHECK (status IN (
+        'queued', 'validating', 'running', 'waiting', 'paused', 'blocked',
+        'completed', 'rejected', 'failed', 'deadlettered', 'cancelled',
+        'compensating', 'compensated'
+      ));
+  END IF;
+END $$;
