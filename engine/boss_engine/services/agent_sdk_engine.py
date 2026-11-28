@@ -529,7 +529,9 @@ def build_agent_class():
             if allowed_tools is not None:
                 allowed = allowed_tools
             else:
-                allowed = "Read,Grep,Glob,Bash" if read_only else s.code_agent_allowed_tools
+                from .heavy_slot import read_only_tools
+
+                allowed = read_only_tools() if read_only else s.code_agent_allowed_tools
             fan_out = 0 if read_only else max(0, int(parallel_agents or 0))
             if fan_out:
                 allowed = ca.sub_agent_tools(allowed)

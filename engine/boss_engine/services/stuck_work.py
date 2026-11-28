@@ -211,7 +211,8 @@ def _lineage_root(ctx: Mapping[str, Any], run_id: str) -> str:
 def _running_builds(connection: Any, project_id: Optional[str], exclude: str) -> list[dict[str, Any]]:
     rows = connection.execute(text(
         "SELECT r.id, r.title, r.project_id, j.created_at AS job_at, j.heartbeat_at, "
-        "r.finalize_ctx->>'root_run_id' AS root "
+        "r.finalize_ctx->>'root_run_id' AS root, NOT EXISTS (SELECT 1 FROM heavy_slot_releases h "
+        "WHERE h.job_id = j.id AND h.fence_epoch = j.fence_epoch) AS holding "
         "FROM jobs j JOIN code_task_runs r ON r.id = j.payload->>'run_id' "
         "WHERE j.kind = 'code.task' AND j.status IN ('leased', 'running') "
         "AND j.lease_expires_at > now() AND r.id <> :x ORDER BY j.created_at LIMIT 20"),
@@ -406,6 +407,20 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
     if jstatus in ("leased", "running"):
         if phase in ("queued", "provisioning", ""):
             return out("starting", "boss", "Starting: a worker has it", "", job.get("heartbeat_at"))
+        # IT GAVE ITS HEAVY-BUILD SLOT BACK WHILE IT THOUGHT AND WAITS TO TAKE IT AGAIN
+        # (heavy_slot): said, with who holds it, never "working".
+        from .heavy_slot import waiting_row
+
+        wait = waiting_row(connection, run_id)
+        if wait is not None:
+            holders = [r for r in _running_builds(connection, run.get("project_id"), run_id)
+                       if r.get("holding")]
+            names = _names([_short_title(r["title"]) for r in holders[:2]])
+            return out("heavy_slot", "queue",
+                       "Waiting for the heavy-build slot" + (f": in use by {names}" if names else ""),
+                       "It thinks without the slot and takes it back, in order, before it runs "
+                       "installs, tests or the app. This wait does not count against its time.",
+                       wait.get("waiting_since"))
         return None  # an agent is on it: working, not waiting
 
     # Queued: what it waits for, from what the claim path wrote.
@@ -450,6 +465,18 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
             eta_slot = max(1, typical - _mins((now - oldest).total_seconds()))
     in_use = (f"{len(running)} in use by {names}" if running else "")
     if code == "host_capacity":
+        # WHY THE DOCTOR IS NOT ADDING A SLOT (capacity_steward), on the item that waits.
+        from .capacity_steward import busy_note
+
+        _note = busy_note(connection)
+        if _note:
+            err = {**err, "message": f"{err.get('message') or ''} {_note}.".strip()}
+    if code == "host_capacity":
+        # The builds that hold the heavy slot are what it waits for; the ones thinking with
+        # their slot given back are not in its way (heavy_slot).
+        holding = [r for r in running if r.get("holding", True)]
+        if holding and len(holding) < len(running):
+            in_use = f"{len(holding)} in use by {_names([_short_title(r['title']) for r in holding[:2]])}"
         return out("host", "queue",
                    "Waiting for room on this machine" + (f": {in_use}" if in_use else ""),
                    _clip(err.get("message") or "", 300), job.get("updated_at"), eta_slot)
@@ -470,6 +497,11 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
         words = (f"Waiting for a build slot: {in_use}"
                  + (f" · next in about {span_words(eta_slot)}" if eta_slot else ""))
         detail = f"Place {place} of {total} in the queue." if place else ""
+        from .capacity_steward import busy_note
+
+        _note = busy_note(connection)
+        if _note:
+            detail = f"{detail} {_note}.".strip()
         return out("slot", "queue", words, detail, job.get("created_at"), eta_slot)
     if waited >= STUCK_MINUTES:
         return out("no_worker", "stuck",

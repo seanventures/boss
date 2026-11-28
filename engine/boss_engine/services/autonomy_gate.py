@@ -75,7 +75,7 @@ EVENT = "decision.auto_decided"
 
 #: Undo kinds with a handler (`undo`). A kind starting `none:` has no undo, and says why.
 UNDO_KINDS = ("send_back", "revert_merge", "rollback_deploy", "revoke_grant", "disable_skill",
-              "remove_self_fix", "cancel_run")
+              "remove_self_fix", "cancel_run", "restore_capacity")
 NONE_RECORD = "none:it only recorded an answer; nothing was carried out that can be taken back"
 NONE_NOTICE = "none:a notice; acknowledging it changed nothing"
 NONE_SPEND = "none:spend cannot be recalled; lower the top-up in the autonomy policy"
@@ -222,6 +222,11 @@ ACTIONS: dict[str, Rule] = {
     "self_improvement.rollout": _r(ASK_PROD_ONLY, NONE_VERSION, _EM, "install"),
     "storage_delete": _r(ASK_PROD_ONLY, NONE_DELETE, _INF, "install"),
     "storage_rule": _r(ACT, NONE_RECORD, _INF),
+    # The system doctor's heavy-slot changes (capacity_steward): BOSS-side resources, decided and
+    # recorded in one "Decided for you" row per episode; a raise is undone by draining it back.
+    "capacity_raise": _r(ACT, "restore_capacity", "system_doctor"),
+    "capacity_lower": _r(ACT, NONE_RECORD, "system_doctor"),
+    "capacity_reset": _r(ACT, NONE_RECORD, "system_doctor"),
     # G. credentials, external channels, data boundary
     "provide_github_token": _r(ASK_CREDENTIAL, NONE_RECORD, _EM),
     "provide_openai_api_key": _r(ASK_CREDENTIAL, NONE_RECORD, _EM),
@@ -1059,6 +1064,14 @@ def _undo_remove_self_fix(connection, settings, decision_id, project_id, rec, ac
     return f"removal asked ({removal.get('decision_id') or 'queued'})"
 
 
+def _undo_restore_capacity(connection: Any, settings: Any, decision_id: str, project_id: str,
+                           rec: dict, actor: str) -> str:
+    """The system doctor added a heavy slot (capacity_steward): take it away, by draining."""
+    from . import capacity_steward
+
+    return capacity_steward.undo_raise(connection, actor=actor)
+
+
 UNDO_HANDLERS = {
     "send_back": _undo_send_back,
     "revert_merge": _undo_revert_merge,
@@ -1067,6 +1080,7 @@ UNDO_HANDLERS = {
     "disable_skill": _undo_disable_skill,
     "remove_self_fix": _undo_remove_self_fix,
     "cancel_run": _undo_cancel,
+    "restore_capacity": _undo_restore_capacity,
 }
 
 

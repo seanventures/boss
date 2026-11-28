@@ -4,6 +4,11 @@ All notable changes to BOSS Community. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- A build holds its heavy-build slot only while it works the machine (writing sessions, installs, tests, the app). While it designs and plans, the slot goes to the next build, and it takes it back in order. Waits for the slot count as queue time on every repair clock, and the build says what it waits for.
+- On installs that never saved Setup › Agent capacity, job slots are now measured on the machine: heavy builds at their memory request, thinking builds at about 400 MB, up to 4. Before, they matched "Builds at once". Setup says why each number was chosen.
+- The always-on system doctor adds a heavy slot when work has waited 10 minutes and the machine has had room for 10 minutes. It goes at most one above the measured value, drains when room goes (nothing is stopped), and backs off after a drain. Each episode is one row in "Decided for you"; Undo there removes the extra slot and keeps the doctor quiet for 24 h. A pinned "Builds at once" is never raised: the doctor says when your limit is what holds the queue. To turn the boost off, pin "Builds at once".
 - **BOSS knows where it was installed from (ENT-REC-54).** Every install and upgrade records the checkout (`.boss/selfsrc/install.json`) and mirrors its source for self-fixes; Govern › Self-fix shows what a self-fix still needs, with one action each. **On upgrade, an existing development install used by more than one person turns self-fix on** (it was off by default there); a production install with more than one person keeps it off. A development install also enrols the host self-installer once, unless `BOSS_SELF_FIX_INSTALLER=off`; it never installs a fix that changes what the host runs (installer, compose, Dockerfiles, `.boss/`).
 
 ## [v1.0-rc10.32]

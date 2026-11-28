@@ -213,9 +213,14 @@ def auto_preview_after_pr(engine, settings: Settings, *, project_id: str, run_id
 
     def _preview() -> None:
         try:
+            from . import heavy_slot as _heavy_slot
             from .preview_service import start_preview_for_run
-            _pv = start_preview_for_run(engine, settings, run_id, ttl_minutes=120,
-                                        ready_timeout=AUTO_PREVIEW_READY_SECONDS)
+
+            # Installing and starting the app works the machine: under the build's heavy slot
+            # while the build is still tracked here (a no-op once it has ended).
+            with _heavy_slot.heavy(run_id):
+                _pv = start_preview_for_run(engine, settings, run_id, ttl_minutes=120,
+                                            ready_timeout=AUTO_PREVIEW_READY_SECONDS)
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.auto_preview", "boss", "code_task_run",
                            run_id, {"status": _pv.get("status"), "url": _pv.get("url"),
@@ -6524,7 +6529,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # latency — and no record said which part of it was queueing. These two numbers are how
         # that question gets answered from data instead of by inference.
         _stage_started = time.monotonic()
-        with limiter.slot(provider) as _slot:
+        # A guest stage (a writer, the regression seat's suite) works the machine: it holds the
+        # build's heavy-build slot, taken BEFORE the model lane so a build waiting for its slot
+        # never sits on a lane another build could use (heavy_slot).
+        from . import heavy_slot as _heavy_slot
+
+        with _heavy_slot.heavy(run_id), limiter.slot(provider) as _slot:
             _work_started = time.monotonic()
             res = mv.run_code_task(guest_spec, tenant_id=project_id)
             _work_ms = int((time.monotonic() - _work_started) * 1000)
@@ -8166,6 +8176,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _halt_if_needs_person()
             if record:
                 _manifest_tampered[0] = None
+            # ONE HEAVY STEP, not one per command: the build keeps its slot for the whole
+            # verify (install, suite, flaky reruns) instead of handing it to another build
+            # between commands while the review seats think beside it (heavy_slot).
+            from . import heavy_slot as _heavy_slot
+
+            with _heavy_slot.heavy(run_id):
+                return _run_verify_held(record=record)
+
+        def _run_verify_held(*, record: bool = True):
+            nonlocal last_verify_output, last_verify_command, last_verify_cwd
             result = _run_verify_once(record=record)
             if (record and not result.ok and not verification_target.install_failure(result)
                     and not getattr(result, "timed_out", False)):

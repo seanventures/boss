@@ -10,6 +10,8 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import pytest
+
 from boss_engine.services.engine_contract import ContractedAgent, EngineCapabilities
 from boss_engine.services.independence import independent_reviewer
 
@@ -53,13 +55,51 @@ def test_a_writing_stage_still_runs_in_the_live_tree(tmp_path):
     assert agent.ran_in == live
 
 
-def test_claude_codes_review_seat_is_declared_shelled():
+class _Spawned(Exception):
+    pass
+
+
+def _allowed_tools_for(monkeypatch, tmp_path, stage: str) -> list[str]:
+    """The --allowedTools the Claude CLI is actually launched with for a read-only session of
+    `stage` (the spawn is intercepted; nothing runs)."""
+    from boss_engine.config import get_settings
+    from boss_engine.services import claude_credential, code_agent
+    from boss_engine.services.llm_telemetry import set_llm_context
+
+    seen: dict = {}
+
+    def fake_popen(cmd, **_kw):
+        seen["cmd"] = list(cmd)
+        raise _Spawned()
+
+    monkeypatch.setattr(code_agent.owned_process, "popen", fake_popen)
+    monkeypatch.setenv("BOSS_CAPTURE_AGENT_TURNS", "0")
+    monkeypatch.setattr(claude_credential, "resolve_claude_credential",
+                        lambda settings, **_k: claude_credential.ClaudeCredential("none"))
+    set_llm_context(stage=stage)
+    try:
+        with pytest.raises(_Spawned):
+            code_agent.ClaudeCodeAgent(get_settings())._invoke("Judge it.", tmp_path,
+                                                               read_only=True)
+    finally:
+        set_llm_context(stage=None)
+    cmd = seen["cmd"]
+    return cmd[cmd.index("--allowedTools") + 1].split(",")
+
+
+def test_claude_codes_review_seat_is_declared_shelled(monkeypatch, tmp_path):
     """claude_code's read-only mode is an allowed-tools list that still includes Bash with
-    auto-approval; the declaration is what routes its review seats onto the copy."""
+    auto-approval; the declaration is what routes its review seats onto the copy. Asserted on
+    the launch itself: a review seat gets Bash, a thinking stage that gives the build's heavy
+    slot back does not (heavy_slot.read_only_tools)."""
     from boss_engine.services.code_agent import ClaudeCodeAgent
 
     assert ClaudeCodeAgent.capabilities.read_only_shell is True
-    assert "Bash" in inspect.getsource(ClaudeCodeAgent._invoke)
+    for seat in ("review_code", "check_tests", "security_check"):
+        assert "Bash" in _allowed_tools_for(monkeypatch, tmp_path, seat), seat
+    for thinking in ("design", "plan", "spec"):
+        tools = _allowed_tools_for(monkeypatch, tmp_path, thinking)
+        assert "Bash" not in tools and {"Read", "Grep", "Glob"} <= set(tools), thinking
 
 
 def test_the_default_reviewer_is_a_connected_engine_from_another_family(monkeypatch):

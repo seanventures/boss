@@ -114,6 +114,9 @@ class Signals:
     #: subscription_headroom.install_accounts(): each subscription account's window state
     #: (BOSSAPP-1342) — 20 / 10 / 5 % left and the limit raise a finding.
     subscription_accounts: list[dict[str, Any]] = field(default_factory=list)
+    #: capacity_steward's look this tick: {action, why, estimate_minutes, boost} — the doctor
+    #: raising heavy slots while work waits on a machine with room, or saying why it cannot.
+    capacity: Optional[dict[str, Any]] = None
 
 
 _VM_LAST: dict[str, Any] = {}
@@ -541,6 +544,37 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
             "needs_choice": True, "auto": [],
         })
 
+    capacity = sig.capacity or {}
+    if capacity.get("action") == "pinned":
+        # A PERSON'S LIMIT HOLDS THE QUEUE on a machine with room: said once, never changed.
+        out.append({
+            "kind": "queue_held_by_limit", "severity": "info",
+            "title": "Your limit is holding builds",
+            "detail": f"{capacity.get('why')}. BOSS does not change a limit you set.",
+            "evidence": {"why": capacity.get("why"), "load_per_core": cap.load_per_core,
+                         "available_mb": round(cap.available_mb)},
+            "options": [_opt("dismiss_today", "OK", "Hide this notice for today.")],
+            "needs_choice": True, "auto": [],
+        })
+    if capacity.get("action") == "busy":
+        # SAID ONCE, NOT SILENTLY: work waits and the doctor cannot add a slot. One notice per
+        # episode ("OK" hides it for the day; it clears two minutes after the wait ends).
+        eta = capacity.get("estimate_minutes")
+        out.append({
+            "kind": "queue_waits_busy_host", "severity": "info",
+            "title": "Builds are waiting: this machine is busy",
+            "detail": (f"{capacity.get('why')}. Waiting builds start on their own as room frees"
+                       + (f"; a build here typically takes about {eta} minutes" if eta else "")
+                       + ". BOSS adds a heavy slot as soon as the machine has room."),
+            "evidence": {"why": capacity.get("why"), "estimate_minutes": eta,
+                         "boost": capacity.get("boost"),
+                         "load_per_core": cap.load_per_core,
+                         "available_mb": round(cap.available_mb)},
+            "options": [_opt("dismiss_today", "OK",
+                             "Hide this notice; BOSS keeps watching and adds a slot when it can.")],
+            "needs_choice": True, "auto": [],
+        })
+
     # BOSS fixes these itself; they never become a card.
     if sig.orphan_trees:
         out.append({"kind": "leaked_processes", "severity": "warn",
@@ -835,6 +869,18 @@ def tick(engine: Any, settings: Any = None, *, sig: Optional[Signals] = None) ->
 
     with background():
         sig = sig or collect(engine)
+        if sig.capacity is None:
+            # WORK WAITING ON A MACHINE WITH ROOM IS THE DOCTOR'S TO FIX (capacity_steward):
+            # one more heavy slot, or one fewer by draining, recorded in "Decided for you".
+            try:
+                from . import capacity_steward
+
+                looked = capacity_steward.tick(engine, cap=sig.cap)
+                sig.capacity = {"action": looked.action, "why": looked.why,
+                                "estimate_minutes": looked.estimate_minutes,
+                                "boost": looked.boost}
+            except Exception:  # noqa: BLE001 — one look failing never stops the tick
+                _log.warning("capacity steward failed", exc_info=True)
         found = diagnose(sig)
         now = datetime.now(timezone.utc)
         level = target_level(sig, _LEVEL_STATE, time.time())

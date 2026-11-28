@@ -4060,6 +4060,22 @@ CREATE TABLE IF NOT EXISTS workload_profiles (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- THE HEAVY-BUILD SLOT IS HELD FOR HEAVY WORK, NOT FOR THINKING (heavy_slot.py). A leased heavy
+-- job holds its slot unless it has a row here for its CURRENT lease (fence_epoch): `light` while
+-- it runs read-only model sessions (design, review seats) and gave the slot back, `waiting` while
+-- it wants it back (in-progress builds go before new leases, oldest first). A new lease moves
+-- fence_epoch on, so a row left by a process that died never counts.
+CREATE TABLE IF NOT EXISTS heavy_slot_releases (
+  job_id TEXT PRIMARY KEY,
+  fence_epoch BIGINT NOT NULL,
+  project_id TEXT,
+  run_id TEXT,
+  state TEXT NOT NULL DEFAULT 'light',
+  released_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  waiting_since TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- The system doctor's diagnoses (stability spec §4c): one row per finding, kept open while its
 -- signal holds and resolved when the signal has been clear for two minutes. A finding that
 -- needs a person's choice is a `system_health` card in What needs you; one BOSS fixed itself is

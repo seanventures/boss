@@ -578,8 +578,15 @@ class ContractedAgent:
         sink = harness_failures.TurnSink(kwargs.get("on_turn"), engine=self.engine,
                                          writer=not read_only)
         kwargs["on_turn"] = sink
+        # THE HEAVY-BUILD SLOT FOLLOWS THE WORK (heavy_slot): a read-only session of a thinking
+        # stage (design, spec, plan) may give the build's slot back; every other session —
+        # a writer, a review seat with its shell, check_tests — works the machine and holds it.
+        from . import heavy_slot
+
+        thinking = read_only and heavy_slot.stage_is_light(heavy_slot.stage_now())
         try:
-            raw = _call(self._inner.run_role, run_prompt, work, kwargs)
+            with (heavy_slot.light() if thinking else heavy_slot.heavy()):
+                raw = _call(self._inner.run_role, run_prompt, work, kwargs)
         except harness_failures.HarnessFailure:
             raise
         except Exception as exc:
@@ -630,8 +637,11 @@ class ContractedAgent:
             return None
         if model and str(model).strip().lower() == self.engine.lower():
             model = None   # an engine's NAME is not a model (see run_role)
-        result = normalise_result(fn(prompt, model=model), engine=self.engine, model=model,
-                                  caps=self.capabilities)
+        from . import heavy_slot
+
+        with heavy_slot.light():       # a one-shot completion only thinks
+            raw = fn(prompt, model=model)
+        result = normalise_result(raw, engine=self.engine, model=model, caps=self.capabilities)
         if result["stop_reason"] == "error":
             raise EngineSessionFailed(f"{self.engine} failed: {result['summary'][:300]}")
         result["transport"] = "plain"
@@ -641,10 +651,16 @@ class ContractedAgent:
         fn = getattr(self._inner, "run_research", None)
         if fn is None:
             raise NotImplementedError(f"the {self.engine!r} engine has no research mode")
-        return fn(*args, **kwargs)
+        from . import heavy_slot
+
+        with heavy_slot.light():       # web research reads; it builds nothing here
+            return fn(*args, **kwargs)
 
     def run(self, spec: Any, repo: Any, sandbox: Any) -> Any:
-        return self._inner.run(spec, repo, sandbox)
+        from . import heavy_slot
+
+        with heavy_slot.heavy():       # the build agent writes and runs the app's tooling
+            return self._inner.run(spec, repo, sandbox)
 
 
 def _default_ceiling(agent: Any) -> Optional[float]:

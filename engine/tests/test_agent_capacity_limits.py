@@ -27,11 +27,11 @@ def test_an_idle_queue_still_runs_one_build_under_load_until_the_doctor_pauses()
         assert not admission.decide(capacity, profile, in_flight=1, slots=3).admitted
 
 
-def test_job_slots_follow_builds_at_once_until_the_operator_saves_them(monkeypatch):
+def test_job_slots_are_measured_until_the_operator_saves_them(monkeypatch):
     state = {}
     monkeypatch.setattr(admission, "_state", lambda _c, key: state.get(key, {}))
     monkeypatch.setattr(admission, "load_profile", lambda *_: type("Pr", (), {"request_mb": 1024})())
-    monkeypatch.setattr(admission, "builds_at_once", lambda *_: {"value": 2, "auto": True})
+    monkeypatch.setattr(admission, "builds_at_once", lambda *_a, **_k: {"value": 2, "auto": True})
     monkeypatch.setattr(admission, "heavy_in_flight", lambda *_: 0)
     monkeypatch.setattr(admission, "current_level", lambda *_: 0)
     probe = type("P", (), {"shortfall": None, "as_dict": lambda self: {}})()
@@ -42,6 +42,9 @@ def test_job_slots_follow_builds_at_once_until_the_operator_saves_them(monkeypat
             return type("R", (), {"scalar": lambda self: 0})()
 
     cap = admission.Capacity(8192, 4096, cores=4)
-    assert admission.snapshot(Conn(), cap=cap)["worker_slots"] == 2
+    # Unsaved: measured (2 heavy at 1 GB leave ~4.8 GB for thinking builds), at most 4.
+    assert admission.snapshot(Conn(), cap=cap)["worker_slots"] == 4
+    small = admission.Capacity(3072, 2048, cores=2)
+    assert admission.snapshot(Conn(), cap=small)["worker_slots"] == 2   # never below the heavy
     state["agent_capacity"] = {"worker_slots": 4}
     assert admission.snapshot(Conn(), cap=cap)["worker_slots"] == 4
