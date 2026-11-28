@@ -146,10 +146,20 @@ class BitbucketAdapter:
             url=((created.get("links") or {}).get("html") or {}).get("href", ""),
             number=int(created.get("id", 0)))
 
-    def merge_pull_request(self, pull_request_number: int,
-                           commit_title: str) -> PullRequestMergeResult:
+    def merge_pull_request(self, pull_request_number: int, commit_title: str, *,
+                           head_sha: Optional[str] = None) -> PullRequestMergeResult:
         strategy = _MERGE_STRATEGY.get(
             str(getattr(self.settings, "sandbox_merge_method", "squash")).lower(), "squash")
+        if head_sha:
+            # MERGE WHAT WAS APPROVED. Bitbucket's merge takes no expected commit, so read the
+            # source head first and refuse when it moved past the approved one (the same 409
+            # GitHub returns for a pinned merge, so the merge-failure path reads it alike).
+            pr = self._request("GET", f"{self._repo_path()}/pullrequests/{pull_request_number}")
+            current = str((((pr.get("source") or {}).get("commit") or {}).get("hash")) or "")
+            want = str(head_sha).strip().lower()
+            if not current or not (want.startswith(current.lower())
+                                   or current.lower().startswith(want)):
+                raise RuntimeError("409 Conflict: Head branch was modified after approval.")
         merged = self._request(
             "POST", f"{self._repo_path()}/pullrequests/{pull_request_number}/merge",
             json_body={"message": commit_title, "merge_strategy": strategy,

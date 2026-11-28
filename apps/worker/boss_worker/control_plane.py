@@ -98,6 +98,10 @@ class ControlPlaneClient:
         }
         if wait_ms and wait_ms > 0:
             body["wait_ms"] = int(wait_ms)
+        # Only a poll that answers can say the API held it. A refused or failed poll must not
+        # inherit the last success's flag: the idle loop would skip its sleep and retry at once
+        # (16,000 traces in two minutes while the API restarted).
+        self.long_polled = False
         response = self._client.post(
             "/v1/worker/poll", json=body,
             timeout=httpx.Timeout(connect=10.0, read=max(30.0, wait_ms / 1000.0 + 15.0),

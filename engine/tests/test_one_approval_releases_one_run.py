@@ -58,6 +58,9 @@ class TestTheDeduplicationItselfIsUnchanged:
         from boss_engine.services import core
 
         source = inspect.getsource(core._create_blocking_decision_postgres)
+        # The cause is one clause (core._SAME_CAUSE_SQL), read by the dedup and the supersede.
+        assert source.count("_SAME_CAUSE_SQL") >= 2
+        source += core._SAME_CAUSE_SQL
         assert "AND question = :question" in source
         # A step's gate is its run's: the run and step are part of the cause (ONE GATE, ONE RUN).
         assert ":gate_run" in source and ":gate_step" in source

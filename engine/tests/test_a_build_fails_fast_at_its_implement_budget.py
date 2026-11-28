@@ -53,7 +53,7 @@ def test_failing_tests_are_named():
 def test_the_pipeline_stops_at_the_budget_and_records_it():
     src = inspect.getsource(g)
     assert "set_llm_context(stage_deadline=_impl_deadline)" in src
-    assert "set_llm_context(stage_deadline=None)" in src
+    assert "set_llm_context(stage_deadline=None, stage_deadline_since=None)" in src
     assert "and not _impl_over_budget()" in src                     # no continuation past it
     assert "code_task.stage_budget_exhausted" in src and "'{stage_budget}'" in src
     assert "_within_budget(lambda: a.run_role(" in src
