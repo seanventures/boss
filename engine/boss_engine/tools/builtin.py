@@ -57,9 +57,6 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 
 
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 200, "default": 25}
-_PAID_EFFECT_EDITIONS = frozenset({
-    "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
-})
 
 
 def app_logs_shell(*, compose_project: str | None, container: str, tail: int) -> str:
@@ -121,19 +118,8 @@ def _inspect_host_command(raw_value: object) -> tuple[str | None, str | None]:
     return _validate_inspect_host_command(raw_value)
 
 
-def _community_restricted(settings: Any) -> bool:
-    """Unknown editions get the conservative Community read boundary."""
-    edition = str(getattr(settings, "boss_edition", "community") or "community")
-    return edition.strip().lower() not in _PAID_EFFECT_EDITIONS
-
-
-def _community_raw_sql_disabled(settings: Any) -> bool:
-    """Raw SQL has no tenant fence or domain policy and is unsafe in Community."""
-    return _community_restricted(settings)
-
-
 def _raw_sql_admin_authorized(ctx: Any, actor: str) -> bool:
-    """Only an explicit local CLI call can use unscoped SQL in a paid edition."""
+    """Only an explicit local CLI call can use unscoped SQL."""
     return actor == "cli" and getattr(ctx, "raw_sql_admin_authorized", False) is True
 
 
@@ -428,7 +414,12 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "absent only when `total` says so — never from a page you did not finish.",
         _obj({"status": {"type": "string",
                          "enum": ["open", "fixing", "implemented", "done", "wont_fix"]},
-              "id": {"type": "string", "description": "brec_… — that one gap, in full"},
+              "id": {"type": "string", "description": "brec_… — that one gap, in full (searches "
+                                                      "this project and sibling projects in the "
+                                                      "same organization)"},
+              "all_projects": {"type": "boolean", "default": False,
+                               "description": "when true, list platform gaps across every project "
+                                              "in this organization (SF-11)"},
               "offset": {"type": "integer", "minimum": 0, "default": 0},
               "detail": {"type": "boolean", "default": False},
               "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}),
@@ -438,24 +429,35 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         """PAGED HONESTLY. The rows carried every prose field, so 14 of them overflowed the
         agent's tool-result budget and arrived as 8 and a cut-off tail; the agent concluded the
         gap it was looking for did not exist. A page is now compact rows that fit, with the
-        total and the next offset, and one gap in full is a direct lookup by id."""
+        total and the next offset, and one gap in full is a direct lookup by id — including
+        cross-project lookup inside the caller's organization (BOSSAPP-770 SF-11)."""
         from ..services import boss_recommendations as recs
 
-        full = ("id", "signature", "status", "title", "symptom", "root_cause",
+        full = ("id", "project_id", "signature", "status", "title", "symptom", "root_cause",
                 "proposed_change", "acceptance_tests", "files", "occurrences", "self_fix_id",
                 "created_by", "updated_at")
-        brief = ("id", "signature", "status", "title", "occurrences", "self_fix_id",
+        brief = ("id", "project_id", "signature", "status", "title", "occurrences", "self_fix_id",
                  "updated_at")
         wanted = str(args.get("id") or "").strip()
+        all_projects = bool(args.get("all_projects"))
         with ctx.begin() as c:
-            items = recs.list_recommendations(
-                c, project_id, status=None if wanted else (args.get("status") or None))
-        if wanted:
-            found = next((i for i in items if i.get("id") == wanted), None)
-            if found is None:
-                return {"ok": False, "found": False, "id": wanted,
-                        "error": f"no platform gap {wanted!r} in this project"}
-            return {"ok": True, "found": True, "gap": {k: _json_safe(found.get(k)) for k in full}}
+            if wanted:
+                found = recs.find_recommendation(c, wanted, project_id=project_id)
+                if found is None:
+                    return {"ok": False, "found": False, "id": wanted,
+                            "error": f"no platform gap {wanted!r} in this organization"}
+                return {"ok": True, "found": True,
+                        "cross_project": found.get("project_id") != project_id,
+                        "gap": {k: _json_safe(found.get(k)) for k in full}}
+            if all_projects:
+                org_id = recs._project_org_id(c, project_id)
+                items = (recs.list_org_recommendations(
+                    c, org_id, status=args.get("status") or None)
+                    if org_id else recs.list_recommendations(
+                        c, project_id, status=args.get("status") or None))
+            else:
+                items = recs.list_recommendations(
+                    c, project_id, status=args.get("status") or None)
         items = list(reversed(items))
         total = len(items)
         offset = max(0, int(args.get("offset") or 0))
@@ -466,7 +468,51 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         return {"total": total, "offset": offset, "returned": len(page),
                 "next_offset": nxt if nxt < total else None,
                 "complete": offset == 0 and nxt >= total,
+                "all_projects": all_projects,
                 "gaps": [{k: _json_safe(i.get(k)) for k in keep} for i in page]}
+
+    @reg.tool(
+        "close_platform_gap",
+        "Close a recorded BOSS platform gap (`brec_…`) as `done` or `wont_fix` once it has been "
+        "fixed upstream or confirmed no longer applicable (BOSSAPP-770 SF-16). Searches this "
+        "project and sibling projects in the same organization, records an audited "
+        "`boss.recommendation_closed` event, and updates RECOMMENDATIONS.md.",
+        _obj({"id": {"type": "string", "description": "brec_… — the platform gap id to close"},
+              "status": {"type": "string", "enum": ["done", "wont_fix"], "default": "done"},
+              "reason": {"type": "string",
+                         "description": "why this gap is closed (fix summary, release/commit, or "
+                                        "why it will not be fixed)"},
+              "commit_ref": {"type": "string", "description": "optional: commit SHA or release tag"},
+              "pr_url": {"type": "string", "description": "optional: pull request URL"}},
+             ["id", "reason"]),
+        kind="write", reversibility="safe",
+        permission="improvement:manage",
+        exposure=Exposure(tags=("boss", "health")))
+    def close_platform_gap(ctx, *, project_id, actor, args):
+        from ..services import boss_recommendations as recs
+
+        rec_id = str(args.get("id") or "").strip()
+        status = str(args.get("status") or "done").strip().lower()
+        reason = str(args.get("reason") or "").strip()
+        if not rec_id:
+            return {"ok": False, "error": "id (brec_…) is required"}
+        if status not in ("done", "wont_fix"):
+            return {"ok": False, "error": "status must be 'done' or 'wont_fix'"}
+        if not reason:
+            return {"ok": False, "error": "reason is required to close a platform gap"}
+        with ctx.begin() as c:
+            found = recs.find_recommendation(c, rec_id, project_id=project_id)
+            if found is None:
+                return {"ok": False, "found": False, "id": rec_id,
+                        "error": f"no platform gap {rec_id!r} in this organization"}
+            target_project_id = str(found["project_id"])
+            out = recs.close_recommendation(
+                c, getattr(ctx, "settings", None), project_id=target_project_id, rec_id=rec_id,
+                status=status, reason=reason, actor=actor,
+                commit_ref=(str(args["commit_ref"]).strip() if args.get("commit_ref") else None),
+                pr_url=(str(args["pr_url"]).strip() if args.get("pr_url") else None))
+            out["cross_project"] = target_project_id != project_id
+            return out
 
     @reg.tool(
         "file_platform_gap",
@@ -878,9 +924,6 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         ), permission="host:exec",
         exposure=Exposure(tags=("db",)))
     def query_db(ctx, *, project_id, actor, args):
-        if _community_raw_sql_disabled(ctx.settings):
-            return {"ok": False, "error": "Unrestricted SQL reads are unavailable in Community. "
-                    "Use the project-scoped read tools."}
         if not _raw_sql_admin_authorized(ctx, actor):
             return {"ok": False, "error": "Unrestricted SQL reads require an explicit local admin CLI call. "
                     "Use project-scoped read tools here."}
@@ -1428,6 +1471,19 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "frontier-model pipeline — a one-line change then "
                                    "costs the same ~9 agent sessions as a whole feature.",
                 },
+                "lane": {
+                    "type": "string",
+                    "enum": ["auto", "quick", "full"],
+                    "description": "Execution lane. Use 'quick' for a small, well-specified fix "
+                                   "that runs in the dedicated quick-lane queue with full context "
+                                   "and independent validation (BOSSAPP-799); 'full' forces the "
+                                   "full pipeline; 'auto' lets triage decide.",
+                },
+                "repro": {
+                    "type": "string",
+                    "description": "Reproduction steps, failing command, or observed error evidence "
+                                   "for bug fixes (used by quick-lane triage and builder context).",
+                },
                 "project_id": {"type": "string"},
             },
             ["title", "instructions"],
@@ -1440,6 +1496,31 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         cts = services_module("code_task_service")
         task_id = args.get("task_id")
         instructions = args.get("instructions") or ""
+        requested_lane = str(args.get("lane") or "").strip().lower()
+        if requested_lane == "quick":
+            from ..services.quick_lane import start_quick_fix
+
+            with ctx.begin() as connection:
+                return start_quick_fix(
+                    connection,
+                    project_id=pid,
+                    title=str(args.get("title") or "Quick fix"),
+                    instructions=instructions,
+                    actor=actor,
+                    source="mcp",
+                    requested_by_person=True,
+                    task_id=task_id,
+                    spec_extra={
+                        "kind": "bug",
+                        "repro": args.get("repro"),
+                        "acceptance_criteria": args.get("acceptance_criteria") or [],
+                        "test_commands": args.get("test_commands") or [],
+                        "repository": args.get("repository"),
+                        "base_branch": args.get("base_branch"),
+                        "extends_run_id": args.get("extends_run_id"),
+                        "reference_links": args.get("reference_links") or [],
+                    },
+                )
         # NO BRANCH ASKED FOR STAYS NONE: the pipeline resolves it (build_base_branch) — the
         # project's bound branch, else the host default. A "main" here was written into the spec
         # as if chosen, so every workflow build step cloned main and PR'd into it
@@ -3096,9 +3177,6 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         from ..ports import sql as _s
         from ..services.core import emit_event
 
-        if _community_raw_sql_disabled(ctx.settings):
-            return {"ok": False, "error": "Unrestricted SQL writes are unavailable in Community. "
-                    "Use a governed project-scoped operation."}
         if not _raw_sql_admin_authorized(ctx, actor):
             return {"ok": False, "error": "Unrestricted SQL writes require an explicit local admin CLI call. "
                     "Use a governed project-scoped operation."}
@@ -3427,11 +3505,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                                                   "code_task_run_id here."},
               "source_paths": {"description": "with code_task_run_id: the files (or folders "
                                               "ending in /) the build wrote — a list of repo "
-                                              "paths, or {destination: repo path}"},
-              "approval_decision_id": {"type": "string",
-                                       "description": "set by a workflow's step only; leave empty"},
-              "person_required": {"type": "boolean",
-                                  "description": "set by a workflow's step only; leave empty"}},
+                                              "paths, or {destination: repo path}"}},
              required=[]),
         kind="write",
         reversibility="safe", permission="deployment:create",
@@ -3480,11 +3554,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "app_name": {"type": "string", "description": "the system's name (finds the destination target)"},
               "from_environment": {"type": "string", "description": "where it passed (default staging)"},
               "environment": {"type": "string", "description": "where it goes (default production)"},
-              "target_id": {"type": "string", "description": "optional exact destination deptgt_"},
-              "approval_decision_id": {"type": "string",
-                                       "description": "set by a workflow's step only; leave empty"},
-              "person_required": {"type": "boolean",
-                                  "description": "set by a workflow's step only; leave empty"}},
+              "target_id": {"type": "string", "description": "optional exact destination deptgt_"}},
              required=[]),
         kind="write",
         reversibility="safe", permission="deployment:create",
@@ -3690,8 +3760,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         from ..services import setup_actions
 
         pid = args.get("project_id") or project_id
+        wanted = str(args.get("repository") or "").strip()
         with ctx.begin() as c:
-            wanted = str(args.get("repository") or "").strip()
             binding = c.execute(
                 _text("SELECT id, full_name FROM github_repository_bindings "
                       " WHERE project_id = :p AND status = 'active' "
@@ -3699,28 +3769,30 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                       " ORDER BY (role = 'primary') DESC LIMIT 1"),
                 {"p": pid, "w": wanted}).mappings().first()
             target = binding["id"] if binding else None
+            binding_full = str(binding["full_name"]) if binding else ""
             if target is None:
                 from ..services.setup_view import install_repository
 
                 if all(install_repository(ctx.settings)):
                     target = "install"
-            if target is None:
-                return {"ok": False,
-                        "error": (f"no repository connected on {pid}"
-                                  + (f" for {wanted}" if wanted else "")
-                                  + " — connect one in Setup first."),
-                        "href": "/?area=setup&focus=repository"}
-            try:
-                found = setup_actions.check_repository(c, ctx.settings, pid, target, actor=actor)
-            except Exception as exc:  # noqa: BLE001 — the reason is the answer
-                return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
+        if target is None:
+            return {"ok": False,
+                    "error": (f"no repository connected on {pid}"
+                              + (f" for {wanted}" if wanted else "")
+                              + " — connect one in Setup first."),
+                    "href": "/?area=setup&focus=repository"}
+        try:
+            found = setup_actions.check_repository(None, ctx.settings, pid, target, actor=actor,
+                                                   db_engine=ctx.engine)
+        except Exception as exc:  # noqa: BLE001 — the reason is the answer
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
         from ..services.setup_pills import pill
 
-        shown = pill("repository", found["state"], repo=(binding or {}).get("full_name") or "")
+        shown = pill("repository", found["state"], repo=binding_full)
         return {"ok": found["state"] == "working", "state": shown["label"],
                 "fix": shown["tip"], "checks": {k: v.get("ok") for k, v in
                                                 (found.get("checks") or {}).items()},
-                "repository": (binding or {}).get("full_name"),
+                "repository": binding_full or None,
                 "href": "/?area=setup&focus=repository"}
 
     @reg.tool(
@@ -5673,10 +5745,11 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         from ..multirepo.common import MultiRepoError
 
         try:
+            refreshed = None
+            if args.get("refresh") in (True, "true", "True"):
+                refreshed = registry.refresh(None, ctx.settings, project_id, actor=actor,
+                                             db_engine=ctx.engine)
             with ctx.begin() as c:
-                refreshed = None
-                if args.get("refresh") in (True, "true", "True"):
-                    refreshed = registry.refresh(c, ctx.settings, project_id, actor=actor)
                 out = registry.list_registry(c, project_id)
         except MultiRepoError as exc:
             return {"ok": False, **exc.body()}
@@ -5982,7 +6055,7 @@ def _how_to_set(problem: str) -> str:
     found = re.search(r"step '([^']+)'.*? needs '([^']+)', which is not set", problem)
     if not found or "Set it" in problem:
         return problem
-    step, name = found.group(1), found.group(2)
+    name = found.group(2)
     return (f"{problem.rstrip('.')}. Set it one of three ways: a literal on that step "
             f"(\"input\": {{\"{name}\": <value>}}), from an earlier step "
             f"(\"input\": {{\"{name}\": {{\"from_step\": \"<step id>\", \"field\": "
@@ -8050,10 +8123,37 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
                        "away the work done so far, so it is the operator's call",
             }
 
+        precheck_proposal = None
+        if status in ("failed", "blocked", "error") or run["error"] or isinstance(harness, dict):
+            try:
+                from ..services import precheck_proposals as _pp
+
+                stored_props = []
+                try:
+                    with ctx.begin() as c:
+                        stored_props = _pp.list_proposals(c, pid, run_id=run_id)
+                except Exception:  # noqa: BLE001 — table may not exist in older schemas
+                    stored_props = []
+                if stored_props:
+                    precheck_proposal = _pp.proposal_card(stored_props[0])
+                else:
+                    computed = _pp.classify_and_propose(
+                        error=run["error"] or (harness.get("sentence") if isinstance(harness, dict) else ""),
+                        run_id=run_id,
+                        run_kind="code_task",
+                        stage=str(run["phase"] or "build"),
+                        harness_verdict=harness if isinstance(harness, dict) else None,
+                    )
+                    precheck_proposal = _pp.proposal_card(computed.as_dict())
+                checked.append("pre-check proposal for this failure")
+            except Exception:  # noqa: BLE001 — diagnosis never fails on proposal lookup
+                could_not_check.append("pre-check proposal classification")
+
         return {
             "run_id": run_id, "project_id": pid, "title": run["title"],
             "status": run["status"], "phase": run["phase"],
             "resolution": resolution,
+            "precheck_proposal": precheck_proposal,
             "running_minutes": round(minutes, 1),
             "normal_for_this_project": baseline,
             "turns": int((turns or {}).get("n") or 0),
@@ -8097,8 +8197,8 @@ def _register_port_tools(reg: ToolRegistry) -> None:
         "A port on this host that is actually free — nothing listening AND not already assigned "
         "to another app in BOSS's registry. Use before retarget_app instead of picking the next "
         "number up: 'is 8001 free' needs both answers, and a port that is idle right now but "
-        "promised to an app between deploys is not free. Unavailable in Community until "
-        "host probes have a project-bound network policy.",
+        "promised to an app between deploys is not free. Probing requires a registered "
+        "project deployment host and host:exec authority.",
         _obj({"host": {"type": "string", "description": "address, e.g. 192.0.2.202"},
               "start": {"type": "integer", "description": "first port to consider (default 3000)"},
               "count": {"type": "integer", "description": "how many to report (default 3)"},
@@ -8111,9 +8211,6 @@ def _register_port_tools(reg: ToolRegistry) -> None:
     def find_free_port(ctx, *, project_id, actor, args):
         import socket
 
-        if _community_restricted(ctx.settings):
-            return {"ok": False, "error": "Community host-port probes are paused until "
-                    "the destination and port range are bound to the current project."}
         host = str(args.get("host") or "").strip()
         if not host:
             return {"ok": False, "error": "host is required"}
@@ -8983,9 +9080,6 @@ def _register_image_tools(reg: ToolRegistry) -> None:
         import urllib.request
 
         settings = ctx.settings
-        if _community_raw_sql_disabled(settings):
-            return {"ok": False, "error": "Community image generation is paused until "
-                    "provider spend has a budget reservation and receipt."}
         # THE DECLARED REQUIREMENT, READ THE ONE WAY (services/model_routing.py). This read
         # OPENAI_API_KEY from the environment, so a key stored through the console was invisible
         # to it and the failure said "OPENAI_BASE_URL and OPENAI_API_KEY must both be set" — a
@@ -9366,8 +9460,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "read_logs",
         "Recent log lines from a BOSS service (api | worker | web), newest last, "
-        "optionally filtered by a regex. Community reads only this project's captured "
-        "database logs, never shared service log files.",
+        "optionally filtered by a regex.",
         _obj({"service": {"type": "string", "enum": ["api", "worker", "web"]},
               "pattern": {"type": "string", "description": "optional regex filter"},
               "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}), permission="observability:read",
@@ -9375,7 +9468,6 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     def read_logs(ctx, *, project_id, actor, args):
         service = (args.get("service") or "api").lower()
         limit = int(args.get("limit") or 120)
-        restricted = _community_restricted(ctx.settings)
         rx = None
         if args.get("pattern"):
             try:
@@ -9385,7 +9477,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 
         # Docker keeps container stdout on disk; a local run writes .local-logs/.
         # Try both rather than assuming one deployment shape.
-        candidates = [] if restricted else [
+        candidates = [
             _os.environ.get(f"BOSS_{service.upper()}_LOG"),
             _os.path.join(_SOURCE_ROOT, ".local-logs", f"{service}.log"),
             f"/var/log/boss/{service}.log",
@@ -9417,10 +9509,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                    "FROM app_logs WHERE (:svc = '' OR service = :svc) ")
             params: dict = {"svc": "" if service in ("", "all") else service,
                             "lim": max(1, min(limit, 500))}
-            if restricted:
-                sql += "AND project_id = :pid "
-                params["pid"] = project_id
-            elif args.get("project_id") or project_id:
+            if args.get("project_id") or project_id:
                 sql += "AND (project_id IS NULL OR project_id = :pid) "
                 params["pid"] = args.get("project_id") or project_id
             sql += "ORDER BY created_at DESC LIMIT :lim"
@@ -9980,15 +10069,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     **({"diff": diff[:20000]} if diff else {}),
                     "view": change_view_path(meta.get("url"))}
         # The token and the API base come TOGETHER (BOSSAPP-1286): the repository's host and a
-        # credential of that host; the install's token only on the install's own GitHub.
+        # credential of that host, uniform across editions.
         from boss_engine.identity import github_urls
-        from boss_engine.services.github_connections import github_access_for
 
-        with ctx.engine.connect() as _c:
-            token, _gh_api = github_access_for(_c, ctx.settings, pid, *repo_full.split("/", 1))
-        if not _community_restricted(ctx.settings) and not token \
-                and github_urls.api_base(_gh_api) == github_urls.api_base():
-            token = getattr(ctx.settings, "github_token", "") or ""
+        token, _gh_api = _github_access_for(ctx, pid, repo_full)
 
         def get(path: str):
             github_urls.check_send(token, _gh_api, where="read_pull_request")
@@ -10023,10 +10107,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "run_on_host",
         "Run ANY command on a registered deployment host over SSH — restart or delete "
         "containers, edit files, install packages, inspect anything. This changes the machine. "
-        "Use inspect_host when you only need to look. Not available in Community, and off "
-        "elsewhere unless `BOSS_AGENT_HOST_SHELL` is set: where it is unavailable, do not "
-        "offer it — host work such as creating the deploy directory is done by the deploy's "
-        "own preflight, so offer a retry or `redeploy` instead.",
+        "Use inspect_host when you only need to look. Off unless `BOSS_AGENT_HOST_SHELL` is "
+        "set: where it is unavailable, do not offer it — host work such as creating the "
+        "deploy directory is done by the deploy's own preflight, so offer a retry or "
+        "`redeploy` instead.",
         _obj({"host": {"type": "string", "description": "host name, id or address"},
               "command": {"type": "string", "description": "the shell command to run"},
               "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120}},
@@ -10128,47 +10212,52 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "http_probe",
         "GET a URL and report status, timing and a body excerpt. Answers 'is the app "
         "actually up RIGHT NOW' — health samples say what was true when last sampled, "
-        "which is not the same question. Unavailable in Community until URLs can be "
-        "bound to the current project and a network policy.",
+        "which is not the same question. Reaches public hosts and this project's own "
+        "deployment targets.",
         _obj({"url": {"type": "string"},
               "timeout_s": {"type": "integer", "minimum": 1, "maximum": 30, "default": 10}},
-             ["url"]), permission="observability:manage",
-        exposure=Exposure(tags=("network", "ports")))
+             ["url"]), permission="observability:read",
+        exposure=Exposure(tags=("network", "ports"), surfaces=("chat", "agent_step", "mcp")))
     def http_probe(ctx, *, project_id, actor, args):
         import time as _time
-        import urllib.error as _uerr
-        import urllib.request as _ureq
 
-        if _community_restricted(ctx.settings):
-            return {"ok": False, "error": "Community URL probes require a project-bound "
-                    "destination and a network policy; use recorded deployment health."}
+        from ..services.contract_tests import _send, project_deployment_hosts
+
         url = (args.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "url must start with http:// or https://"}
+        allowed: frozenset[str] = frozenset()
+        if project_id and hasattr(ctx, "begin"):
+            with ctx.begin() as db:
+                allowed = project_deployment_hosts(db, project_id)
+        timeout_s = float(_turn_seconds(int(args.get("timeout_s") or 10)))
         started = _time.time()
         try:
-            with _ureq.urlopen(url, timeout=_turn_seconds(int(args.get("timeout_s") or 10))) \
-                    as resp:
-                body = resp.read(4000).decode("utf-8", errors="replace")
-                return {"url": url, "status": resp.status,
-                        "ms": round((_time.time() - started) * 1000),
-                        "content_type": resp.headers.get("content-type"),
-                        "body_excerpt": body}
-        except _uerr.HTTPError as exc:
-            return {"url": url, "status": exc.code,
-                    "ms": round((_time.time() - started) * 1000),
-                    "body_excerpt": exc.read(2000).decode("utf-8", errors="replace")}
+            answer = _send({"url": url, "method": "GET", "headers": {}, "body": None},
+                           timeout_s, allowed_private=allowed)
         except Exception as exc:  # noqa: BLE001 — unreachable is a RESULT, not an error
             return {"url": url, "status": None,
                     "ms": round((_time.time() - started) * 1000),
                     "error": f"{type(exc).__name__}: {exc}"[:300]}
+        if answer.get("refused"):
+            return {"ok": False, "error": str(answer.get("error") or "refused")}
+        if answer.get("status") is None:
+            return {"url": url, "status": None, "ms": answer["ms"],
+                    "error": str(answer.get("error") or "no response")}
+        status = int(answer["status"])
+        body = str(answer.get("body") or "")
+        if 200 <= status < 400:
+            return {"url": url, "status": status, "ms": answer["ms"],
+                    "content_type": (answer.get("headers") or {}).get("content-type"),
+                    "body_excerpt": body[:4000]}
+        return {"url": url, "status": status, "ms": answer["ms"],
+                "body_excerpt": body[:2000]}
 
     # CONTRACT TESTS (BOSSAPP-1143). `http_probe` is one GET. An API that was just
     # given a tenant's routes has a contract: a valid token reaches the upstream, no token is a
     # 401, the eleventh request in a second is a 429, the rejected path stays rejected. Each is
     # a method, headers, a body, an expected status and a few JSON fields — a case — and the
-    # step runs the list and reports a table. Same edition rule as http_probe: Community has no
-    # project-bound destination for a URL yet, so it refuses rather than probe anywhere.
+    # step runs the list and reports a table.
     #: A header value: a literal string, or a SECRET REFERENCE resolved when the step runs, so an
     #: authenticated case never carries a token in the spec.
     _SECRET_HEADER = {"oneOf": [
@@ -10207,8 +10296,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "Run a list of HTTP contract cases against a deployed API — each with a method, "
         "headers, a JSON body, the status it must answer and JSON-path assertions — and "
         "report a table. A failed case is a failed contract: the step fails, with the table. "
-        "Reaches public hosts and this project's own deployment targets; in Community only "
-        "the exact URLs (scheme, host, port) of deployment targets a person created.",
+        "Reaches public hosts and this project's own deployment targets; read-only cases "
+        "(GET/HEAD/OPTIONS) run with observability:read, while mutating methods require "
+        "observability:manage.",
         _obj({"cases": {"type": "array", "items": _CONTRACT_CASE, "minItems": 1,
                         "maxItems": 100},
               "base_url": {"type": "string",
@@ -10221,32 +10311,93 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         # IRREVERSIBLE for a resumed run: a case may POST or DELETE, so a call whose outcome was
         # never recorded is not sent again on its own (kernel/idempotency.py).
         kind="write", reversibility="safe", idempotency="irreversible",
-        permission="observability:manage",
+        permission="observability:read",
         exposure=Exposure(tags=("network", "tests"), surfaces=("chat", "agent_step", "mcp"),
                           search_hint="contract test api assert status json body staging"))
     def contract_test(ctx, *, project_id, actor, args):
-        from ..services.contract_tests import (project_deployment_hosts, project_origins,
-                                               run_cases)
+        from collections.abc import Mapping as _Mapping
+
+        from ..services.contract_tests import origin_of, project_deployment_hosts, run_cases
+
+        raw_cases = args.get("cases")
+        parsed_cases = raw_cases
+        if isinstance(raw_cases, str):
+            # A JSON-string list is accepted (run_cases does too): parse it ONCE here so the
+            # method/production checks and the secret-header resolution see the same cases
+            # the request will send. Unparseable text is left as-is; run_cases refuses it
+            # before anything is sent.
+            try:
+                parsed_cases = json.loads(raw_cases)
+            except ValueError:
+                parsed_cases = raw_cases
+        base_url = str(args.get("base_url") or "").strip()
+        mutating_urls: list[str] = []
+        if isinstance(parsed_cases, (list, tuple)):
+            for case in parsed_cases:
+                if not isinstance(case, _Mapping):
+                    continue
+                method = str(case.get("method") or "GET").strip().upper()
+                if method not in {"GET", "HEAD", "OPTIONS"}:
+                    u = str(case.get("url") or "").strip()
+                    if not u and case.get("path") and base_url:
+                        u = base_url.rstrip("/") + "/" + str(case.get("path")).lstrip("/")
+                    mutating_urls.append(u)
+        if mutating_urls:
+            from .registry import extra_permission_refusal
+
+            refused = extra_permission_refusal("contract_test", "observability:manage", project_id)
+            if refused:
+                return refused
 
         # WHERE IT MAY SEND: public hosts, and the private ones that are THIS project's own
         # deployment targets and hosts — read from the database, never from the arguments.
-        #
-        # COMMUNITY (BOSSAPP-1166) used to refuse the tool outright: Community has no
-        # egress network policy, so a URL probe could reach anywhere. Now every request — and
-        # every redirect hop — must go to the exact scheme, host and port of a deployment
-        # target a PERSON created (`project_origins`): not another port on that host, not a
-        # public host, not a target an agent made. DNS is resolved once per hop and the
-        # connection goes to the checked address. The same governance applies (permission,
-        # irreversible on resume).
-        project_only = _community_restricted(ctx.settings)
+        targets_prod = False
         with ctx.begin() as db:
             allowed = project_deployment_hosts(db, project_id)
-            origins = project_origins(db, project_id) if project_only else frozenset()
-        if project_only and not origins:
-            return {"ok": False, "error": "In Community a contract test reaches only the URLs "
-                    "of this project's deployment targets that a person created, and this "
-                    "project has none. A person creates the target (with its health URL) "
-                    "first."}
+            if mutating_urls and project_id:
+                from ..services.production import target_is_production
+
+                wanted = {o for o in (origin_of(u) for u in mutating_urls) if o is not None}
+                wanted_hosts = {o[1] for o in wanted}
+                if wanted_hosts:
+                    rows = db.execute(
+                        _text("SELECT environment, tier, domains, health_checks, public_url, "
+                              "target_ref FROM deployment_targets WHERE project_id = :p "
+                              "AND COALESCE(status, 'active') NOT IN ('deleted', 'retired')"),
+                        {"p": project_id},
+                    ).mappings().all()
+                    for row in rows:
+                        if not target_is_production(row):
+                            continue
+                        candidates = [str(row.get("public_url") or ""),
+                                      str(row.get("target_ref") or "")]
+                        for d in (row.get("domains") if isinstance(row.get("domains"), list) else []):
+                            candidates.append(str((d.get("url") or d.get("host") or d.get("domain"))
+                                                  if isinstance(d, dict) else d or ""))
+                        for h in (row.get("health_checks")
+                                  if isinstance(row.get("health_checks"), list) else []):
+                            candidates.append(str(h.get("url") or "")
+                                              if isinstance(h, dict) else str(h or ""))
+                        for raw in candidates:
+                            raw = raw.strip()
+                            if not raw:
+                                continue
+                            orig = origin_of(raw if "://" in raw else f"http://{raw}")
+                            # BY HOST, whatever the scheme or port: a production host's
+                            # :8443 or http:// is still production (a write there needs
+                            # deployment:production too).
+                            if orig and orig[1] in wanted_hosts:
+                                targets_prod = True
+                                break
+                        if targets_prod:
+                            break
+        if targets_prod:
+            from .registry import extra_permission_refusal
+
+            prod_refused = extra_permission_refusal(
+                "contract_test", "deployment:production", project_id)
+            if prod_refused:
+                return prod_refused
         per_request = _turn_seconds(int(args.get("timeout_s") or 10))
         # SECRET REFERENCES BECOME VALUES HERE, at run time, and nowhere that is recorded.
         from ..services.contract_tests import (HeaderSecretRefused, http_auth_problem,
@@ -10278,13 +10429,13 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 raise
 
         cases, shared_headers, bad, secret_headers = resolve_header_secrets(
-            args.get("cases"), args.get("headers"), _resolve)
+            parsed_cases, args.get("headers"), _resolve)
         if bad:
             return {"ok": False, "error": bad}
-        return run_cases(cases, base_url=str(args.get("base_url") or ""),
+        return run_cases(cases, base_url=base_url,
                          timeout_s=per_request, headers=shared_headers,
                          allowed_private=allowed, deadline_s=_turn_seconds(300),
-                         project_only=project_only, origins=origins,
+                         project_only=False, origins=frozenset(),
                          secret_headers=secret_headers)
 
     @reg.tool(
@@ -10974,17 +11125,11 @@ def _writes_access_tables(statement: str) -> str | None:
 #: ResourceReceipt") is for the log, not for the operator: Harbor read it aloud, and an operator
 #: was told to "turn on governed host-shell execution (BOSSAGENTHOSTSHELL / the Resource Plane)".
 _UNAVAILABLE_SAID: dict[str, str] = {
-    "community_host_shell": (
-        "This edition doesn't let agents run commands on your hosts. BOSS's own deploy steps "
-        "do the host work — preflight creates the deploy directory, and a retry or `redeploy` "
-        "ships the build again."),
     "host_shell_off": (
         "Agents can't run commands on your hosts on this install (the `BOSS_AGENT_HOST_SHELL` "
         "setting is off). BOSS's own deploy steps still do the host work."),
 }
 _UNAVAILABLE_DETAIL: dict[str, str] = {
-    "community_host_shell": ("Community: run_on_host stays off until host commands go through "
-                             "an approved ChangeSet, budget reservation and ResourceReceipt."),
     "host_shell_off": "run_on_host needs BOSS_AGENT_HOST_SHELL=true.",
 }
 
@@ -10994,17 +11139,14 @@ def action_unavailable(name: str, settings: Any) -> str | None:
     THE ONE RULE.
 
     The tool and `propose_action` both read it, so an agent never offers a button the tool
-    will refuse. Harbor offered "run on host"
-    to fix a deploy's directory, and the click answered "Community host shell is disabled".
+    will refuse.
     """
     if name == "run_on_host":
         if settings is None:
             from ..config import get_settings
 
             settings = get_settings()
-        if _community_raw_sql_disabled(settings):
-            key = "community_host_shell"
-        elif not getattr(settings, "agent_host_shell", False):
+        if not getattr(settings, "agent_host_shell", False):
             key = "host_shell_off"
         else:
             return None
@@ -11071,10 +11213,10 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
     project silently. Every tool that acts in one project instead takes the one generic
     ``project`` argument (registry.PROJECT_ARG): another project's id or slug, which
     ``ToolRegistry.invoke`` resolves in the caller's organization and authorizes against the
-    caller's own permission IN THAT project. Raw SQL is excluded in every edition because its
-    handlers cannot enforce that project boundary. Community also excludes arbitrary URL probes;
-    direct Community SQL invocations are separately rejected by the handlers.
+    caller's own permission IN THAT project. Raw SQL is excluded because its
+    handlers cannot enforce that project boundary.
     """
+    _ = edition
     source = build_default_registry()
     reg = ToolRegistry()
     admitted = [
@@ -11087,11 +11229,6 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
         if spec.name == FIND_TOOLS:
             # Registered fresh below, closing over THIS registry: it must search what this
             # registry offers, not the full default set it was first registered in.
-            continue
-        if (edition is not None
-                and edition.strip().lower() not in _PAID_EFFECT_EDITIONS
-                and spec.name in {"query_db", "write_db", "generate_image",
-                                  "http_probe", "find_free_port"}):
             continue
         properties = dict((spec.parameters or {}).get("properties") or {})
         properties.pop("project_id", None)

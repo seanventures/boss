@@ -19,7 +19,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cached_property
-import os
 from typing import Any, Iterator
 
 from ._compat import app_module, ensure_monorepo_on_path, services_module
@@ -43,21 +42,35 @@ class EngineContext:
     # Set only by the explicit local `boss-engine call` command. Model, MCP, workflow,
     # investigation and API paths must never inherit unrestricted SQL authority.
     raw_sql_admin_authorized: bool = False
+    # Where the database URL was resolved from (BOSSAPP-991): e.g. `env:DATABASE_URL`,
+    # `install_env:/path/.env:BOSS_POSTGRES_PORT+BOSS_DB_PASSWORD`, or `default:Settings.database_url`.
+    database_source: str = "default:Settings.database_url"
 
     # ---- construction -----------------------------------------------------
     @classmethod
-    def create(cls, *, ensure_schema: bool = False) -> "EngineContext":
+    def create(
+        cls,
+        *,
+        ensure_schema: bool = False,
+        cwd: Any = None,
+        install_dir: Any = None,
+        search_defaults: bool = True,
+    ) -> "EngineContext":
         ensure_monorepo_on_path()
-        config = app_module("config")
         db = app_module("db")
-        settings = config.get_settings()
+        from .mcp.server import load_mcp_settings
+
+        settings, db_cfg = load_mcp_settings(
+            cwd=cwd, install_dir=install_dir, search_defaults=search_defaults
+        )
         engine = db.get_engine(settings)
         if ensure_schema:
             db.ensure_schema(engine, settings)
         return cls(
             settings=settings,
             engine=engine,
-            durable_workspace_configured=bool(os.environ.get("DATABASE_URL")),
+            durable_workspace_configured=db_cfg.configured,
+            database_source=db_cfg.source,
         )
 
     # ---- connections ------------------------------------------------------
@@ -71,6 +84,22 @@ class EngineContext:
     def database_reachable(self) -> bool:
         db = app_module("db")
         return bool(db.database_is_reachable(self.engine))
+
+    def database_error(self) -> Any:
+        """None when the database answers `SELECT 1`, else a diagnostic naming `database_source`."""
+        from sqlalchemy import text
+        from .mcp.server import format_database_error
+
+        try:
+            with self.engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            return None
+        except Exception as exc:  # noqa: BLE001 — surfaced clearly to the operator
+            return format_database_error(
+                exc,
+                database_url=str(getattr(self.settings, "database_url", "") or ""),
+                source=self.database_source,
+            )
 
     # ---- service singletons (lazy, cached) --------------------------------
     @cached_property

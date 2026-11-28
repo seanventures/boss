@@ -172,13 +172,14 @@ class CodexCodeAgent(GenericCliCodeAgent):
     # with no inner sandbox, as write mode already does, and BOSS holds read-only itself
     # (engine_contract + readonly_guard).
     capabilities = EngineCapabilities(resume=True, read_only=True, read_only_shell=True,
-                                      effort=True, reports_cost=True, streams_turns=True)
+                                      effort=True, reports_cost=True, streams_turns=True,
+                                      budget_limit=True)
 
     def _usage(self, parser: CodexStreamParser, model: str, *,
                metered: bool) -> tuple[dict[str, Any], int]:
         """Codex's numbers in BOSS's split, as the Codex chat adapter maps them."""
         from .included_spend import BILLING_METERED, BILLING_SUBSCRIPTION
-        from .openai_adapter import estimate_cost_usd_micros
+        from .openai_adapter import list_price_cost_usd_micros
 
         u = parser.usage
         cache_read = int(u.get("cached_input_tokens") or 0)
@@ -193,11 +194,10 @@ class CodexCodeAgent(GenericCliCodeAgent):
             # A ChatGPT login is a subscription; an API key in the child's environment is money.
             "billing": BILLING_METERED if metered else BILLING_SUBSCRIPTION,
         }
-        # The list-price value of those tokens, as Claude's CLI reports its own; whether it is
-        # money is the `billing` stamp's call (included_spend), never this number's.
-        cost = int(estimate_cost_usd_micros({k: v for k, v in usage.items() if k != "billing"}))
-        usage["cost_usd_micros"] = cost
-        return usage, cost
+        # BOSSAPP-782: list-price value of Codex tokens, consistent with Claude CLI token pricing.
+        cost, _ = list_price_cost_usd_micros(usage)
+        usage["cost_usd_micros"] = int(cost)
+        return usage, int(cost)
 
     def _codex_argv(self, *, read_only: bool, model: Optional[str], resume: Optional[str],
                     final_path: str, by_copy: bool = False,
@@ -266,6 +266,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,
                  max_turns: Optional[int] = None, parallel_agents: int = 0,
+                 max_budget_usd: Optional[float] = None,
                  on_turn: Optional[Callable[[dict], None]] = None, **_ignored: Any) -> dict:
         from .code_agent import _cap_to_deadline, _drain, register_seat, release_seat
         from .llm_telemetry import record_agent_turns, record_llm_call
@@ -300,6 +301,10 @@ class CodexCodeAgent(GenericCliCodeAgent):
 
         # A session that must write: a review seat on a copy runs in writer mode but is not one.
         writer = not read_only
+        budget_micros = (int(round(max(float(max_budget_usd), 0.01) * 1_000_000))
+                         if max_budget_usd is not None else None)
+        budget_hit = {"hit": False}
+        active_child: list[Any] = [None]
 
         def _on_line(line: str) -> None:
             seen = len(parser.diagnostics)
@@ -309,6 +314,16 @@ class CodexCodeAgent(GenericCliCodeAgent):
                 # start, or its organisation's requirements took the writer's access away. Read
                 # as the CLI's stream — never as a refused login (an MCP server's 401 is not).
                 harness_failures.check_stream(line, engine=self.engine, writer=writer)
+            if metered and budget_micros is not None and not budget_hit["hit"]:
+                _, running_cost = self._usage(parser, model or "", metered=metered)
+                if running_cost >= budget_micros:
+                    budget_hit["hit"] = True
+                    child = active_child[0]
+                    if child is not None and child.poll() is None:
+                        try:
+                            child.terminate()
+                        except OSError:
+                            pass
             if not produced:
                 return
             try:
@@ -338,6 +353,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
             child = owned_process.popen(
                 low_priority(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, cwd=str(cwd), env=env)
+            active_child[0] = child
             register_seat(child.pid, "review" if read_only else "agent")
             try:
                 if child.stdin is not None:
@@ -348,12 +364,13 @@ class CodexCodeAgent(GenericCliCodeAgent):
                 out, err = _drain(child, timeout=timeout, on_line=_on_line,
                                   on_err_line=_on_err_line)
             finally:
+                active_child[0] = None
                 release_seat(child.pid)
             return subprocess.CompletedProcess(argv, child.returncode, out, err)
 
         try:
             proc = _attempt(resume)
-            if proc.returncode != 0 and resume and not parser.final_message:
+            if not budget_hit["hit"] and proc.returncode != 0 and resume and not parser.final_message:
                 # A session Codex no longer has (another machine, a cleaned home) is continued
                 # as a new one: BOSS never fails a fix round on a lost session.
                 from .engine_contract import LEDGER, seeded_prompt
@@ -364,7 +381,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
                 seeded = seeded_prompt(prompt, LEDGER.get(resume))
                 resume = None
                 proc = _attempt(None, seeded)
-            if proc.returncode != 0 and not parser.final_message:
+            if not budget_hit["hit"] and proc.returncode != 0 and not parser.final_message:
                 from .cli_harness import _looks_like_revoked_credential
 
                 if _looks_like_revoked_credential(proc.stdout, proc.stderr):
@@ -391,8 +408,13 @@ class CodexCodeAgent(GenericCliCodeAgent):
             pass
         _unlink(final_path)
         summary = summary or parser.final_message.strip()
-        ok = proc.returncode == 0
-        if ok:
+        stop_reason = "budget_cap" if budget_hit["hit"] else "done"
+        if stop_reason == "budget_cap":
+            from .engine_contract import BUDGET_PARTIAL_MARKER
+
+            summary = (summary + "\n" if summary else "") + BUDGET_PARTIAL_MARKER
+        ok = (proc.returncode == 0) or stop_reason == "budget_cap"
+        if ok and stop_reason != "budget_cap":
             self.remember_rotated_credential()
         if written["rows"] == 0 and parser.turns:
             try:
@@ -404,14 +426,15 @@ class CodexCodeAgent(GenericCliCodeAgent):
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost,
                         latency_ms=ms, turns=max(1, parser.model_turns), ok=ok,
                         error=None if ok else (parser.error or (proc.stderr or ""))[:400])
-        self._raise_harness_verdict(stdout=proc.stdout or "", stderr=proc.stderr or "",
-                                    summary=summary, ok=ok, writer=writer)
+        if stop_reason != "budget_cap":
+            self._raise_harness_verdict(stdout=proc.stdout or "", stderr=proc.stderr or "",
+                                        summary=summary, ok=ok, writer=writer)
         if not ok:
             # The CLI's stderr can quote a credential back on an auth failure: only the status
             # and the event stream's own error travel.
             detail = parser.error or (proc.stdout or "")[-300:]
             raise CliHarnessUnavailable(f"codex exited {proc.returncode}: {detail[:300]}")
-        return {
+        out_res: dict[str, Any] = {
             "summary": _brief_items.clip_summary(summary) or "(codex produced no summary)",
             "usage": usage,
             "cost_usd_micros": cost,
@@ -420,7 +443,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
             "tool_calls": parser.tool_calls,
             "model": model or "",
             "session_id": parser.thread_id or resume,
-            "stop_reason": "done",
+            "stop_reason": stop_reason,
             "exit_code": proc.returncode,
             # The CLI's own diagnostics (a managed policy's downgrade on a review seat, which
             # does not stop it): Setup's engine check reads these.
@@ -430,6 +453,9 @@ class CodexCodeAgent(GenericCliCodeAgent):
             **({"tools_blocked": blocked} if (blocked := review_tools.blocked_by_transport(
                 proc.stderr, proc.stdout)) else {}),
         }
+        if stop_reason == "budget_cap" and max_budget_usd is not None:
+            out_res["budget_ceiling_usd"] = float(max_budget_usd)
+        return out_res
 
 
 def _unlink(path: str) -> None:

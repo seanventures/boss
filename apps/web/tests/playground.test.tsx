@@ -33,7 +33,7 @@ describe("the prompt playground", () => {
   });
 
   it("runs the prompt and shows the output and the receipt id", async () => {
-    const run = vi.fn(async () => ({
+    const run = vi.fn(async (_args?: Record<string, unknown>) => ({
       prompt: "Describe the harbor.",
       model: "harbor-7b",
       output: "The harbor is quiet.",

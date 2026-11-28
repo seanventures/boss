@@ -295,6 +295,8 @@ def _stub_agent_service(monkeypatch, chat_impl):
     from boss_engine.services.agent_service import AgentService
 
     real = inspect.signature(AgentService.chat)
+    real_durable = inspect.signature(AgentService.chat_durably)
+    real_open = inspect.signature(AgentService.open_turn)
 
     class Bound:
         def __init__(self, *a, **k):
@@ -304,6 +306,14 @@ def _stub_agent_service(monkeypatch, chat_impl):
             # Raises TypeError exactly as the real method would on a bad call.
             real.bind(self, *args, **kwargs)
             return chat_impl(*args, **kwargs)
+
+        def chat_durably(self, engine, *, background=False, on_started=None,
+                         idempotency_key=None, **turn):
+            real_durable.bind(self, engine, background=background,
+                              on_started=on_started, idempotency_key=idempotency_key, **turn)
+            open_args = {k: v for k, v in turn.items() if k not in ("mode", "depth", "context")}
+            real_open.bind(self, None, **open_args)
+            return chat_impl(engine, **turn)
 
     monkeypatch.setattr("boss_engine.services.agent_service.AgentService", Bound)
 

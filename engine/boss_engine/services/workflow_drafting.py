@@ -47,17 +47,46 @@ def _spec_from_steps(steps: Any, args: dict, lenient: bool = False) -> Any:
                                  "unique; rename one, or leave `id` out and it is named for "
                                  "what it does."}
             explicit.add(tidy)
-    # Ids are reserved up front only when a typed decision names later steps as its arms.
-    # Otherwise the loop below assigns them exactly as it always has.
-    branching = any(
-        isinstance(item, dict) and isinstance(item.get("typed_decision"), dict)
+    # Ids are reserved up front whenever any step uses graph control flow (typed_decision,
+    # parallel, join, for_each, bounded_loop) so forward references resolve cleanly.
+    structured = any(
+        isinstance(item, dict) and _is_structured_step(item)
         for item in steps)
-    planned = _listed_step_ids(steps) if branching else []
+    planned = _listed_step_ids(steps) if structured else []
     known_ids = {step_id for step_id in planned if step_id}
     built: list[dict[str, Any]] = []
-    seen: set[str] = set(known_ids) if branching else set()
+    seen: set[str] = set(known_ids) if structured else set()
     arm_ids: set[str] = set()
     decision_ids: set[str] = set()
+    # Control-flow ownership maps (BOSSAPP-1471):
+    # - owned_ids: steps belonging to a parallel branch, for_each body, or bounded_loop body,
+    #   which must NOT be chained onto the outer linear spine.
+    # - branch_join: branch_id -> join_id (each branch ends at its join).
+    # - spine_exit: parallel_id -> join_id (the spine continues from the join, not the fork).
+    # - explicit_joins: join_ids that are owned by a parallel step (not chained directly on spine).
+    owned_ids: set[str] = set()
+    branch_join: dict[str, str] = {}
+    spine_exit: dict[str, str] = {}
+    explicit_joins: set[str] = set()
+
+    def _build_inline(child_raw: Any, fallback_prefix: str, idx: int) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+        try:
+            norm = _normalise_step(child_raw, lenient)
+        except DraftRefusal as refusal:
+            return None, str(refusal)
+        if isinstance(norm, str):
+            norm = {"capability": norm}
+        if not isinstance(norm, dict):
+            return None, f"{fallback_prefix} must be an object or step id"
+        cap = _draft_capability(norm)
+        if not cap or cap in ("parallel", "join", "for_each", "bounded_loop"):
+            return None, (
+                f"{fallback_prefix} ('{norm.get('id') or '?'}') must be a work step "
+                "(capability, agent=true, skill, mcp_tool, gate, wait_seconds, or run_workflow)"
+            )
+        cid = _clean_step_id(str(norm.get("id") or f"{fallback_prefix}_{cap}"), idx, seen)
+        return _build_work_step(norm, cid, cap), None
+
     for index, raw in enumerate(steps):
         if isinstance(raw, str):
             raw = {"capability": raw}
@@ -94,13 +123,178 @@ def _spec_from_steps(steps: Any, args: dict, lenient: bool = False) -> Any:
             return {"ok": False,
                     "error": f"step {index + 1} typed_decision must be an object"}
         capability = _draft_capability(raw)
+        if capability == "parallel":
+            cfg = raw["parallel"] if isinstance(raw.get("parallel"), dict) else raw
+            step_id = planned[index]
+            raw_branches = cfg.get("branches")
+            if not isinstance(raw_branches, list) or len(raw_branches) < 2:
+                return {"ok": False,
+                        "error": f"parallel step '{step_id}' requires at least two branches"}
+            branch_ids: list[str] = []
+            inline_entries: list[dict[str, Any]] = []
+            for b_idx, br in enumerate(raw_branches):
+                if isinstance(br, str):
+                    ref = _step_ref(br)
+                    if not ref or ref not in known_ids:
+                        return {"ok": False,
+                                "error": f"parallel step '{step_id}' branch '{br}' must name a "
+                                         "step in this workflow or be an inline step object"}
+                    branch_ids.append(ref)
+                elif isinstance(br, dict):
+                    child, err = _build_inline(br, f"{step_id}_b{b_idx + 1}", index)
+                    if err or child is None:
+                        return {"ok": False, "error": err or "invalid parallel branch"}
+                    branch_ids.append(child["id"])
+                    inline_entries.append(child)
+                else:
+                    return {"ok": False,
+                            "error": f"parallel step '{step_id}' branch {b_idx + 1} must be a "
+                                     "step id or object"}
+            if len(set(branch_ids)) != len(branch_ids):
+                return {"ok": False,
+                        "error": f"parallel step '{step_id}' branches must be distinct steps"}
+            policy = str(cfg.get("success_policy") or raw.get("success_policy") or "all").strip().lower()
+            if policy not in ("all", "any"):
+                return {"ok": False,
+                        "error": f"parallel step '{step_id}' success_policy must be 'all' or 'any'"}
+            join_raw = str(cfg.get("join") or raw.get("join") or "").strip()
+            join_ref = _step_ref(join_raw) if join_raw else ""
+            synth_join = not (join_ref and join_ref in known_ids)
+            join_id = (join_ref if not synth_join
+                       else _clean_step_id(join_ref or f"{step_id}_join", index, seen))
+            built.append({
+                "id": step_id, "kind": "parallel", "branches": branch_ids, "join": join_id,
+                "next": [], "binding": {},
+            })
+            built.extend(inline_entries)
+            if synth_join:
+                built.append({
+                    "id": join_id, "kind": "join", "wait_for": list(branch_ids),
+                    "success_policy": policy, "next": [], "binding": {},
+                })
+            explicit_joins.add(join_id)
+            spine_exit[step_id] = join_id
+            for bid in branch_ids:
+                owned_ids.add(bid)
+                branch_join[bid] = join_id
+            continue
+        if capability == "join":
+            step_id = planned[index]
+            wait_for = [_step_ref(x) for x in (raw.get("wait_for") or []) if _step_ref(x)]
+            policy = str(raw.get("success_policy") or "all").strip().lower()
+            if policy not in ("all", "any"):
+                return {"ok": False,
+                        "error": f"join step '{step_id}' success_policy must be 'all' or 'any'"}
+            built.append({
+                "id": step_id, "kind": "join", "wait_for": wait_for,
+                "success_policy": policy, "next": [], "binding": {},
+            })
+            continue
+        if capability == "for_each":
+            cfg = raw["for_each"] if isinstance(raw.get("for_each"), dict) else raw
+            step_id = planned[index]
+            items = cfg.get("items")
+            if items is None:
+                return {"ok": False,
+                        "error": f"for_each step '{step_id}' requires 'items' (a list or path "
+                                 "such as input.urls or steps.<step>.output.<field>)"}
+            raw_body = cfg.get("body")
+            inline_body: Optional[dict[str, Any]] = None
+            if isinstance(raw_body, str):
+                body_id = _step_ref(raw_body)
+                if not body_id or body_id not in known_ids:
+                    return {"ok": False,
+                            "error": f"for_each step '{step_id}' body '{raw_body}' must name a "
+                                     "step in this workflow or be an inline step object"}
+            elif isinstance(raw_body, dict):
+                inline_body, err = _build_inline(raw_body, f"{step_id}_item", index)
+                if err or inline_body is None:
+                    return {"ok": False, "error": err or "invalid for_each body"}
+                body_id = inline_body["id"]
+            else:
+                return {"ok": False,
+                        "error": f"for_each step '{step_id}' requires 'body' (step id or object)"}
+            fe_entry: dict[str, Any] = {
+                "id": step_id, "kind": "for_each", "items": items, "body": body_id,
+                "next": [], "binding": {},
+            }
+            if cfg.get("max_items") is not None:
+                fe_entry["max_items"] = int(cfg["max_items"])
+            if cfg.get("concurrency") is not None:
+                fe_entry["concurrency"] = int(cfg["concurrency"])
+            built.append(fe_entry)
+            if inline_body is not None:
+                built.append(inline_body)
+            owned_ids.add(body_id)
+            continue
+        if capability == "bounded_loop":
+            cfg = raw["bounded_loop"] if isinstance(raw.get("bounded_loop"), dict) else raw
+            step_id = planned[index]
+            expr = cfg.get("expression") if isinstance(cfg.get("expression"), dict) else cfg.get("until")
+            if not isinstance(expr, dict) or not expr:
+                return {"ok": False,
+                        "error": f"bounded_loop step '{step_id}' requires an 'expression' "
+                                 "(or 'until') object"}
+            try:
+                max_iters = int(cfg.get("max_iterations") or 3)
+            except (TypeError, ValueError):
+                return {"ok": False,
+                        "error": f"bounded_loop step '{step_id}' max_iterations must be 1..100"}
+            if max_iters < 1 or max_iters > 100:
+                return {"ok": False,
+                        "error": f"bounded_loop step '{step_id}' max_iterations must be 1..100"}
+            on_exhausted = str(cfg.get("on_exhausted") or "block").strip().lower()
+            if on_exhausted not in ("block", "continue"):
+                return {"ok": False,
+                        "error": f"bounded_loop step '{step_id}' on_exhausted must be "
+                                 "'block' or 'continue'"}
+            raw_body = cfg.get("body")
+            body_items = raw_body if isinstance(raw_body, list) else ([raw_body] if raw_body is not None else [])
+            if not body_items:
+                return {"ok": False,
+                        "error": f"bounded_loop step '{step_id}' requires 'body' (step id, "
+                                 "list of step ids, or inline step object(s))"}
+            body_ids: list[str] = []
+            inline_bodies: list[dict[str, Any]] = []
+            for b_idx, item_b in enumerate(body_items):
+                if isinstance(item_b, str):
+                    ref = _step_ref(item_b)
+                    if not ref or ref not in known_ids:
+                        return {"ok": False,
+                                "error": f"bounded_loop step '{step_id}' body '{item_b}' must "
+                                         "name a step in this workflow or be an inline object"}
+                    body_ids.append(ref)
+                elif isinstance(item_b, dict):
+                    child, err = _build_inline(item_b, f"{step_id}_step{b_idx + 1}", index)
+                    if err or child is None:
+                        return {"ok": False, "error": err or "invalid bounded_loop body step"}
+                    body_ids.append(child["id"])
+                    inline_bodies.append(child)
+                else:
+                    return {"ok": False,
+                            "error": f"bounded_loop step '{step_id}' body item must be a step id or object"}
+            if len(set(body_ids)) != len(body_ids) or step_id in body_ids:
+                return {"ok": False,
+                        "error": f"bounded_loop step '{step_id}' body steps must be unique and "
+                                 "cannot reference the loop itself"}
+            built.append({
+                "id": step_id, "kind": "bounded_loop",
+                "body": body_ids if len(body_ids) > 1 else body_ids[0],
+                "expression": expr, "max_iterations": max_iters,
+                "on_exhausted": on_exhausted, "next": [], "binding": {},
+            })
+            built.extend(inline_bodies)
+            for bid in body_ids:
+                owned_ids.add(bid)
+            continue
         if not capability:
             return {"ok": False, "error": (
                 f"step {index + 1} ('{raw.get('id') or '?'}') says what it does in none of the "
                 "ways a step can: capability=<key from list_capabilities>, agent=true with "
                 "instructions, skill=<custom step key>, mcp_tool={server, tool}, gate={question}, "
-                "wait_seconds, or run_workflow=<key>.")}
-        if branching:
+                "wait_seconds, run_workflow=<key>, parallel={branches}, for_each={items, body}, "
+                "or bounded_loop={body, expression, max_iterations}.")}
+        if structured:
             step_id = planned[index]
         else:
             step_id = re.sub(r"[^a-z0-9_]+", "_",
@@ -113,71 +307,46 @@ def _spec_from_steps(steps: Any, args: dict, lenient: bool = False) -> Any:
                 step_id = f"{base}_{suffix}"
                 suffix += 1
             seen.add(step_id)
-        # THE RUNTIME'S OWN SHAPE, not a plausible-looking one. Every step is
-        # kind="capability" with what it runs inside `binding` — a custom step names the step
-        # key it defined, a standard one names the capability. Writing `kind: "preview"` would
-        # have been refused by `validate_workflow_spec`, which is the good outcome; writing a
-        # shape it ACCEPTS but the runtime reads differently is the bad one.
-        entry: dict[str, Any] = {"id": step_id, "kind": "capability", "next": []}
-        if capability == "agent_work":
-            entry["binding"] = _agent_step_binding(raw)
-        elif capability == "gate":
-            gate = raw.get("gate") if isinstance(raw.get("gate"), dict) else {}
-            entry = {"id": step_id, "kind": "decision", "next": [], "binding": {},
-                     "question": str(gate.get("question") or raw.get("question") or "").strip(),
-                     "guidance": str(gate.get("guidance") or raw.get("guidance") or "").strip(),
-                     # A PERSON answers a gate unless the draft names somebody else.
-                     "captain": str(raw.get("captain") or "human").strip().lower()}
-        elif capability == "wait":
-            entry = {"id": step_id, "kind": "timer", "next": [], "binding": {},
-                     "wait_seconds": int(raw.get("wait_seconds") or 3600)}
-        elif capability == "run_workflow":
-            # Named by KEY, the way a model knows a workflow; resolved to the version that is
-            # live now once there is a connection (`_resolve_subworkflows`).
-            entry = {"id": step_id, "kind": "subworkflow", "next": [],
-                     "binding": {"workflow_version_id": ""},
-                     "_workflow_key": str(raw.get("run_workflow") or raw.get("workflow")
-                                          or "").strip()}
-        elif capability == "mcp_tool":
-            tool = raw["mcp_tool"]
-            entry["binding"] = {"custom_step": "", "inputs": raw.get("input") or {}}
-            # Resolved to a custom step (made if missing) once there is a connection; see
-            # `_ensure_steps_for_mcp_tools`.
-            entry["_mcp_tool"] = {"server": str(tool.get("server") or "").strip(),
-                                  "tool": str(tool.get("tool") or tool.get("name") or "").strip()}
-        elif raw.get("skill") or capability == "custom":
-            entry["binding"] = {"custom_step": str(raw.get("skill") or "").strip().lower(),
-                                "inputs": raw.get("input") or {}}
-            # The binding names the step, not the capability — but the capability is where
-            # `required_inputs` and `produces` are declared, so the wiring pass needs it. Held
-            # under a leading underscore and stripped before the spec is published.
-            entry["_capability"] = capability
-        else:
-            entry["binding"] = {"capability": capability, "inputs": raw.get("input") or {}}
-        if raw.get("captain") and entry["kind"] != "decision":
-            entry["captain"] = str(raw["captain"]).strip().lower()
-        mode = str(raw.get("approval") or "").strip().lower()
-        if mode in ("manual", "auto") and entry["kind"] == "capability":
-            entry["approval"] = {"mode": mode}
+        entry = _build_work_step(raw, step_id, capability)
         built.append(entry)
+    # Populate wait_for on any explicit join step whose parallel block named it.
+    by_id = {entry["id"]: entry for entry in built}
+    for p_id, j_id in spine_exit.items():
+        join_entry = by_id.get(j_id)
+        par_entry = by_id.get(p_id)
+        if join_entry and par_entry and not join_entry.get("wait_for"):
+            join_entry["wait_for"] = list(par_entry.get("branches") or [])
     # THE CHAIN, BUILT NOT ASKED FOR. `next` is a LIST in the runtime's format; a bare string
     # is accepted by the validator and normalised, but emitting the real shape means the spec
     # the agent wrote and the spec the builder draws are byte-comparable.
     #
-    # A typed decision is not a link in that chain. Its arms are reached by the condition, and
-    # chaining one arm into the other would be a straight line that also happens to carry
-    # on_true and on_false. The decision's own next is the condition, set when it was built,
-    # even when the decision itself is somebody else's arm.
-    if arm_ids:
-        spine = [entry for entry in built if entry["id"] not in arm_ids]
+    # Owned steps (typed-decision arms, parallel branches & their joins, for_each bodies,
+    # bounded_loop bodies) are excluded from the linear outer spine. Each parallel branch leads
+    # to its join, and the spine continues from the join (`spine_exit[parallel_id]`).
+    non_spine = arm_ids | owned_ids | explicit_joins
+    if non_spine:
+        spine = [entry for entry in built
+                 if entry["id"] not in non_spine and entry.get("kind") != "condition"]
         for index, entry in enumerate(spine[:-1]):
-            if entry.get("kind") == "condition" or entry["id"] in decision_ids:
+            if entry["id"] in decision_ids:
                 continue
-            entry["next"] = [spine[index + 1]["id"]]
+            target_next = spine[index + 1]["id"]
+            if entry["id"] in spine_exit:
+                join_entry = by_id.get(spine_exit[entry["id"]])
+                if join_entry is not None:
+                    join_entry["next"] = [target_next]
+                entry["next"] = []
+            else:
+                entry["next"] = [target_next]
         for entry in built:
+            eid = entry["id"]
             if entry.get("kind") == "condition":
                 entry["next"] = []
-            elif entry["id"] in arm_ids and entry["id"] not in decision_ids:
+            elif eid in branch_join:
+                entry["next"] = [branch_join[eid]]
+            elif eid in owned_ids:
+                entry["next"] = []
+            elif eid in arm_ids and eid not in decision_ids:
                 entry["next"] = []
     else:
         for index, entry in enumerate(built[:-1]):
@@ -231,19 +400,28 @@ def _spec_from_steps(steps: Any, args: dict, lenient: bool = False) -> Any:
     # form: the operator would fill in a value the run ignores.
     has_agent = any((e.get("binding") or {}).get("agent_work") for e in built)
     bound: list[str] = list(described) if has_agent else []
+    array_inputs: set[str] = set()
     for entry in built:
         for value in ((entry.get("binding") or {}).get("inputs") or {}).values():
             if isinstance(value, dict) and value.get("from_input"):
                 name = str(value["from_input"])
                 if name not in bound:
                     bound.append(name)
+        if entry.get("kind") == "for_each" and isinstance(entry.get("items"), str):
+            items_path = entry["items"].strip()
+            if items_path.startswith("input."):
+                name = items_path.split(".", 2)[1]
+                if name:
+                    array_inputs.add(name)
+                    if name not in bound:
+                        bound.append(name)
     spec: dict[str, Any] = {"entry_step": built[0]["id"], "steps": built}
     if bound:
         properties: dict[str, Any] = {}
         for name in bound:
             said = described.get(name, {})
             prop: dict[str, Any] = {
-                "type": "string",
+                "type": "array" if name in array_inputs else "string",
                 "title": str(said.get("title") or name.replace("_", " ").strip().capitalize()),
             }
             if said.get("description"):
@@ -268,7 +446,10 @@ _STEP_KEYS = frozenset({
     "id", "capability", "kind", "type", "label", "name", "description", "captain", "approval",
     "input", "agent", "instructions", "skills", "skill", "mcp", "mcp_servers", "mcp_tool",
     "produces", "agents", "max_steps", "gate", "question", "guidance", "wait_seconds",
-    "run_workflow", "workflow", "typed_decision", "state", "true_value", "on_true", "on_false"})
+    "run_workflow", "workflow", "typed_decision", "state", "true_value", "on_true", "on_false",
+    "parallel", "branches", "join", "wait_for", "success_policy",
+    "for_each", "items", "body", "max_items", "concurrency",
+    "bounded_loop", "expression", "until", "max_iterations", "on_exhausted"})
 
 
 class DraftRefusal(ValueError):
@@ -403,6 +584,57 @@ _GATE_WORDS = frozenset({"gate", "approval", "approval_gate", "decision", "human
 _WAIT_WORDS = frozenset({"wait", "timer", "delay"})
 #: Words for "run another workflow here". All mean a `subworkflow` step.
 _SUBWORKFLOW_WORDS = frozenset({"run_workflow", "subworkflow"})
+#: Words for structured control-flow steps (BOSSAPP-1471).
+_PARALLEL_WORDS = frozenset({"parallel", "fan_out"})
+_JOIN_WORDS = frozenset({"join", "fan_in"})
+_FOR_EACH_WORDS = frozenset({"for_each", "foreach", "map"})
+_BOUNDED_LOOP_WORDS = frozenset({"bounded_loop", "loop", "repeat"})
+
+
+def _is_structured_step(raw: dict[str, Any]) -> bool:
+    if isinstance(raw.get("typed_decision"), dict):
+        return True
+    cap = _draft_capability(raw)
+    return cap in ("parallel", "join", "for_each", "bounded_loop")
+
+
+def _build_work_step(raw: dict[str, Any], step_id: str, capability: str) -> dict[str, Any]:
+    """Build a single non-graph step entry in the runtime's exact spec shape."""
+    entry: dict[str, Any] = {"id": step_id, "kind": "capability", "next": []}
+    if capability == "agent_work":
+        entry["binding"] = _agent_step_binding(raw)
+    elif capability == "gate":
+        gate = raw.get("gate") if isinstance(raw.get("gate"), dict) else {}
+        entry = {"id": step_id, "kind": "decision", "next": [], "binding": {},
+                 "question": str(gate.get("question") or raw.get("question") or "").strip(),
+                 "guidance": str(gate.get("guidance") or raw.get("guidance") or "").strip(),
+                 # A PERSON answers a gate unless the draft names somebody else.
+                 "captain": str(raw.get("captain") or "human").strip().lower()}
+    elif capability == "wait":
+        entry = {"id": step_id, "kind": "timer", "next": [], "binding": {},
+                 "wait_seconds": int(raw.get("wait_seconds") or 3600)}
+    elif capability == "run_workflow":
+        entry = {"id": step_id, "kind": "subworkflow", "next": [],
+                 "binding": {"workflow_version_id": ""},
+                 "_workflow_key": str(raw.get("run_workflow") or raw.get("workflow")
+                                      or "").strip()}
+    elif capability == "mcp_tool":
+        tool = raw["mcp_tool"]
+        entry["binding"] = {"custom_step": "", "inputs": raw.get("input") or {}}
+        entry["_mcp_tool"] = {"server": str(tool.get("server") or "").strip(),
+                              "tool": str(tool.get("tool") or tool.get("name") or "").strip()}
+    elif raw.get("skill") or capability == "custom":
+        entry["binding"] = {"custom_step": str(raw.get("skill") or "").strip().lower(),
+                            "inputs": raw.get("input") or {}}
+        entry["_capability"] = capability
+    else:
+        entry["binding"] = {"capability": capability, "inputs": raw.get("input") or {}}
+    if raw.get("captain") and entry["kind"] != "decision":
+        entry["captain"] = str(raw["captain"]).strip().lower()
+    mode = str(raw.get("approval") or "").strip().lower()
+    if mode in ("manual", "auto") and entry["kind"] == "capability":
+        entry["approval"] = {"mode": mode}
+    return entry
 
 
 def _draft_capability(raw: dict) -> str:
@@ -413,7 +645,15 @@ def _draft_capability(raw: dict) -> str:
     agent drafted could never leave the agent to BOSS, scope a step's skills, call an MCP
     tool, or stop for a person — and "agent_work" was refused as "not a capability".
     """
-    capability = str(raw.get("capability") or raw.get("kind") or "").strip().lower()
+    capability = str(raw.get("capability") or raw.get("kind") or raw.get("type") or "").strip().lower()
+    if isinstance(raw.get("parallel"), dict) or raw.get("branches") is not None or capability in _PARALLEL_WORDS:
+        return "parallel"
+    if raw.get("wait_for") is not None or capability in _JOIN_WORDS:
+        return "join"
+    if isinstance(raw.get("for_each"), dict) or (raw.get("items") is not None and raw.get("body") is not None) or capability in _FOR_EACH_WORDS:
+        return "for_each"
+    if isinstance(raw.get("bounded_loop"), dict) or (raw.get("body") is not None and (raw.get("expression") is not None or raw.get("until") is not None)) or capability in _BOUNDED_LOOP_WORDS:
+        return "bounded_loop"
     if raw.get("agent") is True or capability in _AGENT_STEP_WORDS:
         return "agent_work"
     if isinstance(raw.get("gate"), dict) or raw.get("gate") is True or capability in _GATE_WORDS:

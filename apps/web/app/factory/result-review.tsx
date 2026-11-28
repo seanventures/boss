@@ -21,6 +21,7 @@ export type ResultReviewData = {
     receipt_status?: string | null; effect_kind?: string | null;
     criteria: string[];
     checks: { state: string; checked_head: string | null; artifact_id: string | null;
+      download_url?: string | null; check_run_url?: string | null;
       quality_status: string | null; gates_failed: string[]; commands: string[] };
     cost: { observed_usd_micros: number | null; estimated_usd_micros: number;
       included_equivalent_usd_micros: number; held_usd_micros: number; confidence: string; unresolved_records: number; included_calls: number };
@@ -113,7 +114,15 @@ export function ResultReview({ runId, onChangeRequested, briefCriteria = [], fai
         <div>Checked revision: <code>{snapshot.checks.checked_head ?? "Unknown"}</code></div>
         {snapshot.checks.gates_failed.length ? <div>Failed gates: {gatesFailed.join(", ")} <span className="fx-mono fx-muted">({snapshot.checks.gates_failed.join(", ")})</span>.</div> : null}
         {snapshot.checks.commands.length ? <ul>{snapshot.checks.commands.map((command, i) => <li key={i} data-user-text>{command}</li>)}</ul> : <div>No test commands recorded.</div>}
-        <div>Test evidence: {snapshot.checks.artifact_id ? <a href={`/v1/artifacts/${encodeURIComponent(snapshot.checks.artifact_id)}`} target="_blank" rel="noreferrer">Open recorded report ↗</a> : "Not recorded"}.
+        <div>Test evidence: {snapshot.checks.artifact_id ? <>
+            <a href={`/v1/artifacts/${encodeURIComponent(snapshot.checks.artifact_id)}`} target="_blank" rel="noreferrer">Open recorded report ↗</a>
+            {" · "}
+            <a href={snapshot.checks.download_url || `/v1/artifacts/${encodeURIComponent(snapshot.checks.artifact_id)}/download`} download>Download full results</a>
+            {snapshot.checks.check_run_url && safeLink(snapshot.checks.check_run_url) ? <>
+              {" · "}
+              <a href={safeLink(snapshot.checks.check_run_url)} target="_blank" rel="noreferrer">GitHub check run ↗</a>
+            </> : null}
+          </> : "Not recorded"}.
           {" "}<span>Delivery receipt: {snapshot.receipt_status ?? "Not recorded"}</span></div>
         <div><code>{snapshot.receipt_id ?? "No receipt"}</code> <span>{snapshot.effect_kind ?? ""}</span></div>
         <span title="These are saved BOSS records, without a new remote branch check.">Saved evidence, no remote recheck</span>

@@ -415,7 +415,7 @@ def _ref(eng, project, ref_id, *, http_auth=True, kind="api_token"):  # noqa: F8
 def _tool(eng, monkeypatch):  # noqa: F811
     from boss_engine.tools.builtin import build_default_registry
 
-    monkeypatch.setattr("boss_engine.tools.builtin._community_restricted", lambda settings: False)
+    _ = monkeypatch
 
     class Ctx:
         settings = Settings()

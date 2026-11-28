@@ -128,9 +128,54 @@ class DecisionService:
             params,
         ).mappings().all()
 
+        from . import decision_ladder as _decision_ladder
+
         expired = 0
         for row in rows:
             if decision_actions.never_expires(row):
+                self._keep_open_past_deadline(connection, dict(row))
+                continue
+            policy = _decision_ladder.resolve_deadline_expiry(dict(row))
+            if policy["outcome"] == "apply_recommendation":
+                updated = connection.execute(
+                    text(
+                        """
+                        UPDATE decisions
+                        SET status = 'approved',
+                            approved_by = 'system:deadline_default',
+                            approved_at = :updated_at,
+                            resolution_note = :note,
+                            updated_at = :updated_at
+                        WHERE id = :decision_id AND status IN ('pending', 'delegated')
+                        """
+                    ),
+                    {
+                        "decision_id": row["id"],
+                        "updated_at": now_utc(),
+                        "note": policy["note"],
+                    },
+                )
+                if updated.rowcount != 1:
+                    continue
+                emit_event(
+                    connection,
+                    row["project_id"],
+                    "decision.default_applied",
+                    "system",
+                    "decision",
+                    row["id"],
+                    {
+                        "deadline_at": row["deadline_at"].isoformat(),
+                        "default_action": policy["applied_action"],
+                        "safe_default_applied": policy["applied_action"],
+                        "still_answerable": False,
+                        "note": policy["note"],
+                    },
+                )
+                continue
+            # Irreversible hold decisions remind and escalate rather than silently expiring
+            # unless explicitly marked non-reopenable legacy hold.
+            if (row["default_action"] or "hold") == "hold":
                 self._keep_open_past_deadline(connection, dict(row))
                 continue
             updated = connection.execute(
@@ -160,10 +205,6 @@ class DecisionService:
                 {
                     "deadline_at": row["deadline_at"].isoformat(),
                     "default_action": row["default_action"] or "hold",
-                    # "hold" means DO NOTHING, so nothing was applied. Reporting
-                    # `safe_default_applied: hold` read as "handled safely" when the truth is
-                    # "nobody answered and the work is waiting" — and 77% of decisions on the
-                    # live project took this path.
                     "safe_default_applied": (
                         None if (row["default_action"] or "hold") == "hold"
                         else row["default_action"]
@@ -2424,7 +2465,10 @@ class DecisionService:
             text(
                 """
                 SELECT q.gates_passed, q.gates_failed, q.code_task_run_id,
-                       q.evidence->'quality_bar'->'followups' AS followups
+                       q.evidence->'quality_bar'->'followups' AS followups,
+                       q.evidence->>'verified_commit_sha' AS verified_commit_sha,
+                       q.evidence->>'verified_tree_sha' AS verified_tree_sha,
+                       q.evidence->>'gate_integrity_invalidated' AS gate_integrity_invalidated
                 FROM quality_gates q
                 JOIN code_task_runs r ON r.id = q.code_task_run_id
                 WHERE q.project_id = :p
@@ -2455,10 +2499,14 @@ class DecisionService:
                 followups = json.loads(followups)
             except Exception:  # noqa: BLE001
                 followups = {}
+        invalidated_raw = str(gate.get("gate_integrity_invalidated") or "").strip().lower()
         # `followups`: gates the quality bar let through; they are not in passed or failed.
         return {"passed": list(passed), "failed": list(failed),
                 "followups": sorted(followups) if isinstance(followups, dict) else [],
-                "run_id": gate["code_task_run_id"]}
+                "run_id": gate["code_task_run_id"],
+                "verified_commit_sha": (str(gate.get("verified_commit_sha") or "").strip() or None),
+                "verified_tree_sha": (str(gate.get("verified_tree_sha") or "").strip() or None),
+                "gate_integrity_invalidated": invalidated_raw in ("true", "1", "yes")}
 
     def _pull_request_ci_gate(
         self, connection: Connection, row: dict[str, Any]
@@ -2469,6 +2517,22 @@ class DecisionService:
         # CI signal and was previously never consulted here.
         own = self._boss_own_verdict(connection, row, recommendation)
         if own:
+            # (1b) GATE INTEGRITY (BOSSAPP-1029): the last gate run must have verified the
+            # exact commit SHA that is about to merge; an edit after the last gate run
+            # invalidates the prior pass until re-verified on the exact landing SHA.
+            from . import gate_integrity as _gate_integrity
+
+            sha_block = _gate_integrity.check_commit_sha_matches(
+                own.get("verified_commit_sha"),
+                recommendation.get("head_sha"),
+                invalidated=bool(own.get("gate_integrity_invalidated")),
+            )
+            if sha_block:
+                return {
+                    **sha_block,
+                    "validation_status": "failed",
+                    "validation_summary": sha_block["reason"],
+                }
             # (3) HARD STOP: a change that edited or deleted PRE-EXISTING tests must never be
             # auto-merged. A green suite proves nothing if the guard tests were weakened, and
             # a merge into main is irreversible. never-block means "ship the PR and record the
@@ -2519,6 +2583,29 @@ class DecisionService:
             }
 
         content = artifact["content"] or {}
+        # (1c) TEST REPORT HEAD SHA MUST MATCH LANDING HEAD SHA (BOSSAPP-1029).
+        report_sha = str(content.get("verified_commit_sha") or content.get("head_sha") or "").strip().lower()
+        rec_sha = str(recommendation.get("head_sha") or "").strip().lower()
+        if (
+            report_sha
+            and rec_sha
+            and len(report_sha) >= 7
+            and len(rec_sha) >= 7
+            and report_sha != rec_sha
+        ):
+            return {
+                "status": "blocked_gate_sha_mismatch",
+                "reason": (
+                    f"Test report artifact was recorded for commit {report_sha[:12]}, "
+                    f"which does not match the pull request head {rec_sha[:12]}."
+                ),
+                "next_action": "Re-run verification on the current pull request commit before merging.",
+                "event_reason": "test_report_sha_mismatch",
+                "validation_status": "failed",
+                "validation_summary": (
+                    f"Stale test report ({report_sha[:12]} != {rec_sha[:12]})."
+                ),
+            }
         validation_status = str(content.get("status") or "missing")
         validation_summary = str(
             content.get("summary")

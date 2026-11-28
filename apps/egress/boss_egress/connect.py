@@ -238,8 +238,16 @@ def ghes_fenced(host: str) -> bool:
     return True
 
 
+def _never_hosts() -> tuple[str, ...]:
+    try:
+        extra = tuple(_enterprise().self_hosted_git_hosts(os.environ))
+    except Exception:  # noqa: BLE001
+        extra = ()
+    return NEVER + extra
+
+
 def _rules_for(host: str) -> list[Rule]:
-    if _matches(host, NEVER) or ghes_fenced(host):
+    if _matches(host, _never_hosts()) or ghes_fenced(host):
         return []
     return [r for r in allow_rules() if _matches(host, (r.pattern,))]
 
@@ -437,6 +445,8 @@ def refusal_reason(host: str, port: int, reason: str) -> str:
     fence = "Blocked by BOSS network fence"
     if reason == "host_not_allowed" and (_matches(host, NEVER) or ghes_fenced(host)):
         return f"{fence}: {host} is reached through BOSS's GitHub proxy, not this tunnel"
+    if reason == "host_not_allowed" and _matches(host, _never_hosts()):
+        return f"{fence}: {host} is reached through BOSS's Git proxy, not this tunnel"
     if reason == "host_not_allowed":
         return (f"{fence}: {host} is not on the egress allowlist. An operator can add {where} "
                 "to BOSS_EGRESS_CONNECT_ALLOW in .env (see docs/community/ENTERPRISE_NETWORK.md)")

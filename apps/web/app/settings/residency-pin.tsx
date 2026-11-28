@@ -9,6 +9,7 @@
  */
 import React, { useRef, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 export const GEOGRAPHIES = [
   { id: "eu", label: "European Union" },
@@ -352,12 +353,12 @@ export function ResidencyPin({
           ))}
         </div>
         <div className="rp-acts">
-          <button type="button" className="rp-act" data-kind="pin" data-testid="residency-pin-button" data-copy onClick={pinHere}>
+          <GatedButton permission="project:update" type="button" className="rp-act" data-kind="pin" data-testid="residency-pin-button" data-copy onClick={pinHere}>
             Pin here
-          </button>
-          <button type="button" className="rp-act" data-testid="residency-clear" data-copy onClick={clear}>
+          </GatedButton>
+          <GatedButton permission="project:update" type="button" className="rp-act" data-testid="residency-clear" data-copy onClick={clear}>
             Clear pin
-          </button>
+          </GatedButton>
         </div>
         <div className="rp-probe">
           <label>

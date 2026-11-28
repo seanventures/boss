@@ -4166,6 +4166,18 @@ def _gate_card(connection: Connection, run: Any, spec: dict[str, Any],
         card["produced_by_title"] = step_title
     if agent:
         card["produced_by_agent"] = agent
+    # Invariant I5 (AA-G): downstream deploy/promote/release_approval gates carry the latest
+    # acceptance verdict whenever the run's acceptance check did not pass.
+    try:
+        from .acceptance import report as _acc_report
+
+        latest_acc = _acc_report.latest_for_run(connection, project_id, str(run["id"]))
+        if latest_acc and latest_acc.get("verdict") == "not_met":
+            card["acceptance"] = _acc_report.card_payload(
+                latest_acc, latest_acc.get("open_rows") or (),
+            )
+    except Exception:  # noqa: BLE001 — optional acceptance enrichment never blocks a gate card
+        pass
     return card
 
 
@@ -5982,25 +5994,53 @@ def _maybe_finish_run(connection: Connection, run_id: str) -> None:
     ).scalars().all()
     for step_id in pending:
         _mark_skipped(connection, run_id, step_id, "path_not_reached")
+    # BOSSAPP-1481: a workflow whose executed terminal step declares run_outcome='rejected'
+    # (e.g. onboarding rejection branch) ends 'rejected' rather than 'completed'.
+    final_status = "completed"
+    try:
+        spec = _json(
+            connection.execute(
+                text("SELECT spec FROM workflow_versions WHERE id = :v"),
+                {"v": run["workflow_version_id"]},
+            ).scalar(),
+            {},
+        )
+        rejected_steps = {
+            str(s.get("id"))
+            for s in (spec.get("steps") or [])
+            if isinstance(s, dict) and s.get("run_outcome") == "rejected"
+        }
+        if rejected_steps:
+            ran_rejected = connection.execute(
+                text(
+                    "SELECT 1 FROM workflow_step_runs WHERE workflow_run_id = :id "
+                    "AND status = 'succeeded' AND step_id = ANY(:sids) LIMIT 1"
+                ),
+                {"id": run_id, "sids": list(rejected_steps)},
+            ).first()
+            if ran_rejected is not None:
+                final_status = "rejected"
+    except Exception:  # noqa: BLE001
+        final_status = "completed"
     connection.execute(
         text(
             """
             UPDATE workflow_runs
-            SET status='completed', output=context, current_frontier='[]'::jsonb,
+            SET status=:final_status, output=context, current_frontier='[]'::jsonb,
                 completed_at=clock_timestamp(), updated_at=now()
             WHERE id=:id AND status IN ('running','waiting')
             """
         ),
-        {"id": run_id},
+        {"id": run_id, "final_status": final_status},
     )
     emit_event(
         connection,
         run["project_id"],
-        "workflow.run_completed",
+        "workflow.run_rejected" if final_status == "rejected" else "workflow.run_completed",
         run["actor"],
         "workflow_run",
         run_id,
-        {"status_counts": by_status},
+        {"status_counts": by_status, "final_status": final_status},
     )
     # A run can finish past a question nobody answered (its step skipped, or failed and then
     # skipped). The question is moot now; see run_decisions.
@@ -6008,7 +6048,7 @@ def _maybe_finish_run(connection: Connection, run_id: str) -> None:
 
     withdraw_with_run(connection, run["project_id"], run_id,
                       why=f"its run {run_id} finished without it", actor=run["actor"] or "workflow")
-    _attribute_knowledge(connection, run["project_id"], run_id, success=True)
+    _attribute_knowledge(connection, run["project_id"], run_id, success=(final_status == "completed"))
     # THE RUN'S DONE IS ITS WORK ITEM'S DONE — through the item's execution policy, which may
     # hold it in review (work_items.on_run_completed → execution_policy.apply_transition).
     from . import work_items

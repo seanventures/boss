@@ -440,7 +440,7 @@ export function WatchSheet({ projectId, actor, initialTarget, onClose, onStarted
 
         {/* 4 · one primary */}
         <footer className="as-foot">
-          <span className="as-chip as-mono" title="The read and the watches run on BOSS's own evaluator">{read?.cost || "≈ $0.20 a day · first data ≈ 1 min"}</span>
+          <span className="as-chip as-mono" title="The read and the watches run on BOSS's own evaluator">{read?.cost || "Estimating cost…"}</span>
           <span className="as-faint"><ShieldCheck size={12} aria-hidden /> Prod and customers stay with you</span>
           <span className="ag-spacer" />
           <button type="button" className="inf-link" data-testid="wa-wire" title="OTel, Collector, remote write, /metrics, URL, other tool: the old paths, with tokens shown once"

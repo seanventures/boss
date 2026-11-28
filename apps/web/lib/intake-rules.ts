@@ -29,6 +29,10 @@ const SLACK = {
   mention: "com.slack.message.app_mention", dm: "com.slack.message.im",
   channel: "com.slack.message.channel", thread: "com.slack.message.thread_reply",
 };
+const TEAMS = {
+  mention: "com.microsoft.teams.message.mention", dm: "com.microsoft.teams.message.personal",
+  channel: "com.microsoft.teams.message.channel", thread: "com.microsoft.teams.message.thread_reply",
+};
 
 export const CHAT_WHEN: { key: ChatWhen; word: string; tip: string }[] = [
   { key: "mention", word: "a message mentions @BOSS", tip: "Someone @mentions the BOSS app" },
@@ -76,15 +80,16 @@ function leafOf(c: Cond): Node {
 }
 
 /** The draft as the route's `config.match` and `config.addressing`. */
-export function toMatch(d: Draft, chat: boolean): { match: unknown; addressing?: string } {
+export function toMatch(d: Draft, chat: boolean, kind = "slack"): { match: unknown; addressing?: string } {
   if (d.custom !== null) return { match: d.custom };
   const leaves: Node[] = [];
   let addressing: string | undefined;
+  const map = kind === "teams" ? TEAMS : SLACK;
   if (chat) {
     const when = d.when as ChatWhen;
-    const types = when === "mention" ? [SLACK.mention] : when === "dm" ? [SLACK.dm]
-      : when === "message" ? [SLACK.channel, SLACK.thread] : [SLACK.thread];
-    if (d.followups && (when === "mention" || when === "dm")) types.push(SLACK.thread);
+    const types = when === "mention" ? [map.mention] : when === "dm" ? [map.dm]
+      : when === "message" ? [map.channel, map.thread] : [map.thread];
+    if (d.followups && (when === "mention" || when === "dm")) types.push(map.thread);
     leaves.push({ field: "type", op: "in", value: types });
     addressing = when === "message" ? "channel_all" : when === "followup" ? "thread_followups" : "mention_or_dm";
     const channels = d.channels.map((c) => c.replace(/^#/, "").trim()).filter(Boolean);
@@ -127,19 +132,48 @@ export function fromMatch(match: unknown, addressing: string, chat: boolean): Dr
   }
   if (chat) {
     const t = new Set(types ?? []);
+    const hasThread = t.has(SLACK.thread) || t.has(TEAMS.thread);
+    const hasDm = t.has(SLACK.dm) || t.has(TEAMS.dm);
+    const hasMention = t.has(SLACK.mention) || t.has(TEAMS.mention);
     if (addressing === "channel_all") { d.when = "message"; d.followups = true; }
     else if (addressing === "thread_followups") { d.when = "followup"; d.followups = true; }
-    else if (t.has(SLACK.dm) && !t.has(SLACK.mention)) { d.when = "dm"; d.followups = t.has(SLACK.thread); }
-    else { d.when = "mention"; d.followups = types === null || t.has(SLACK.thread); }
+    else if (hasDm && !hasMention) { d.when = "dm"; d.followups = hasThread; }
+    else { d.when = "mention"; d.followups = types === null || hasThread; }
   }
   if (!chat && d.when.endsWith("*") && !d.when.endsWith(".*")) d.when = `${d.when.slice(0, -1)}.*`.replace(/\.\.\*$/, ".*");
   return d;
 }
 
+/** Friendly `#name` for a channel id when a connection carries `channel_names`, else `#<raw>`. */
+export function channelLabel(channel: string, channelNames: Record<string, string> = {}): string {
+  const clean = channel.replace(/^#/, "").trim();
+  if (!clean) return "";
+  return `#${channelNames[clean] || clean}`;
+}
+
+/** Display channels in E4's sentence input as `#names` (comma-separated). */
+export function formatChannelsInput(channels: string[], channelNames: Record<string, string> = {}): string {
+  return channels.map((c) => (c.trim() ? channelLabel(c, channelNames) : "")).join(", ");
+}
+
+/** Resolve typed `#names` back to channel ids when known in `channelNames`, else clean names. */
+export function parseChannelsInput(raw: string, channelNames: Record<string, string> = {}): string[] {
+  const byName = new Map<string, string>();
+  for (const [id, name] of Object.entries(channelNames)) {
+    const k = name.replace(/^#/, "").trim().toLowerCase();
+    if (k) byName.set(k, id);
+  }
+  return raw.split(",").map((part) => {
+    const clean = part.trim().replace(/^#/, "");
+    if (!clean) return "";
+    return byName.get(clean.toLowerCase()) || clean;
+  }).filter((c, i, all) => c || i === all.length - 1);
+}
+
 /** The rule in one line, for the list: "Mentions in #support", "DMs to BOSS", "Every message in #help". */
-export function ruleWords(d: Draft, chat: boolean): string {
+export function ruleWords(d: Draft, chat: boolean, channelNames: Record<string, string> = {}): string {
   if (d.custom !== null) return "Custom filter";
-  const where = d.channels.length ? ` in ${d.channels.map((c) => `#${c.replace(/^#/, "")}`).join(", ")}` : "";
+  const where = d.channels.length ? ` in ${d.channels.map((c) => channelLabel(c, channelNames)).filter(Boolean).join(", ")}` : "";
   let head: string;
   if (chat) {
     head = d.when === "dm" ? "DMs to BOSS" : d.when === "message" ? `Every message${where}` : d.when === "followup" ? `Thread follow-ups${where}` : `Mentions${where || " anywhere"}`;

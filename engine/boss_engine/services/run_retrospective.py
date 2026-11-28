@@ -92,7 +92,8 @@ def score_delivery(state: dict, *, pr_number: Optional[int],
 
 def score_efficiency(*, working_minutes: float, cost_usd: float,
                      near_cap_stages: list[str],
-                     comparable_minutes: Optional[float] = None) -> dict[str, Any]:
+                     comparable_minutes: Optional[float] = None,
+                     included_usd: float = 0.0) -> dict[str, Any]:
     """What it SPENT, with the host's stalls already removed.
 
     Judged against this project's own history where there is any — an absolute minute count
@@ -111,7 +112,8 @@ def score_efficiency(*, working_minutes: float, cost_usd: float,
                             f"({working_minutes:.0f}m vs {comparable_minutes:.0f}m)")
     grade = "good" if not problems else ("fair" if len(problems) == 1 else "poor")
     return {"grade": grade, "problems": problems, "working_minutes": round(working_minutes, 1),
-            "cost_usd": round(cost_usd, 2), "vs_project_median": ratio}
+            "cost_usd": round(cost_usd, 2), "included_usd": round(included_usd, 2),
+            "vs_project_median": ratio}
 
 
 def findings(delivery: dict, efficiency: dict, host: dict,
@@ -168,17 +170,23 @@ def assemble(connection: Connection, project_id: str, run_id: str) -> dict[str, 
     if row is None:
         return {"ok": False, "error": f"no code task run {run_id}"}
 
-    state, fctx = _as_dict(row["state"]), _as_dict(row["finalize_ctx"])
+    state = _as_dict(row["state"])
     started, ended = row["created_at"], row["updated_at"]
     elapsed_s = max(0.0, (ended - started).total_seconds()) if started and ended else 0.0
 
     calls = connection.execute(
         text("SELECT stage, role, engine, model, turns, total_tokens, cost_usd_micros, "
+             "       COALESCE(included_in_subscription, false) AS included, "
              "       latency_ms, ok FROM llm_calls WHERE code_task_run_id = :r "
              " ORDER BY created_at"),
         {"r": run_id},
     ).mappings().all()
-    cost_usd = sum(int(c["cost_usd_micros"] or 0) for c in calls) / 1_000_000
+    cost_usd = sum(
+        0 if c["included"] else int(c["cost_usd_micros"] or 0) for c in calls
+    ) / 1_000_000
+    included_usd = sum(
+        int(c["cost_usd_micros"] or 0) if c["included"] else 0 for c in calls
+    ) / 1_000_000
 
     # Host stalls that OVERLAPPED this run — the question is what this run lost, not whether
     # the machine has ever been slow.
@@ -225,7 +233,8 @@ def assemble(connection: Connection, project_id: str, run_id: str) -> dict[str, 
                               review_comments_posted=posted)
     efficiency = score_efficiency(working_minutes=working_minutes, cost_usd=cost_usd,
                                   near_cap_stages=sorted(set(near_cap)),
-                                  comparable_minutes=float(median) if median else None)
+                                  comparable_minutes=float(median) if median else None,
+                                  included_usd=included_usd)
 
     return {
         "ok": True,
@@ -238,7 +247,9 @@ def assemble(connection: Connection, project_id: str, run_id: str) -> dict[str, 
         "host": host,
         "stages": [{"stage": c["stage"], "role": c["role"], "engine": c["engine"],
                     "model": c["model"], "turns": c["turns"],
-                    "usd": round(int(c["cost_usd_micros"] or 0) / 1_000_000, 3),
+                    "usd": 0.0 if c["included"] else round(int(c["cost_usd_micros"] or 0) / 1_000_000, 3),
+                    "included_usd": round(int(c["cost_usd_micros"] or 0) / 1_000_000, 3) if c["included"] else 0.0,
+                    "included": bool(c["included"]),
                     "seconds": int((c["latency_ms"] or 0) / 1000), "ok": bool(c["ok"])}
                    for c in calls],
         "advisory_gates": advisory,
@@ -404,8 +415,30 @@ def _step_label(step_id: str, kind: str) -> str:
     return source or step_id.replace("_", " ").strip().capitalize() or step_id
 
 
+def _usage_split(usage: Any) -> tuple[float, float, float]:
+    """(billed_usd, included_usd, list_usd) from a discovery/meeting usage dict (BOSSAPP-1020).
+
+    Applies the shared `included_spend.usage_is_included` rule so subscription and local usage
+    never count as billed money.
+    """
+    from .included_spend import usage_is_included
+
+    data = _as_dict(usage)
+    total = round(int(data.get("cost_usd_micros") or 0) / 1_000_000, 6)
+    if "billed_usd_micros" in data or "included_usd_micros" in data:
+        billed = round(int(data.get("billed_usd_micros") or 0) / 1_000_000, 6)
+        included = round(int(data.get("included_usd_micros") or 0) / 1_000_000, 6)
+        listed = round(max(total, billed + included), 6)
+        return billed, included, listed
+    if usage_is_included(data):
+        return 0.0, total, total
+    return total, 0.0, total
+
+
 def _usage_usd(usage: Any) -> float:
-    return round(int(_as_dict(usage).get("cost_usd_micros") or 0) / 1_000_000, 4)
+    """Billed USD for a discovery/meeting usage dict (`0.0` when subscription/local-included)."""
+    billed, _included, _listed = _usage_split(usage)
+    return billed
 
 
 def _awaited(step_output: Any) -> tuple[str, str]:
@@ -417,22 +450,42 @@ def _awaited(step_output: Any) -> tuple[str, str]:
 
 
 def _build_detail(connection: Connection, run_id: str) -> dict[str, Any]:
-    """Per-agent cost and turns for one code task, from the calls it actually made."""
+    """Per-agent cost and turns for one code task, split into billed vs included (BOSSAPP-1020).
+
+    Uses the same `included_spend.runs_split` rule as the build ribbon (`factory_view`) and the
+    act chain (`agent_acts`), so a subscription-included build never shows up as billed money.
+    """
+    from .included_spend import runs_split
+
     calls = connection.execute(
         text("SELECT stage, role, engine, model, turns, total_tokens, cost_usd_micros, "
+             "       COALESCE(included_in_subscription, false) AS included, "
              "       latency_ms, ok FROM llm_calls WHERE code_task_run_id = :r "
              " ORDER BY created_at"),
         {"r": run_id},
     ).mappings().all()
+    split = runs_split(connection, [run_id]).get(str(run_id)) or {}
+    billed_usd = round(float(split.get("money_usd", 0.0)), 6)
+    included_usd = round(float(split.get("included_usd", 0.0)), 6)
+    list_usd = round(billed_usd + included_usd, 6)
+    rendered_calls = []
+    for c in calls:
+        raw_usd = round(int(c["cost_usd_micros"] or 0) / 1_000_000, 6)
+        inc = bool(c["included"])
+        rendered_calls.append({
+            "stage": c["stage"], "role": c["role"], "engine": c["engine"],
+            "model": c["model"], "turns": int(c["turns"] or 0),
+            "usd": 0.0 if inc else raw_usd,
+            "included_usd": raw_usd if inc else 0.0,
+            "list_usd": raw_usd,
+            "included": inc,
+            "seconds": int((c["latency_ms"] or 0) / 1000), "ok": bool(c["ok"]),
+        })
     return {
-        "usd": round(sum(int(c["cost_usd_micros"] or 0) for c in calls) / 1_000_000, 4),
-        "calls": [
-            {"stage": c["stage"], "role": c["role"], "engine": c["engine"],
-             "model": c["model"], "turns": int(c["turns"] or 0),
-             "usd": round(int(c["cost_usd_micros"] or 0) / 1_000_000, 4),
-             "seconds": int((c["latency_ms"] or 0) / 1000), "ok": bool(c["ok"])}
-            for c in calls
-        ],
+        "usd": billed_usd,
+        "included_usd": included_usd,
+        "list_usd": list_usd,
+        "calls": rendered_calls,
     }
 
 
@@ -516,6 +569,7 @@ def assemble_workflow(
     steps: list[dict[str, Any]] = []
     contributors: dict[str, dict[str, Any]] = {}
     total_usd = 0.0
+    included_usd = 0.0
     list_usd = 0.0
     # THE MODEL CALLS A STEP MADE ITSELF (a role agent judging a case, not a build it started):
     # attributed to the workflow run and its step (llm_telemetry run_id / stage). They used to
@@ -528,11 +582,19 @@ def assemble_workflow(
                      "  FROM llm_calls WHERE code_task_run_id = :r"),
                 {"r": workflow_run_id}).mappings().all():
             slot = own_calls.setdefault(str(c["stage"] or ""), {"calls": [], "list": 0.0,
-                                                                "billed": 0.0})
+                                                                "billed": 0.0, "included": 0.0})
             usd_ = int(c["micros"] or 0) / 1_000_000
+            inc_ = bool(c["included"])
             slot["list"] += usd_
-            slot["billed"] += 0.0 if c["included"] else usd_
-            slot["calls"].append({"role": c["role"], "model": c["model"], "usd": usd_})
+            slot["billed"] += 0.0 if inc_ else usd_
+            slot["included"] += usd_ if inc_ else 0.0
+            slot["calls"].append({
+                "role": c["role"], "model": c["model"],
+                "usd": 0.0 if inc_ else usd_,
+                "included_usd": usd_ if inc_ else 0.0,
+                "list_usd": usd_,
+                "included": inc_,
+            })
     except Exception:  # noqa: BLE001 — a report without this line is still a report
         own_calls = {}
 
@@ -548,6 +610,8 @@ def assemble_workflow(
             "work_id": work_id or None,
             "label": _step_label(row["step_id"], kind),
             "usd": 0.0,
+            "included_usd": 0.0,
+            "list_usd": 0.0,
             "seconds": None,
             "agents": [],
         }
@@ -573,15 +637,19 @@ def assemble_workflow(
             if kind == "code_task":
                 detail = _build_detail(connection, work_id)
                 step["usd"] = detail["usd"]
+                step["included_usd"] = detail["included_usd"]
+                step["list_usd"] = detail["list_usd"]
                 step["calls"] = detail["calls"]
                 for call in detail["calls"]:
                     role = str(call["role"] or "unattributed")
                     slot = contributors.setdefault(
                         role, {"role": role, "calls": 0, "turns": 0, "usd": 0.0,
-                               "models": set()})
+                               "included_usd": 0.0, "list_usd": 0.0, "models": set()})
                     slot["calls"] += 1
                     slot["turns"] += call["turns"]
-                    slot["usd"] = round(slot["usd"] + call["usd"], 4)
+                    slot["usd"] = round(slot["usd"] + call["usd"], 6)
+                    slot["included_usd"] = round(slot["included_usd"] + call["included_usd"], 6)
+                    slot["list_usd"] = round(slot["list_usd"] + call["list_usd"], 6)
                     if call["model"]:
                         slot["models"].add(call["model"])
                 work = connection.execute(
@@ -597,7 +665,10 @@ def assemble_workflow(
                     {"i": work_id}).mappings().first()
                 if work:
                     step["work_status"] = work["status"]
-                    step["usd"] = _usage_usd(work["usage"])
+                    billed, inc, lst = _usage_split(work["usage"])
+                    step["usd"] = billed
+                    step["included_usd"] = inc
+                    step["list_usd"] = lst
                     model = _as_dict(work["usage"]).get("model")
                     # ONE LINE PER AGENT, and research and the panel are each one agent's
                     # work as far as the ledger is concerned: their services record a single
@@ -606,25 +677,32 @@ def assemble_workflow(
                     role = source["label"].lower()
                     slot = contributors.setdefault(
                         role, {"role": role, "calls": 0, "turns": 0, "usd": 0.0,
-                               "models": set()})
+                               "included_usd": 0.0, "list_usd": 0.0, "models": set()})
                     slot["calls"] += 1
-                    slot["usd"] = round(slot["usd"] + step["usd"], 4)
+                    slot["usd"] = round(slot["usd"] + billed, 6)
+                    slot["included_usd"] = round(slot["included_usd"] + inc, 6)
+                    slot["list_usd"] = round(slot["list_usd"] + lst, 6)
                     if model:
                         slot["models"].add(str(model))
         mine = own_calls.get(str(row["step_id"])) if not (source and work_id) else None
         if mine:
-            step["usd"] = round(mine["billed"], 4)
-            step["list_usd"] = round(mine["list"], 4)
+            step["usd"] = round(mine["billed"], 6)
+            step["included_usd"] = round(mine["included"], 6)
+            step["list_usd"] = round(mine["list"], 6)
             for call in mine["calls"]:
                 role = str(call["role"] or "unattributed")
                 slot = contributors.setdefault(
-                    role, {"role": role, "calls": 0, "turns": 0, "usd": 0.0, "models": set()})
+                    role, {"role": role, "calls": 0, "turns": 0, "usd": 0.0,
+                           "included_usd": 0.0, "list_usd": 0.0, "models": set()})
                 slot["calls"] += 1
-                slot["usd"] = round(slot["usd"] + call["usd"], 4)
+                slot["usd"] = round(slot["usd"] + call["usd"], 6)
+                slot["included_usd"] = round(slot["included_usd"] + call["included_usd"], 6)
+                slot["list_usd"] = round(slot["list_usd"] + call["list_usd"], 6)
                 if call["model"]:
                     slot["models"].add(str(call["model"]))
-        list_usd = round(list_usd + float(step.get("list_usd", step["usd"]) or 0), 4)
-        total_usd = round(total_usd + float(step["usd"] or 0), 4)
+        list_usd = round(list_usd + float(step.get("list_usd", step["usd"]) or 0), 6)
+        total_usd = round(total_usd + float(step["usd"] or 0), 6)
+        included_usd = round(included_usd + float(step.get("included_usd") or 0), 6)
         steps.append(step)
 
     work_ends = [r["completed_at"] for r in step_rows
@@ -646,9 +724,34 @@ def assemble_workflow(
     run_findings = workflow_findings(steps, host)
     product = _product_and_build(connection, project_id, steps)
 
+    # AA-H (BOSSAPP-1223): attach latest acceptance check + open findings ledger rows for v2 report.
+    acceptance_data: Optional[dict[str, Any]] = None
+    ledger_rows: list[dict[str, Any]] = []
+    build_info = product.get("build") or {}
+    try:
+        from .acceptance import report as _acc_report
+
+        acceptance_data = _acc_report.latest_for_run(
+            connection,
+            project_id,
+            workflow_run_id,
+            build_run_id=build_info.get("run_id"),
+            pr_url=build_info.get("pull_request_url"),
+        )
+        if acceptance_data:
+            ledger_rows = list(acceptance_data.get("open_rows") or [])
+    except Exception:  # noqa: BLE001 — v1 fallback still renders cleanly
+        acceptance_data = None
+        ledger_rows = []
+
+    steps_next = next_steps(product, run_findings, ledger_rows=ledger_rows)
+
     return {
+        "report_version": 2 if acceptance_data else 1,
+        "acceptance": acceptance_data,
+        "ledger": ledger_rows,
         "product": product,
-        "next_steps": next_steps(product, run_findings),
+        "next_steps": steps_next,
         "ok": True,
         "run_id": workflow_run_id,
         "workflow": run["workflow_name"] or run["workflow_key"],
@@ -664,11 +767,12 @@ def assemble_workflow(
         "working_minutes": round(working_s / 60, 1),
         "waiting_minutes": round(max(0.0, elapsed_s - stalled_s - working_s) / 60, 1),
         "total_usd": total_usd,
+        "included_usd": included_usd,
         "list_usd": list_usd,
         "steps": steps,
         "contributors": sorted(
             ({**c, "models": sorted(c["models"])} for c in contributors.values()),
-            key=lambda c: c["usd"], reverse=True),
+            key=lambda c: (c["usd"], c.get("included_usd", 0.0)), reverse=True),
         "host": host,
         "findings": run_findings,
     }
@@ -748,11 +852,53 @@ def workflow_markdown(report: dict[str, Any]) -> str:
     # slicing it produced "Build an incident timeline builder. Who it is for: an on-call
     # engineer writing the post-mortem the morning aft…" as an H1 — which names nothing and
     # reads as a broken sentence. The panel titles its PRD; use that when there is one.
+    def _money_str(billed_val: Any, included_val: Any = 0.0) -> str:
+        billed_f = float(billed_val or 0.0)
+        inc_f = float(included_val or 0.0)
+        if inc_f > 0:
+            return f"${billed_f:.2f} (${inc_f:.2f} included)"
+        return f"${billed_f:.2f}"
+
     directive = " ".join(str(report.get("directive") or "").split())
     title = product.get("name") or directive or report.get("workflow") or "Workflow run"
     lines += [f"# {title[:110]}{'…' if len(title) > 110 else ''}", ""]
     lines += [f"*{report.get('workflow')} · {report.get('status')} · "
-              f"{report.get('elapsed_minutes')} min · ${report.get('total_usd'):.2f}*", ""]
+              f"{report.get('elapsed_minutes')} min · "
+              f"{_money_str(report.get('total_usd'), report.get('included_usd'))}*", ""]
+
+    acceptance = report.get("acceptance")
+    ledger_rows = list(report.get("ledger") or [])
+    if isinstance(acceptance, Mapping) and acceptance:
+        from .acceptance import report as _acc_report
+
+        if not ledger_rows and isinstance(acceptance.get("open_rows"), list):
+            ledger_rows = list(acceptance["open_rows"])
+        banner = (
+            dict(acceptance["banner"])
+            if isinstance(acceptance.get("banner"), Mapping)
+            else _acc_report.verdict_banner(acceptance, open_rows=ledger_rows)
+        )
+        lines += [f"> {banner['headline']}", f"> {banner['detail']}", ""]
+
+        mh_table = _acc_report.must_haves_markdown(acceptance, ledger_rows=ledger_rows)
+        if mh_table:
+            lines += ["## Must-haves", "", mh_table, ""]
+
+        live_gaps = [r for r in ledger_rows
+                     if str(r.get("status") or "open") in ("open", "in_progress")]
+        if live_gaps:
+            lines += ["## Open gaps & tickets", ""]
+            for row in live_gaps:
+                sev = str(row.get("severity") or "major").upper()
+                key = str(row.get("key") or (f"F-{row['number']}" if row.get("number") else row.get("id") or ""))
+                tk = row.get("ticket") if isinstance(row.get("ticket"), Mapping) else None
+                tk_bit = (f" · [{tk['key']}]({tk['url']})" if tk and tk.get("key") and tk.get("url")
+                          else f" · {tk['key']}" if tk and tk.get("key") else "")
+                fu_bit = f" · follow-up `{row['followup_run_id']}`" if row.get("followup_run_id") else ""
+                lines.append(f"- **{key} [{sev}]** — {row.get('title') or ''}{tk_bit}{fu_bit}")
+            lines.append("")
+
+        lines += ["---", "", "*Details: what was done*", ""]
 
     # 1. WHAT IT IS — the panel's own summary, not the directive repeated back.
     if prd.get("summary"):
@@ -790,14 +936,44 @@ def workflow_markdown(report: dict[str, Any]) -> str:
     elif prd.get("journey"):
         lines += ["## How to use it", "", _trim(prd["journey"], 700), ""]
 
-    # 4. DOES IT WORK — the honest version, which is usually the useful one.
-    lines += ["## Does it work", ""]
+    # 4. HOW IT WAS CHECKED (v2) / DOES IT WORK (v1 fallback)
+    if isinstance(acceptance, Mapping) and acceptance:
+        lines += ["## How it was checked", ""]
+        cmds = list(acceptance.get("commands") or [])
+        probes_list = list(acceptance.get("probes") or [])
+        budget = acceptance.get("budget") if isinstance(acceptance.get("budget"), Mapping) else {}
+        replayed_n = sum(1 for i in (acceptance.get("items") or []) if i.get("replayed"))
+        acc_bits = [f"mode `{acceptance.get('mode') or 'static'}`",
+                    f"layer `{acceptance.get('layer') or 'step'}`"]
+        if cmds:
+            acc_bits.append(f"{len(cmds)} command(s) recorded")
+        if replayed_n:
+            acc_bits.append(f"{replayed_n} item(s) replayed")
+        elif probes_list:
+            acc_bits.append(f"{len(probes_list)} probe(s)")
+        if budget.get("usd") is not None:
+            acc_bits.append(f"budget ${float(budget['usd']):.2f}"
+                            + (f" / ${float(budget['limit_usd']):.2f}" if budget.get("limit_usd") else ""))
+        lines += ["**Acceptance.** " + " · ".join(acc_bits) + ".", ""]
+        if cmds:
+            lines += ["<details><summary>Recorded commands</summary>", ""]
+            for c in cmds[:40]:
+                cid = c.get("id") or "E?"
+                st_str = (f"HTTP {c['status']}" if c.get("kind") == "http" and c.get("status") is not None
+                          else f"exit {c.get('exit')}")
+                lines.append(f"- `{cid}` ({st_str}) `{c.get('cmd') or ''}`")
+            lines += ["", "</details>", ""]
+    else:
+        lines += ["## Does it work", ""]
+
     verdicts = build.get("verdicts") or {}
     if verdicts:
         lines += ["| Check | Verdict |", "| --- | --- |"]
         for label, key in (("Adversarial review", "review"), ("Security", "security"),
                            ("Consistency", "consistency")):
             lines.append(f"| {label} | {verdicts.get(key) or 'not recorded'} |")
+        if isinstance(acceptance, Mapping) and acceptance:
+            lines.append(f"| Acceptance | {acceptance.get('verdict') or 'not recorded'} |")
         lines.append("")
     if build.get("review_summary"):
         lines += ["**What the reviewer found.** " + build["review_summary"], ""]
@@ -808,8 +984,8 @@ def workflow_markdown(report: dict[str, Any]) -> str:
         lines += [f"**Tests.** {written} test file(s) written. "
                   f"Recorded verification: {ran}.", ""]
 
-    # 5. ACCEPTANCE CRITERIA — listed, never ticked without evidence.
-    if criteria:
+    # 5. ACCEPTANCE CRITERIA — v1 fallback only (v2 renders verified Must-haves at the top).
+    if criteria and not (isinstance(acceptance, Mapping) and acceptance):
         lines += ["## Acceptance criteria", ""]
         for item in criteria:
             lines.append(f"- **{item['id']}** — {item['text']}")
@@ -852,12 +1028,13 @@ def workflow_markdown(report: dict[str, Any]) -> str:
     lines += ["## Run facts", ""]
     lines.append(f"{done} of {len(report['steps'])} steps · "
                  f"{report['working_minutes']} min working of {report['elapsed_minutes']} "
-                 f"elapsed · ${report['total_usd']:.2f}")
+                 f"elapsed · {_money_str(report.get('total_usd'), report.get('included_usd'))}")
     lines.append("")
     if report.get("contributors"):
         lines += ["| Agent | Turns | Cost |", "| --- | --- | --- |"]
         for who in report["contributors"]:
-            lines.append(f"| {who['role']} | {who['turns'] or '—'} | ${who['usd']:.2f} |")
+            cost_cell = _money_str(who.get("usd"), who.get("included_usd"))
+            lines.append(f"| {who['role']} | {who['turns'] or '—'} | {cost_cell} |")
         lines.append("")
     auto = [f for f in findings if f["severity"] == "info"]
     for note in auto:
@@ -1114,17 +1291,34 @@ def _quality_followups(state: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         return None
 
 
-def next_steps(product: dict[str, Any], findings_so_far: list[dict[str, str]]
+def next_steps(product: dict[str, Any], findings_so_far: list[dict[str, str]],
+               *, ledger_rows: Optional[list[dict[str, Any]]] = None
                ) -> list[dict[str, str]]:
     """What to do next, ranked — P1 is "do not build on this until it is fixed".
 
     Derived, never invented. Every entry points at something recorded: a test file that was
     written and never run, a reviewer verdict that was not clean, a finding the build chose to
-    defer. The point of the ranking is that "what should I do next" has an answer that is not
-    an opinion.
+    defer, or an open findings-ledger row. The point of the ranking is that "what should I do
+    next" has an answer that is not an opinion.
     """
     build = product.get("build") or {}
     out: list[dict[str, str]] = []
+
+    for row in ledger_rows or []:
+        if str(row.get("status") or "open") not in ("open", "in_progress"):
+            continue
+        sev = str(row.get("severity") or "major").lower()
+        if sev == "nit":
+            continue
+        key = str(row.get("key") or (f"F-{row['number']}" if row.get("number") else row.get("id") or ""))
+        tk = row.get("ticket") if isinstance(row.get("ticket"), Mapping) else None
+        tk_suffix = f" ({tk['key']})" if tk and tk.get("key") else ""
+        out.append({
+            "priority": "P1" if sev in ("blocker", "major") or row.get("kind") == "acceptance_gap" else "P2",
+            "area": str(row.get("kind") or "acceptance"),
+            "item": f"{key}: {_trim(row.get('title'), 220)}{tk_suffix}",
+            "why": f"Open {sev} finding in the lineage ledger.",
+        })
 
     written = len(build.get("test_files") or [])
     commands = build.get("commands_run") or []

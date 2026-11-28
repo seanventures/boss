@@ -411,6 +411,38 @@ def _mkdirs(base: Path, rel: str) -> Path:
     return path
 
 
+def gradle_init_script(mirror: str) -> str:
+    """Gradle init script that redirects every MavenArtifactRepository to `mirror`."""
+    if any(ch in mirror for ch in ("\r", "\n", "\x00")):
+        raise ValueError("BOSS_MAVEN_MIRROR must not contain line breaks")
+    escaped = mirror.replace("\\", "\\\\").replace("'", "\\'").replace("$", "\\$")
+    insecure = (
+        "                repo.allowInsecureProtocol = true\n"
+        if mirror.startswith("http://") else ""
+    )
+    return (
+        "// Written by BOSS for this sandboxed run: redirect Maven repositories to BOSS's mirror.\n"
+        f"final String bossMirrorUrl = '{escaped}'\n"
+        "def bossConfigureRepos = { repos ->\n"
+        "    repos.withType(org.gradle.api.artifacts.repositories.MavenArtifactRepository).configureEach { repo ->\n"
+        "        def u = repo.url?.toString() ?: ''\n"
+        "        if (u.startsWith('http://') || u.startsWith('https://')) {\n"
+        "            repo.url = uri(bossMirrorUrl)\n"
+        f"{insecure}"
+        "        }\n"
+        "    }\n"
+        "}\n"
+        "allprojects {\n"
+        "    buildscript { bossConfigureRepos(repositories) }\n"
+        "    bossConfigureRepos(repositories)\n"
+        "}\n"
+        "gradle.settingsEvaluated { settings ->\n"
+        "    bossConfigureRepos(settings.pluginManagement.repositories)\n"
+        "    bossConfigureRepos(settings.dependencyResolutionManagement.repositories)\n"
+        "}\n"
+    )
+
+
 def write_proxy_config(home: Path, proxy_url: Optional[str]) -> bool:
     """Maven and Gradle ignore HTTPS_PROXY; give them the egress proxy in their own config
     files, in the run's HOME. No-op without Java or without a proxy."""
@@ -422,8 +454,14 @@ def write_proxy_config(home: Path, proxy_url: Optional[str]) -> bool:
     from .enterprise_network import maven_mirror
 
     trust = java_trust_store()
-    files = [(".m2/settings.xml", maven_settings_xml(*hp, mirror=maven_mirror(os.environ))),
+    mirror = maven_mirror(os.environ)
+    files = [(".m2/settings.xml", maven_settings_xml(*hp, mirror=mirror)),
              (".gradle/gradle.properties", gradle_properties(*hp, trust_store=trust))]
+    init_script = home / ".gradle" / "init.d" / "boss-mirror.gradle"
+    if mirror:
+        files.append((".gradle/init.d/boss-mirror.gradle", gradle_init_script(mirror)))
+    else:
+        init_script.unlink(missing_ok=True)
     if trust:
         files.append((".mavenrc", mavenrc(trust)))
     for rel, text in files:

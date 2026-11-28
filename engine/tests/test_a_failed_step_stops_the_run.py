@@ -365,6 +365,11 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
         monkeypatch.setattr(runner, "_architecture_step", lambda *a, **k: {
             "capability": "architecture", "tool": None, "status": "awaiting",
             "architecture_review_id": awaited_id})
+    if key == "acceptance":
+        # The acceptance check row it parks on is under test, not starting a sandbox job.
+        monkeypatch.setattr(runner, "_start_acceptance", lambda *a, **k: {
+            "capability": "acceptance", "tool": None, "status": "started",
+            "acceptance_check_id": awaited_id})
     # Deploy's "no preview, no deploy" guard is its own test; here the deployment is under test.
     monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
     table = runner._AWAIT_TABLES[kind][0]
@@ -633,7 +638,7 @@ def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
             "smoke_test": [
                 call("http_probe", {"url": f"http://127.0.0.1:{server.server_port}/"}),
                 call("http_probe", {"url": f"http://127.0.0.1:{dead_port}/", "timeout_s": 2}),
-                call("http_probe", {"url": "http://127.0.0.1:9/"}, edition="community"),
+                call("http_probe", {"url": "http://169.254.169.254/latest/meta-data/"}),
             ],
             # BOSSAPP-1143: cases that cannot run; a case the Down server fails; Community's refusal.
             "contract_test": [

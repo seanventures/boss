@@ -1073,6 +1073,7 @@ def seed_round_two(db, project_id: str, *, now: datetime | None = None,
         "SELECT c.id FROM code_task_runs c WHERE c.project_id = :p AND c.pull_request_number IS NOT NULL "
         "ORDER BY c.created_at LIMIT 1"), {"p": project_id}).scalar()
     if first:
+        db.execute(text("SET LOCAL boss.ledger_purge = 'on'"))
         db.execute(text("UPDATE llm_calls SET included_in_subscription = true WHERE code_task_run_id = :b"),
                    {"b": first})
         out["subscription_build"] = first

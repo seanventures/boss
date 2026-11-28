@@ -18,6 +18,7 @@ Three rules hold throughout, and they are the reason this module is small:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -33,6 +34,7 @@ from .secret_backends import (
     SecretUnavailable,
     backend_for,
     fingerprint_ssh_public_key,
+    put_owned,
     resolve_secret_ref,
 )
 
@@ -53,16 +55,29 @@ _KIND_MAP = {
 _SAFE_NAME = re.compile(r"[^A-Z0-9]+")
 
 
-def ref_key_for(scope_id: str, name: str) -> str:
-    """A deterministic, human-readable key inside the backend.
-
-    Deterministic so that re-uploading a rotated value lands on the same key rather than
-    orphaning the old one, and readable so an operator browsing the store can tell what a key
-    is for without consulting BOSS.
-    """
+def legacy_ref_key_for(scope_id: str, name: str) -> str:
+    """Pre-BOSSAPP-1489 non-injective key builder. Read-only for upgrade compatibility."""
     scope = _SAFE_NAME.sub("_", (scope_id or "").upper()).strip("_")
     field = _SAFE_NAME.sub("_", (name or "").upper()).strip("_")
     return f"BOSS_{scope}_{field}"
+
+
+def ref_key_for(scope_id: str, name: str) -> str:
+    """A deterministic, human-readable, INJECTIVE key inside the backend (BOSSAPP-1489).
+
+    Deterministic so that re-uploading a rotated value lands on the same key rather than
+    orphaning the old one, readable so an operator browsing the store can tell what a key
+    is for without consulting BOSS, and collision-free across punctuation/boundary variants
+    (e.g. ``acme`` vs ``acme-prod``, ``acme-prod`` vs ``acme_prod``, ``llm`` + ``gateway_x``
+    vs ``llm_gateway`` + ``x``) via a deterministic digest over the exact ``(scope_id, name)``
+    pair.
+    """
+    scope = _SAFE_NAME.sub("_", (scope_id or "").upper()).strip("_")
+    field = _SAFE_NAME.sub("_", (name or "").upper()).strip("_")
+    digest = hashlib.sha256(
+        f"{scope_id or ''}\x00{name or ''}".encode("utf-8")
+    ).hexdigest()[:10].upper()
+    return f"BOSS_{scope}_{field}_{digest}"
 
 
 def _metadata(material: str, kind: str, extra: Optional[dict] = None) -> dict[str, Any]:
@@ -94,7 +109,8 @@ def put_secret(connection, settings: Settings, *, project_id: str, name: str,
     key = ref_key_for(scope_id, name)
 
     impl = backend_for(backend, settings)
-    impl.put(key, value)          # the value leaves BOSS here and is not retained
+    owner_scope = f"{scope_type}:{scope_id}"
+    put_owned(impl, key, value, owner_scope=owner_scope)  # the value leaves BOSS here and is not retained
 
     meta = _metadata(value, secret_kind,
                      {"http_auth": bool(http_auth)} if http_auth is not None else None)

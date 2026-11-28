@@ -1,0 +1,33 @@
+schema: boss.customer_failure_record/v1
+id: helpdesk_deploy_res_db_eai_again
+recorded_at: "2026-10-16"
+source: retrospective
+title: Provisioned service DNS failure (EAI_AGAIN res-db) during deploy health classified as BOSS host wiring
+scrubbed: true
+symptom: >
+  Deploy health check timed out after 600s with "Error: getaddrinfo EAI_AGAIN res-db" and
+  triggered a pointless repair build against a working app.
+root_cause: >
+  The deployed app ran in its own compose project instead of sharing the provisioned resources'
+  network project, so res-db was unresolvable; stack_deploy must classify this as CAUSE_HOST, not CAUSE_APP.
+raw_evidence: |
+  Health check failed on deploy target at http://127.0.0.1:8000:
+  Error: getaddrinfo EAI_AGAIN res-db
+      at GetAddrInfoReqWrap.onlookup
+replay:
+  kind: stack_deploy_explain
+  target: boss_engine.services.stack_deploy.explain_failure
+  inputs:
+    step: health
+    returncode: 1
+    output: |
+      Error: getaddrinfo EAI_AGAIN res-db
+          at GetAddrInfoReqWrap.onlookup
+    host: "the deploy host"
+    url: "http://127.0.0.1:8000"
+  expected:
+    equals:
+      cause: host
+    contains:
+      headline: res-db
+      action: compose project

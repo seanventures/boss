@@ -108,16 +108,78 @@ def _registry_in_use(db: Any, org_id: str) -> bool:
     return db.execute(sql("SELECT 1 FROM github_repos WHERE org_id = :o LIMIT 1"), {"o": org_id}).first() is not None
 
 
-def refresh(db: Any, settings: Any, project_id: str, *, actor: str = "operator",
-            lister: Optional[Lister] = None) -> dict[str, Any]:
-    """Re-read what GitHub lists and upsert it. New rows start NOT allowed — except the first
-    refresh of an org, which allows every repository a project already uses (so turning the
-    registry on never takes a working repository away from anyone)."""
-    org_id = org_of_project(db, project_id)
-    if not org_id:
-        raise MultiRepoError(404, "unknown_project", "No such project.")
-    first = not _registry_in_use(db, org_id)
-    source, items = (lister or default_lister)(db, settings, org_id, project_id)
+def _list_from_app_inputs(db: Any) -> tuple[str, list[str], str]:
+    from ..identity import github_app, github_setup
+
+    default = str(github_setup.app_config(db).get("installation_id") or "")
+    inst_ids = github_setup.installation_ids(db) or [default]
+    jwt = github_app.app_jwt(db)
+    return default, inst_ids, jwt
+
+
+def _fetch_list_from_app(default: str, inst_ids: list[str], jwt: str) -> list[dict[str, Any]]:
+    from ..identity import github_app, github_setup
+
+    out: list[dict[str, Any]] = []
+    for inst in inst_ids:
+        try:
+            token = github_setup._mint_installation_token_all_with_jwt(jwt, inst or default)  # noqa: SLF001
+        except github_setup.GitHubSetupError:
+            if not inst or inst == default:
+                raise
+            continue
+        for page in range(1, 11):
+            resp = github_app._call("GET", f"/installation/repositories?per_page=100&page={page}",  # noqa: SLF001
+                                    token=token)
+            if resp.status != 200:
+                from ..services.failure_words import github_refusal
+
+                raise MultiRepoError(502, "github_unreachable",
+                                     github_refusal("the App's repositories", status=resp.status))
+            items = (resp.json() or {}).get("repositories") or []
+            out.extend(i for i in items if isinstance(i, dict))
+            if len(items) < 100:
+                break
+    return out
+
+
+def _list_from_org_token_inputs(db: Any, org_id: str) -> list[tuple[str, list[str]]]:
+    from ..identity import github_setup, vault
+
+    return [
+        (vault.org_github_token(tok["id"], db=db), list(tok["repos"][:200]))
+        for tok in github_setup.org_tokens(db, org_id)
+    ]
+
+
+def _fetch_list_from_org_tokens(tok_secrets: list[tuple[str, list[str]]]) -> list[dict[str, Any]]:
+    from ..identity import github_app
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for secret, repos in tok_secrets:
+        for full in repos:
+            if full.lower() in seen:
+                continue
+            seen.add(full.lower())
+            resp = github_app._call("GET", f"/repos/{full}", token=secret)  # noqa: SLF001
+            if resp.status == 200 and isinstance(resp.json(), dict):
+                out.append(resp.json())
+            else:
+                out.append({"full_name": full})
+    return out
+
+
+def _apply_refresh_writes(
+    db: Any,
+    project_id: str,
+    org_id: str,
+    source: str,
+    items: list[dict[str, Any]],
+    *,
+    first: bool,
+    actor: str,
+) -> dict[str, Any]:
     seen: set[str] = set()
     for item in items:
         full = str(item.get("full_name") or "").strip()
@@ -172,6 +234,58 @@ def refresh(db: Any, settings: Any, project_id: str, *, actor: str = "operator",
     event(db, project_id, "github.registry_refreshed", actor, "org", org_id,
           {"source": source, "listed": len(seen), "gone": len(gone)})
     return {"source": source, "listed": len(seen), "gone": len(gone), "first": first}
+
+
+def refresh(db: Optional[Any], settings: Any, project_id: str, *, actor: str = "operator",
+            lister: Optional[Lister] = None, db_engine: Any = None) -> dict[str, Any]:
+    """Re-read what GitHub lists and upsert it. New rows start NOT allowed — except the first
+    refresh of an org, which allows every repository a project already uses (so turning the
+    registry on never takes a working repository away from anyone)."""
+    if db is not None:
+        org_id = org_of_project(db, project_id)
+        if not org_id:
+            raise MultiRepoError(404, "unknown_project", "No such project.")
+        first = not _registry_in_use(db, org_id)
+        source, items = (lister or default_lister)(db, settings, org_id, project_id)
+        return _apply_refresh_writes(db, project_id, org_id, source, items, first=first, actor=actor)
+
+    if db_engine is None:
+        raise ValueError("refresh requires either db or db_engine")
+    from ..db import begin
+    from ..identity import github_setup
+
+    with begin(db_engine) as conn:
+        org_id = org_of_project(conn, project_id)
+        if not org_id:
+            raise MultiRepoError(404, "unknown_project", "No such project.")
+        first = not _registry_in_use(conn, org_id)
+        mode = ""
+        app_inputs = None
+        tok_secrets = None
+        if lister is None:
+            if github_setup.app_ready(conn, org_id):
+                mode = "app"
+                app_inputs = _list_from_app_inputs(conn)
+            elif github_setup.org_token(conn, org_id) is not None:
+                mode = "token"
+                tok_secrets = _list_from_org_token_inputs(conn, org_id)
+            else:
+                raise MultiRepoError(
+                    409, "github_not_connected",
+                    "Connect GitHub first (Setup › GitHub access): the registry lists what the "
+                    "GitHub App can reach.")
+
+    if lister is not None:
+        source, items = lister(None, settings, org_id, project_id)
+    elif mode == "app":
+        assert app_inputs is not None
+        source, items = "app", _fetch_list_from_app(*app_inputs)
+    else:
+        assert tok_secrets is not None
+        source, items = "token", _fetch_list_from_org_tokens(tok_secrets)
+
+    with begin(db_engine) as conn:
+        return _apply_refresh_writes(conn, project_id, org_id, source, items, first=first, actor=actor)
 
 
 def _used_full_names(db: Any, org_id: str) -> set[str]:

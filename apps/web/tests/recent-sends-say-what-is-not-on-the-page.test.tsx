@@ -14,7 +14,7 @@ import { $, click, mount, unmount } from "./_helpers/live-render";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const box = vi.hoisted(() => ({ rows: [] as Notification[] & { capped: boolean } }));
+const box = vi.hoisted(() => ({ rows: Object.assign([] as Notification[], { capped: false }) }));
 
 vi.mock("../lib/monitoring", async () => {
   const actual = await vi.importActual<typeof import("../lib/monitoring")>("../lib/monitoring");
@@ -45,7 +45,7 @@ function rows(count: number, over: Partial<Notification> = {}, capped = false): 
 
 async function open(list: Notification[] & { capped: boolean }): Promise<void> {
   box.rows = list;
-  await mount(<NotifyTab projectId="p1" actor="ceo" />);
+  await mount(<NotifyTab {...({ projectId: "p1", actor: "ceo" } as unknown as Parameters<typeof NotifyTab>[0])} />);
   await click($("[data-testid='obs-sends-toggle']"));
 }
 

@@ -13,21 +13,21 @@ from boss_engine.services import deploy_service, deployment_connectors
 HOME = "boss-dogfood"
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "enterprise_self_hosted"])
 def test_direct_community_ssh_helper_blocks_before_host_calls(monkeypatch, edition):
     effects = []
     monkeypatch.setattr(
         deploy_service, "_ssh", lambda *_args, **_kwargs: effects.append("ssh")
     )
-    settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=True)
-    with pytest.raises(PermissionError, match="Community SSH deployment"):
+    settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=False)
+    with pytest.raises(PermissionError, match="BOSS_SSH_HOST_DEPLOY_ALLOWED"):
         deploy_service.deploy_ssh(
             object(), settings, "crun_direct", host="203.0.113.19", user="root"
         )
     assert effects == []
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "enterprise_self_hosted"])
 def test_community_ssh_deploy_never_bootstraps_or_writes_host(
     engine, monkeypatch, edition,
 ):
@@ -58,7 +58,7 @@ def test_community_ssh_deploy_never_bootstraps_or_writes_host(
             engine, api_main.settings, candidate, "crun_unconfigured", {}
         )
         assert result["status"] == "blocked"
-        assert "Community SSH deployment" in result["problems"][0]
+        assert "approved Resource Plane ChangeSet" in result["problems"][0]
     assert effects == []
 
 
@@ -133,8 +133,8 @@ def test_community_ssh_plan_records_blocked_decision_before_build(
         headers={"Authorization": f"Bearer {key}"},
         json={"actor": "ceo", "mode": "ssh", "host": "203.0.113.17"},
     )
-    assert direct.status_code == 409, direct.text
-    assert "Community SSH deployment" in direct.text
+    assert direct.status_code == 403, direct.text
+    assert "BOSS_SSH_HOST_DEPLOY_ALLOWED" in direct.text
     invalid_mode = client.post(
         f"/v1/code-tasks/{code_run_id}/deploy",
         headers={"Authorization": f"Bearer {key}"},

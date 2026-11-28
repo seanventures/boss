@@ -19,11 +19,14 @@ from typing import Any, Callable, Mapping, Optional
 from .classifier import CLASSIFIER, Classification, Classifier, TaskSignal
 from .escalation import EscalationLedger
 from .headroom import Headroom
-from .policy import LOCAL_ENGINES, RoutingPolicy, Target, model_tier, tier_model
+from .outcomes import format_priors_for_classifier, recommend_from_priors
+from .policy import (
+    LOCAL_ENGINES, RoutingPolicy, Target, default_strong_model, model_tier,
+)
 from .selection import METERED_KINDS, SourceState, engine_label, select, tier_of
 from .tiers import (
-    BALANCED, CODING_STEPS, FRONTIER, LEGACY_CLASS, MECHANICAL_STEPS, TIER_LABELS, TIERS,
-    at_least, down, job_for, rank, step_label,
+    BALANCED, CODING_STEPS, FAST, FAST_SHADOW_STAGES, FRONTIER, LEGACY_CLASS, MECHANICAL_STEPS,
+    TIER_LABELS, TIERS, at_least, down, job_for, rank, step_label,
 )
 
 KINDS = ("build_stage", "workflow_step", "agent", "chat", "decision", "panel", "research")
@@ -87,11 +90,47 @@ class RouteRequest:
     #: raise it. Fixed: the legacy engine's model at that tier when the policy or the engine
     #: names one, else the legacy model as it was.
     tier: Optional[str] = None
+    #: BOSSAPP-780: warm session context size (tokens), whether a same-model warm fix was already
+    #: tried, and the current effort level — for cache-aware escalation and effort-first lever.
+    warm_context_tokens: int = 0
+    warm_fix_attempted: bool = False
+    current_effort: Optional[str] = None
+    #: BOSSAPP-781: repository full name (optional) for repo-scoped outcome priors.
+    repo: Optional[str] = None
 
-    def signal(self) -> TaskSignal:
+    def signal(self, *, prior_hint: str = "") -> TaskSignal:
         return TaskSignal(kind=self.kind, step=self.step, text=self.text,
                           task_kind=self.task_kind, repo_files=self.repo_files,
-                          risk_tier=self.risk_tier, spec=self.spec)
+                          risk_tier=self.risk_tier, spec=self.spec,
+                          prior_hint=prior_hint)
+
+
+@dataclass(frozen=True)
+class ShadowDecision:
+    """Counterfactual Smart (or Fast-stage) route logged alongside the acting decision without
+    affecting execution (BOSSAPP-779 / BOSSAPP-781)."""
+
+    tier: str
+    engine: str
+    model: Optional[str]
+    reason: str
+    classified_tier: Optional[str] = None
+    classifier: Optional[str] = None
+    confidence: Optional[float] = None
+    rules: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tier": self.tier,
+            "tier_label": TIER_LABELS.get(self.tier, self.tier),
+            "engine": self.engine,
+            "model": self.model,
+            "reason": self.reason,
+            "classified_tier": self.classified_tier,
+            "classifier": self.classifier,
+            "confidence": round(self.confidence, 3) if self.confidence is not None else None,
+            "rules": list(self.rules),
+        }
 
 
 @dataclass(frozen=True)
@@ -129,6 +168,12 @@ class RouteDecision:
     #: A refusal that is only temporary (a source's breaker is open): ask again in this long.
     #: A build stage waits and asks again (failover.wait_for_route) instead of failing.
     retry_after_s: Optional[float] = None
+    #: BOSSAPP-780: optional per-stage effort lever and cache-loss pricing on escalation.
+    effort: Optional[str] = None
+    escalation_strategy: Optional[str] = None
+    cache_loss_usd_micros: Optional[int] = None
+    #: BOSSAPP-779/781: counterfactual Smart (or Fast-stage) decision logged without acting.
+    shadow: Optional[ShadowDecision] = None
 
     @property
     def label(self) -> str:
@@ -159,6 +204,10 @@ class RouteDecision:
             "latency_ms": round(self.latency_ms, 3), "headroom": dict(self.headroom or {}),
             "refused": self.refused, "refusal": self.refusal, "binding": self.binding,
             "retry_after_s": self.retry_after_s,
+            "effort": self.effort,
+            "escalation_strategy": self.escalation_strategy,
+            "cache_loss_usd_micros": self.cache_loss_usd_micros,
+            "shadow": self.shadow.to_dict() if self.shadow else None,
         }
 
 
@@ -178,6 +227,8 @@ class Snapshot:
     #: Builds the Jev decider / cheap-model decider on demand (store wires them).
     jev_factory: Optional[Callable[[], Any]] = None
     model_factory: Optional[Callable[[], Any]] = None
+    #: BOSSAPP-781: empirical stage-outcome priors keyed by (task_type, stage, tier).
+    outcome_priors: Mapping[tuple[str, str, str], Any] = field(default_factory=dict)
 
 
 def _parse_pin(value: Any, default_engine: Optional[str]) -> Optional[Target]:
@@ -211,13 +262,41 @@ class Router:
         started = time.perf_counter()
         mode = (request.mode_override or snapshot.policy.mode or "fixed").lower()
         agent_mode = _agent_mode(request)
-        if mode != "smart" and agent_mode not in ("local", "pinned"):
+        agent_harness = _agent_harness(request)
+        if mode == "shadow" and agent_mode not in ("local", "pinned") and not agent_harness:
+            # SHADOW MODE (BOSSAPP-779): act strictly on the Fixed decision (zero behavioral risk),
+            # while computing and logging the counterfactual Smart decision beside it.
+            decision = _with(self._fixed(request, snapshot), mode="shadow")
+            try:
+                smart_cf = self._smart(request, snapshot, ledger)
+                shadow = ShadowDecision(
+                    tier=smart_cf.tier,
+                    engine=smart_cf.engine,
+                    model=smart_cf.model,
+                    reason=smart_cf.reason,
+                    classified_tier=smart_cf.classified_tier,
+                    classifier=smart_cf.classification.classifier
+                    if smart_cf.classification else None,
+                    confidence=smart_cf.classification.confidence
+                    if smart_cf.classification else None,
+                    rules=smart_cf.rules,
+                )
+                note = (f"Shadow Smart would pick: {TIER_LABELS.get(shadow.tier, shadow.tier)} · "
+                        f"{smart_cf.label}")
+                decision = _with(
+                    decision, shadow=shadow,
+                    why=(*decision.why, note),
+                    rules=(*decision.rules, "shadow"),
+                )
+            except Exception:  # noqa: BLE001 — shadow failure must never break Fixed execution
+                decision = _with(decision, rules=(*decision.rules, "shadow_fallback"))
+        elif mode != "smart" and agent_mode not in ("local", "pinned") and not agent_harness:
             decision = self._fixed(request, snapshot)
         else:
             decision = self._smart(request, snapshot, ledger)
             if mode != "smart":
-                # LOCAL MEANS LOCAL, IN FIXED MODE TOO: an Agent Studio Local/Pinned policy is
-                # obeyed whatever the routing mode (Decision 15).
+                # LOCAL MEANS LOCAL, IN FIXED MODE TOO: an Agent Studio Local/Pinned policy
+                # (including a pinned harness/engine, BOSSAPP-938) is obeyed in both Fixed and Smart.
                 decision = _with(decision, mode="fixed", binding=True,
                                  rules=decision.rules + ("agent_policy",))
         decision = _with(decision, latency_ms=(time.perf_counter() - started) * 1000,
@@ -235,6 +314,18 @@ class Router:
         model = legacy.model
         why = [f"Fixed: {legacy.why}"]
         rules: tuple[str, ...] = ("fixed",)
+        # BOSSAPP-779: bind the `strong` lane to a real frontier model by default so review and
+        # security floors hold in Fixed mode too (preventing 0-Opus reviews when strong_model is
+        # unset). Explicit pins (legacy.model already set) are preserved unchanged.
+        if not model and legacy.model_class == "strong" and legacy.engine:
+            from .compat import fits
+
+            frontier_default = default_strong_model(legacy.engine, snapshot.policy)
+            if frontier_default and fits(legacy.engine, frontier_default):
+                model = frontier_default
+                why.append(f"Strong lane bound to frontier default: "
+                           f"{engine_label(legacy.engine)} · {frontier_default}")
+                rules += ("strong_lane_frontier",)
         if request.tier in TIERS and legacy.engine:
             from .selection import _model_on
 
@@ -271,11 +362,14 @@ class Router:
         rules: list[str] = []
         job = job_for(request.kind, request.step)
 
-        # (a) what the task needs
+        # (a) what the task needs (with empirical outcome priors fed to classifier context)
         jev = snapshot.jev_factory() if (snapshot.jev_state == "ready"
                                           and snapshot.jev_factory) else None
-        c = self.classifier.classify(request.signal(), policy.classifier, jev=jev,
-                                     jev_state=snapshot.jev_state,
+        prior_hint = (format_priors_for_classifier(
+            snapshot.outcome_priors, step=request.step, task_type=request.task_kind)
+            if policy.use_outcome_priors and snapshot.outcome_priors else "")
+        c = self.classifier.classify(request.signal(prior_hint=prior_hint), policy.classifier,
+                                     jev=jev, jev_state=snapshot.jev_state,
                                      model=snapshot.model_factory)
         tier = c.tier
         judge = {"rules": "built-in rules", "jev": "Jev", "model": "a Fast model"}.get(
@@ -305,6 +399,16 @@ class Router:
             floor = max((f.tier for f in floors), key=rank)
         if c.sensitive and request.kind != "chat":
             floor = FRONTIER if not floor else max((floor, FRONTIER), key=rank)
+        # (b2) empirical stage-outcome priors (BOSSAPP-781): route down where a cheaper tier holds
+        # pass rate, up where the current tier underperforms — never below floors or sensitive work.
+        if policy.use_outcome_priors and snapshot.outcome_priors and request.tier is None:
+            rec = recommend_from_priors(
+                snapshot.outcome_priors, step=request.step, task_type=request.task_kind,
+                current_tier=tier, sensitive=c.sensitive, floor=floor)
+            if rec is not None and rec.to_tier != tier:
+                why.append(rec.reason)
+                rules.append(f"outcome_prior:{rec.direction}")
+                tier = rec.to_tier
         if floor and rank(floor) > rank(tier):
             top = max(floors, key=lambda f: rank(f.tier)) if floors else None
             why.append(f"Floor: {top.describe()} ≥ {TIER_LABELS[floor]}" if top is not None
@@ -323,17 +427,50 @@ class Router:
                 rules.append("budget")
                 tier, budget_lite = lowered, True
 
-        # (d) escalation, at this boundary
+        # (d) escalation, at this boundary (BOSSAPP-780: cache-aware warm fix & effort lever)
         escalation = None
+        effort: Optional[str] = None
+        escalation_strategy: Optional[str] = None
+        cache_loss_usd_micros: Optional[int] = None
         if ledger is not None:
             aliases = request.aliases or (tuple(CODING_STEPS - {request.step})
                                           if request.step in CODING_STEPS else ())
-            escalation = ledger.escalate(request.step, tier, policy.escalation,
-                                         steps_alias=aliases)
-            if escalation is not None:
-                why.append(f"Escalated: {escalation.describe()}")
-                rules.append(f"escalation:{escalation.signal}")
-                tier = escalation.tier
+            if request.warm_context_tokens > 0 or request.current_effort is not None:
+                cur_targets = policy.targets(tier)
+                nxt_targets = policy.targets(FRONTIER)
+                plan = ledger.plan_escalation(
+                    request.step, tier, policy.escalation,
+                    steps_alias=aliases,
+                    warm_context_tokens=request.warm_context_tokens,
+                    warm_fix_attempted=request.warm_fix_attempted,
+                    current_effort=request.current_effort,
+                    current_model=(cur_targets[0].model or "") if cur_targets else "",
+                    target_model=(nxt_targets[0].model or "") if nxt_targets else "",
+                )
+                if plan.action in ("warm_fix", "effort_bump"):
+                    effort = plan.effort
+                    escalation_strategy = plan.action
+                    cache_loss_usd_micros = 0
+                    why.append(plan.reason)
+                    rules.append(f"escalation:{plan.action}")
+                elif plan.action == "tier_escalation" and plan.escalation is not None:
+                    escalation = plan.escalation
+                    effort = plan.effort
+                    escalation_strategy = "tier_escalation"
+                    cache_loss_usd_micros = plan.cache_loss_usd_micros
+                    why.append(f"Escalated: {escalation.describe()}"
+                               + (f" (cache switch ~${cache_loss_usd_micros / 1e6:.3f})"
+                                  if cache_loss_usd_micros else ""))
+                    rules.append(f"escalation:{escalation.signal}")
+                    tier = escalation.tier
+            else:
+                escalation = ledger.escalate(request.step, tier, policy.escalation,
+                                             steps_alias=aliases)
+                if escalation is not None:
+                    escalation_strategy = "tier_escalation"
+                    why.append(f"Escalated: {escalation.describe()}")
+                    rules.append(f"escalation:{escalation.signal}")
+                    tier = escalation.tier
 
         # Pins (Decision 5). HARD: the session's own model, a task pin, an agent pin, a job
         # marked "Always use". SOFT (a preference): any other job pin, a profile's step pin —
@@ -358,6 +495,7 @@ class Router:
                 why.append(f"The session's model can't run now ({problem}); a new session")
                 rules.append("session_broken")
         agent_mode = _agent_mode(request)
+        agent_harness = _agent_harness(request)
         if hard is not None:
             pass
         elif request.task_pin and request.task_pin.engine:
@@ -365,18 +503,37 @@ class Router:
             engine_pin = None if hard else request.task_pin.engine
             why.append(f"Pinned on the task: {engine_label(request.task_pin.engine)}")
             rules.append("pin:task")
-        elif agent_mode == "pinned":
-            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"),
-                                (snapshot.job_pins.get(job) or ("claude_code", None))[0])
-            if pinned and pinned.engine:
+        elif agent_mode == "pinned" or (agent_harness and agent_mode != "local"):
+            default_eng = agent_harness or (snapshot.job_pins.get(job) or ("claude_code", None))[0]
+            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"), default_eng)
+            if agent_harness and pinned and pinned.model:
+                hard = Target(agent_harness, pinned.model)
+                why.append(
+                    f"Pinned on the agent: {engine_label(agent_harness)} · {pinned.model}"
+                )
+                rules.extend(["pin:agent", "pin:agent_harness"])
+            elif agent_harness:
+                engine_pin = agent_harness
+                why.append(f"Pinned harness on the agent: {engine_label(agent_harness)}")
+                rules.append("pin:agent_harness")
+            elif pinned and pinned.engine:
                 hard = pinned if pinned.model else None
                 engine_pin = None if hard else pinned.engine
-                why.append("Pinned on the agent")
+                why.append(
+                    f"Pinned on the agent: {engine_label(pinned.engine)}"
+                    + (f" · {pinned.model}" if pinned.model else "")
+                )
                 rules.append("pin:agent")
         elif agent_mode == "local":
             allowed, strict = set(LOCAL_ENGINES), True
-            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"), None)
-            if pinned and pinned.engine in LOCAL_ENGINES:
+            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"), agent_harness)
+            if agent_harness and agent_harness in LOCAL_ENGINES:
+                if pinned and pinned.model:
+                    hard = Target(agent_harness, pinned.model)
+                else:
+                    engine_pin = agent_harness
+                rules.append("pin:agent_harness")
+            elif pinned and pinned.engine in LOCAL_ENGINES:
                 hard = pinned if pinned.model else None
                 engine_pin = None if hard else pinned.engine
             why.append("The agent runs on local models only")
@@ -481,6 +638,20 @@ class Router:
         # THE RECORD NEVER DISAGREES WITH THE MODEL: whatever chose it (a pin, a session, a
         # preference, a stand-in), the route is recorded at the model's own tier when known.
         tier = tier_of(policy, target.engine, target.model, tier) or tier
+        # BOSSAPP-781: shadow-evaluate Fast tier on mechanical stages (standards, plan, check_tests)
+        # without acting on it, so projected savings can be measured before promoting.
+        fast_shadow: Optional[ShadowDecision] = None
+        if (policy.fast_stage_shadow and request.step in FAST_SHADOW_STAGES
+                and tier != FAST and not c.sensitive):
+            fast_pick = select(FAST, policy, snapshot.sources, allowed=allowed,
+                               no_metered=no_metered, strict=strict, local_ok=local_ok)
+            if fast_pick.target is not None:
+                fast_shadow = ShadowDecision(
+                    tier=FAST, engine=fast_pick.target.engine, model=fast_pick.target.model,
+                    reason=f"Shadow Fast candidate for mechanical stage ({request.step})",
+                    classified_tier=c.tier, classifier=c.classifier, confidence=c.confidence,
+                    rules=("fast_stage_shadow",),
+                )
         picked = f"{TIER_LABELS[tier]} · {engine_label(target.engine)}" + (
             f" · {target.model}" if target.model else "")
         reason = picked + " — " + _headline(why, c)
@@ -495,7 +666,10 @@ class Router:
             role=request.role, unit_id=request.unit_id,
             project_id=request.project_id or snapshot.project_id, fallback=fallback,
             moved_by_headroom=moved, budget_lite=budget_lite,
-            headroom=state.headroom.to_dict() if state else None)
+            headroom=state.headroom.to_dict() if state else None,
+            effort=effort, escalation_strategy=escalation_strategy,
+            cache_loss_usd_micros=cache_loss_usd_micros,
+            shadow=fast_shadow)
 
     def _remember(self, decision: RouteDecision) -> RouteDecision:
         """The same answer for the same unit and step keeps its route id: one record per
@@ -516,6 +690,13 @@ class Router:
 
 def _agent_mode(request: RouteRequest) -> str:
     return str((request.agent_policy or {}).get("selection_mode") or "router").lower()
+
+
+def _agent_harness(request: RouteRequest) -> Optional[str]:
+    """Pinned engine/harness on an Agent Studio role policy (BOSSAPP-938)."""
+    policy = request.agent_policy or {}
+    raw = str(policy.get("pinned_harness") or policy.get("pinned_engine") or "").strip().lower()
+    return raw or None
 
 
 def _blocked(target: Target, snapshot: Snapshot, *, no_metered: bool = False) -> Optional[str]:

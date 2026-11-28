@@ -559,3 +559,188 @@ def test_plane_intake_adapter_verify_parse_and_enrich(monkeypatch):
     ev = adapter.enrich(enriched_conn, ev)
     assert ev.data["ticket"]["key"] == "BOSSAPP-1103"
     assert ev.data["labels"] == ["boss"]
+
+
+def test_teams_intake_adapter_verify_loop_and_parse(monkeypatch):
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+    from boss_engine.connectors.intake.teams import adapter as teams_mod
+
+    priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(priv.public_key()))
+    pub_jwk["kid"] = "bf-test-kid"
+    pub_jwk["use"] = "sig"
+    pub_jwk["alg"] = "RS256"
+
+    teams_mod.reset_jwks_cache()
+    monkeypatch.setattr(
+        teams_mod,
+        "OIDC_FETCHER",
+        lambda url: {"jwks_uri": "https://login.botframework.com/.well-known/keys"}
+        if "openid" in url
+        else {"keys": [pub_jwk]},
+    )
+
+    adapter = get_intake_adapter("teams")
+    conn = IntakeConnection(
+        "icn_teams", "p_1", "teams",
+        config={"app_id": "app-teams-1", "tenant_id": "tenant-1", "chat_endpoint_id": "cep_teams_1"},
+    )
+    payload = {
+        "type": "message",
+        "id": "act-123",
+        "timestamp": "2026-11-25T10:00:00Z",
+        "serviceUrl": "https://smba.trafficmanager.net/amer/",
+        "channelId": "msteams",
+        "from": {"id": "29:user-1", "name": "Priya", "aadObjectId": "oid-123"},
+        "conversation": {"id": "19:chan-1@thread.tacv2", "tenantId": "tenant-1"},
+        "recipient": {"id": "28:app-teams-1", "name": "BOSS"},
+        "text": "<at>BOSS</at> check status",
+        "entities": [{"type": "mention", "mentioned": {"id": "28:app-teams-1"}, "text": "<at>BOSS</at>"}],
+    }
+    raw = json.dumps(payload).encode("utf-8")
+    now = time.time()
+    token = jwt.encode(
+        {
+            "iss": "https://api.botframework.com",
+            "aud": "app-teams-1",
+            "nbf": int(now) - 30,
+            "exp": int(now) + 300,
+            "serviceurl": "https://smba.trafficmanager.net/amer/",
+        },
+        priv.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ),
+        algorithm="RS256",
+        headers={"kid": "bf-test-kid"},
+    )
+    req = RawRequest("POST", {"authorization": f"Bearer {token}", "content-type": "application/json"}, raw)
+    assert adapter.verify(conn, req, now).scheme == "teams_oidc_jwt"
+    assert adapter.dedupe_key(conn, req) == "teams:19:chan-1@thread.tacv2:act-123"
+
+    # Two channels with the same millisecond activity id never collide.
+    other_conv = dict(payload, conversation={"id": "19:chan-2@thread.tacv2", "tenantId": "tenant-1"})
+    other_req = RawRequest("POST", req.headers, json.dumps(other_conv).encode("utf-8"))
+    assert adapter.dedupe_key(conn, other_req) == "teams:19:chan-2@thread.tacv2:act-123"
+    assert adapter.dedupe_key(conn, other_req) != adapter.dedupe_key(conn, req)
+
+    # Disallowed OIDC metadata URL (non-HTTPS, non-loopback) is refused before fetch.
+    bad_oidc_conn = IntakeConnection(
+        "icn_teams_bad", "p_1", "teams",
+        config={"app_id": "app-teams-1", "oidc_config_url": "http://evil.example/openid"},
+    )
+    with pytest.raises(VerifyRefused, match="not_configured"):
+        adapter.verify(bad_oidc_conn, req, now)
+
+    # Activity naming a serviceUrl when the token omits serviceurl/serviceUrl is refused.
+    no_svc_token = jwt.encode(
+        {"iss": "https://api.botframework.com", "aud": "app-teams-1",
+         "nbf": int(now) - 30, "exp": int(now) + 300},
+        priv.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ),
+        algorithm="RS256",
+        headers={"kid": "bf-test-kid"},
+    )
+    with pytest.raises(VerifyRefused, match="bad_signature"):
+        adapter.verify(
+            conn,
+            RawRequest("POST", {"authorization": f"Bearer {no_svc_token}"}, raw),
+            now,
+        )
+
+    with pytest.raises(VerifyRefused, match="missing_signature"):
+        adapter.verify(conn, RawRequest("POST", {}, raw), now)
+
+    # TeamsChat host/scheme guard and path segment escaping.
+    from boss_engine.services import chat_adapters as ca
+
+    assert ca._teams_service_url_allowed("https://smba.trafficmanager.net/amer/", {}) is True
+    assert ca._teams_service_url_allowed("http://smba.trafficmanager.net/amer/", {}) is False
+    assert ca._teams_service_url_allowed("https://evil.example/", {}) is False
+    assert ca._teams_service_url_allowed("http://127.0.0.1:9999", {"service_url": "http://127.0.0.1:9999"}) is True
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_transport(method, url, headers, body, purpose):
+        calls.append((method, url))
+        if purpose == "chat.teams.token":
+            return 200, {"access_token": "tok_test"}
+        return 201, {"id": "act-out-1"}
+
+    monkeypatch.setattr(ca, "TRANSPORT", fake_transport)
+    receipt = ca.TeamsChat().send_with_config(
+        "secret",
+        {"op": "stream_start", "channel": "19:chan-1@thread.tacv2", "thread": "17:act/1", "text": "hi"},
+        {"app_id": "app-1", "tenant_id": "ten-1", "service_url": "https://smba.trafficmanager.net/amer/"},
+    )
+    assert receipt["channel"] == "19:chan-1@thread.tacv2"
+    assert receipt["thread"] == "17:act/1"
+    assert any("19%3Achan-1%40thread.tacv2" in url for _, url in calls)
+
+    [ev] = adapter.parse(conn, _stored(req, adapter, conn))
+    assert ev.type == "com.microsoft.teams.message.mention"
+    assert ev.bossactor.external_id == "29:user-1"
+    assert ev.data["text"] == "check status"
+    assert adapter.conversation_key(conn, ev) == "19:chan-1@thread.tacv2/act-123"
+    assert adapter.is_self(conn, ev) is False
+
+    echo = dict(payload, channelData={"boss": {"endpoint_id": "cep_teams_1", "run_id": "r1", "hops": 1}})
+    echo_req = RawRequest("POST", {"authorization": f"Bearer {token}"}, json.dumps(echo).encode("utf-8"))
+    [echo_ev] = adapter.parse(conn, _stored(echo_req, adapter, conn))
+    assert adapter.is_self(conn, echo_ev) is True
+
+    bot_echo = dict(payload, **{"from": {"id": "28:app-teams-1", "name": "BOSS", "role": "bot"}})
+    bot_echo_req = RawRequest("POST", {"authorization": f"Bearer {token}"}, json.dumps(bot_echo).encode("utf-8"))
+    [bot_echo_ev] = adapter.parse(conn, _stored(bot_echo_req, adapter, conn))
+    assert adapter.is_self(conn, bot_echo_ev) is True
+
+
+def test_servicenow_intake_adapter_verify_parse_and_self_loop():
+    adapter = get_intake_adapter("servicenow")
+    sec = "whsec_" + base64.b64encode(b"z" * 32).decode("ascii")
+    conn = IntakeConnection(
+        "icn_sn", "p_1", "servicenow",
+        config={"instance_url": "https://dev99999.service-now.com", "service_account": "boss.bot"},
+        secret_resolver=lambda k: sec if k == "signing_secret" else None,
+    )
+    body = {
+        "table": "incident",
+        "sys_id": "sn_1",
+        "number": "INC0001",
+        "short_description": "Disk full",
+        "sys_updated_on": "2026-11-25 10:00:00",
+        "sys_updated_by": "alex",
+        "sys_mod_count": "1",
+    }
+    raw = json.dumps(body).encode("utf-8")
+    msg_id = "msg_sn_1"
+    ts = str(int(time.time()))
+    from boss_engine.connectors.intake.webhook.adapter import standard_webhooks_signature
+
+    req = RawRequest(
+        "POST",
+        {
+            "webhook-id": msg_id,
+            "webhook-timestamp": ts,
+            "webhook-signature": standard_webhooks_signature(sec, msg_id, ts, raw),
+        },
+        raw,
+    )
+    assert adapter.verify(conn, req, time.time()).scheme == "servicenow_standard_webhooks"
+    assert adapter.dedupe_key(conn, req) == "servicenow:msg_sn_1"
+    [ev] = adapter.parse(conn, _stored(req, adapter, conn))
+    assert ev.type == "com.servicenow.incident.updated"
+    assert ev.data["head_key"] == "servicenow:incident:sn_1:1"
+    assert adapter.conversation_key(conn, ev) == "servicenow:incident:sn_1"
+    assert adapter.is_self(conn, ev) is False
+
+    self_body = dict(body, sys_updated_by="boss.bot")
+    [self_ev] = adapter.parse(conn, _stored(RawRequest("POST", req.headers, json.dumps(self_body).encode("utf-8")), adapter, conn))
+    assert adapter.is_self(conn, self_ev) is True
+

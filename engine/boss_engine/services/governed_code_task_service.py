@@ -2260,23 +2260,43 @@ def _app_run_declarations(engine, run: dict) -> tuple[dict, dict]:
         return {}, {}
 
 
-def _precheck_app_env(engine, run: dict, root, changed: list) -> Optional[dict]:
+def _precheck_app_env(engine, run: dict, root, changed: list, *, app_map: Any = None,
+                      require_map: bool = False) -> Optional[dict]:
     """Run the pre-check's app_env checks on the build's tree and record them as
-    `code_task.precheck_app_env` (services.workflow_precheck). Never raises."""
+    `code_task.precheck_app_env` (services.workflow_precheck). Resolves the app directory via
+    the canonical App Map (BOSSAPP-555) rather than ad-hoc root fallbacks. Never raises."""
     from pathlib import Path as _Path
 
     from ..templates import gate as template_gate
-    from . import workflow_precheck
-    from .preview_service import find_run_declaration
+    from . import app_map as _app_map, workflow_precheck
+    from .verification_target import app_scope
 
     try:
         base = _Path(str(root))
-        declared = find_run_declaration(base, [str(c) for c in changed or []])
-        if declared:
-            app_dir = base if declared[0] in ("", ".") else base / declared[0]
-        else:
-            pkgs = sorted(str(c) for c in changed or [] if str(c).endswith("package.json"))
-            app_dir = (base / pkgs[0]).parent if pkgs else base
+        spec = (run or {}).get("spec") if isinstance((run or {}).get("spec"), dict) else {}
+        fctx = (run or {}).get("finalize_ctx") if isinstance((run or {}).get("finalize_ctx"), dict) else {}
+        resolved = _app_map.resolve_for_stage(
+            base,
+            app_map=app_map,
+            run=run,
+            spec=spec,
+            finalize_ctx=fctx,
+            app_id=app_scope(spec, fctx),
+            changed=[str(c) for c in (changed or [])],
+            require_map=require_map,
+        )
+        if resolved.path is None:
+            refused = {
+                "ok": False,
+                "status": "refused",
+                "reason": resolved.refusal or _app_map.NO_MAP_REFUSAL,
+                "source": resolved.source,
+            }
+            with _transaction(engine) as c:
+                emit_event(c, run["project_id"], "code_task.precheck_app_env", "boss",
+                           "code_task_run", run["id"], refused)
+            return refused
+        app_dir = resolved.path
         with _transaction(engine) as c:
             applied = template_gate.applied_template(c, run) or {}
             found = workflow_precheck.app_env_on_tree(
@@ -2422,7 +2442,8 @@ def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     return _render_ctx_block(title, instructions, criteria, service=sticky)
 
 
-def _render_ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
+def _render_ctx_block(title, instructions, criteria, *, service: bool = False,
+                      pe_context: str = "") -> str:
     crit = "\n".join(f"- {c}" for c in criteria or []) or "- (none specified)"
 
     # Standards the PLATFORM requires, as distinct from the ones `_standards_prompt` infers by
@@ -2462,13 +2483,51 @@ def _render_ctx_block(title, instructions, criteria, *, service: bool = False) -
     # the header, so it is the same bytes for every task's stages as well as one task's.
     from .agent_baseline import BUILD_PRIMER
 
+    pe_block = f"\n{pe_context.strip()}\n" if (pe_context and pe_context.strip()) else ""
     return (
         "=== TASK CONTEXT (shared verbatim across all pipeline stages) ===\n"
         f"{BUILD_PRIMER}"
         f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n"
-        f"{standards}{references}\n"
+        f"{standards}{references}{pe_block}\n"
         "=== END TASK CONTEXT ===\n\n"
     )
+
+
+def build_prompt_with_agent_setup(
+    connection,
+    *,
+    project_id: str,
+    title: str,
+    instructions: str,
+    criteria=(),
+    role_key: Optional[str] = None,
+    touched_paths=(),
+    step: str = "implement",
+    areas=(),
+    repo_standards=(),
+    service: bool = False,
+    token_budget: int = 1800,
+    org_id: Optional[str] = None,
+) -> tuple[str, dict]:
+    """PE-B (BOSSAPP-785): assemble a governed build prompt carrying agent role instructions,
+    recalled steers/learnings, scoped repo standards, guide skills, and engineering opinions."""
+    from . import pe_memory
+
+    pack = pe_memory.recall_for_build(
+        connection,
+        project_id=project_id,
+        role_key=role_key,
+        touched_paths=touched_paths,
+        step=step,
+        areas=areas,
+        repo_standards=repo_standards,
+        token_budget=token_budget,
+        org_id=org_id,
+    )
+    prompt = _render_ctx_block(
+        title, instructions, criteria, service=service, pe_context=pack["prompt_block"]
+    )
+    return prompt, pack
 
 
 #: The test author writes no credential literal. BOSS's no_committed_secrets gate scans tests too,
@@ -2775,6 +2834,8 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         "iterate until the tests pass. "
         "Create parent directories for SQLite/data files before opening them.\n"
         + _run_declaration_rule() + _KEEP_MONITORING
+        + "- Never ask the user clarification questions mid-build; if anything is ambiguous, pick "
+        "the most reasonable engineering reading and proceed.\n"
         + "- Do NOT commit. End with a one-line summary of what you changed.\n"
         + _deferred_e2e_note()
         + FIRST_PASS_CHECKLIST
@@ -3108,10 +3169,13 @@ def _review_record(engine, run_id: str, project_id: str) -> tuple[list[dict], li
 
 
 def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, title: str,
-                          evidence: dict, gates: dict, paths: list, qg_id: str) -> str:
+                          evidence: dict, gates: dict, paths: list, qg_id: str,
+                          host_kind: str = "local", head_sha: str = "",
+                          test_report_artifact_id: str = "",
+                          check_run_url: str = "") -> str:
     """The PR description from the run's records (pr_description) — never the implementer's
     closing chat, which is what PR #223's description was."""
-    from . import pr_description
+    from . import pr_description, test_evidence as _test_evidence
 
     rounds, comments, _ = _review_record(engine, run_id, project_id)
     if not rounds and evidence.get("review_summary"):
@@ -3123,10 +3187,19 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
         additions=evidence.get("additions"), deletions=evidence.get("deletions"),
         rounds=rounds, comments=comments, deferred=evidence.get("deferred_findings") or [],
         build_url=pr_description.build_url(settings, run_id, project_id), run_id=run_id,
-        quality_gate_id=qg_id or "", baseline=evidence.get("baseline"))
-    # The follow-ups the quality bar let through ride the PR, in one list.
+        quality_gate_id=qg_id or "", baseline=evidence.get("baseline"),
+        assumptions=evidence.get("assumptions") or [],
+        host_kind=host_kind, head_sha=head_sha,
+        test_report_artifact_id=test_report_artifact_id,
+        check_run_url=check_run_url)
+    # The follow-ups the quality bar let through ride the PR, placed BEFORE the trailing
+    # Test evidence section so every BOSS-opened PR ends with `### Test evidence`.
     section = _quality_bar.pr_section(evidence)
-    return f"{body.rstrip()}\n\n{section}" if section else body
+    if not section:
+        return body
+    without_te, te_block = _test_evidence.strip_test_evidence_section(body)
+    combined = f"{without_te.rstrip()}\n\n{section.strip()}"
+    return f"{combined}\n\n{te_block}\n" if te_block else f"{combined}\n"
 
 
 def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
@@ -3638,6 +3711,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
             "until it passes. "
             "Create parent directories for SQLite/data files before opening them.\n"
             + _run_declaration_rule() + _KEEP_MONITORING
+            + "- Never ask the user clarification questions mid-build; if anything is ambiguous, "
+            "pick the most reasonable engineering reading and proceed.\n"
             + "- Do NOT commit. End with a one-line summary of what you built.\n"
             + FIRST_PASS_CHECKLIST
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
@@ -3652,6 +3727,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
         "Do NOT commit.\n"
         + "- " + SECRETS_FROM_ENV_RULE + "\n"
         + _run_declaration_rule() + _KEEP_MONITORING
+        + "- Never ask the user clarification questions mid-build; if anything is ambiguous, pick "
+        "the most reasonable engineering reading and proceed.\n"
         + "- End with a one-line summary of what you built.\n"
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
@@ -3857,21 +3934,34 @@ def _operator_review_block(engine, run_id: str, project_id: str) -> str:
 
 
 def _review_prompt(title, criteria, *, instructions="", ui=False, change="", operator="",
-                   ctx=True):
+                   ctx=True, blast_radius=None):
     # `ctx=False` for a merged-panel section (review_panel.combined_prompt): the task context
     # and the shared change are in the prompt ONCE, not once per seat.
+    br_clause = ""
+    if isinstance(blast_radius, dict) and (blast_radius.get("callers") or blast_radius.get("flows")):
+        callers = ", ".join(str(c) for c in (blast_radius.get("callers") or [])[:12])
+        flows = ", ".join(str(f) for f in (blast_radius.get("flows") or [])[:12])
+        br_clause = (
+            "BLAST RADIUS IN SCOPE (PE-C): Verify that this change does NOT break existing "
+            "callers or flows even if they were not explicitly named in the task prompt.\n"
+            + (f"  Callers: {callers}\n" if callers else "")
+            + (f"  Flows: {flows}\n" if flows else "")
+            + "\n"
+        )
     return (
         (_ctx_block(title, instructions, criteria) if ctx else "")
         + (operator or "")
         + "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
         "these tests. Try HARD to break the change: read the implementation and the tests and look "
         "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
-        "sensitivity, error handling, off-by-one).\n\n"
+        "sensitivity, error handling, off-by-one, or broken existing callers).\n\n"
         + _change_clause(change)
         + ci_gate.review_clause_for(change)
-        + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
-        "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
-        "defect; note it but do not fail the change for it.\n\n"
+        + br_clause
+        + "Judge against BOTH the stated task/acceptance criteria AND any existing callers or "
+        "flows in the blast radius that this change could break. A concern about unrequested new "
+        "features is out of scope; breaking an existing caller or silently relabelling a failure "
+        "as success/not_applicable IS an in-scope BLOCKER/MAJOR defect.\n\n"
         "SCOPE CREEP IS THE ISSUE, NEVER THE CURE: in a change to an existing app, files or "
         "machinery the request did not ask for (a Dockerfile, a compose or deploy manifest, a "
         "metrics endpoint, telemetry calls, new documents) are a MINOR finding — 'not asked for, "
@@ -4888,7 +4978,9 @@ def _spec_prompt(title, instructions, criteria):
         _ctx_block(title, instructions, criteria)
         + "You are a product engineer. Turn the task above into a clear, testable specification: a "
         "one-paragraph summary, a change list (added / changed / removed), and a clarified, testable "
-        "list of acceptance criteria — resolve any ambiguity explicitly. Do NOT edit any files."
+        "list of acceptance criteria. Never ask the user questions or pause for clarification "
+        "mid-build; if the brief is ambiguous, pick the most reasonable engineering reading and "
+        "list your assumptions concisely under `=== ASSUMPTIONS ===`. Do NOT edit any files."
     )
 
 
@@ -4942,12 +5034,15 @@ _DESIGN_HEADS = (("standards", "STANDARDS"), ("spec", "SPEC"), ("plan", "PLAN"),
 
 
 def _design_prompt(title, instructions, criteria):
-    """Standards, spec and plan from ONE read of the repository, in three marked sections."""
+    """Standards, spec, plan, assumptions and self-check from ONE read of the repository."""
     return (
         _ctx_block(title, instructions, criteria)
-        + "You are the design lead for this change. Read this repository ONCE, then write five "
+        + "You are the design lead for this change. Read this repository ONCE, then write six "
         "sections, each starting with its own heading line exactly as shown. Do NOT edit any "
-        "files.\n\n"
+        "files. Never ask the user questions or pause for clarification mid-build: if the brief "
+        "or specification is ambiguous or underspecified, pick the most reasonable engineering "
+        "reading, proceed cleanly with the implementation, and record every assumption concisely "
+        "under `=== ASSUMPTIONS ===`.\n\n"
         "=== STANDARDS ===\nA short bulleted list of the coding standards a new change here "
         "should follow: style, naming, error handling, test conventions, and file structure.\n\n"
         "=== SPEC ===\nA clear, testable specification: a one-paragraph summary, a change list "
@@ -4958,23 +5053,66 @@ def _design_prompt(title, instructions, criteria):
         "end the plan with the line `database: postgres` (BOSS then gives every build its own "
         "PostgreSQL database, DATABASE_URL in the environment); otherwise end with "
         "`database: none`.\n\n"
+        "=== ASSUMPTIONS ===\nEvery assumption made because the brief was ambiguous or "
+        "underspecified (one `- ` bullet per assumption; write `NONE` if unambiguous).\n\n"
         + _plan_self_check_section()
         + _parallel_build.design_prompt_section()
     )
 
 
 def _split_design(text: str) -> dict:
-    """The three sections of a joint design answer; a missing one is empty (and re-run)."""
+    """The sections of a joint design answer; a missing one is empty (and re-run)."""
     out = {key: "" for key, _ in _DESIGN_HEADS}
     marks = []
-    for key, head in _DESIGN_HEADS:
-        m = re.search(rf"^\s*=+\s*{head}\s*=+\s*$", text or "", re.MULTILINE)
+    for key, head in (*_DESIGN_HEADS, ("assumptions", "ASSUMPTIONS")):
+        flags = re.MULTILINE | (re.IGNORECASE if key == "assumptions" else 0)
+        m = re.search(rf"^\s*=+\s*{head}\s*=+\s*$", text or "", flags)
         if m:
             marks.append((m.start(), m.end(), key))
     marks.sort()
     for i, (_start, end, key) in enumerate(marks):
         stop = marks[i + 1][0] if i + 1 < len(marks) else len(text)
-        out[key] = text[end:stop].strip()
+        if key in out:
+            out[key] = text[end:stop].strip()
+    return out
+
+
+def _extract_assumptions(text: str) -> list[str]:
+    """Extract normalized assumption bullets from `=== ASSUMPTIONS ===` (or `### Assumptions`)."""
+    raw_block = ""
+    marks = []
+    for key, head in (*_DESIGN_HEADS, ("assumptions", "ASSUMPTIONS")):
+        flags = re.MULTILINE | (re.IGNORECASE if key == "assumptions" else 0)
+        m = re.search(rf"^\s*=+\s*{head}\s*=+\s*$", text or "", flags)
+        if m:
+            marks.append((m.start(), m.end(), key))
+    marks.sort()
+    for i, (_start, end, key) in enumerate(marks):
+        if key == "assumptions":
+            stop = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+            raw_block = (text or "")[end:stop].strip()
+            break
+    if not raw_block and text:
+        sub = re.search(
+            r"^#{1,4}\s*Assumptions\b[^\n]*\n(.*?)(?=^#{1,4}\s+\S|^\s*=+\s*[A-Z]|\Z)",
+            text,
+            re.IGNORECASE | re.MULTILINE | re.DOTALL,
+        )
+        if sub:
+            raw_block = sub.group(1).strip()
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in raw_block.splitlines():
+        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip()
+        cleaned = " ".join(cleaned.split())
+        if not cleaned or cleaned.lower().rstrip(".") in ("none", "n/a", "no assumptions"):
+            continue
+        item = cleaned[:300]
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+        if len(out) >= 20:
+            break
     return out
 
 
@@ -5322,9 +5460,13 @@ def _plan_covers_brief(engine, settings, project_id, run_id, design, *, title, i
 
     try:
         try:
+            from . import scripted_engine as _se
             from .typed_decisions import make_decider
 
-            decider = make_decider(settings)
+            _is_scripted = _se.enabled() and (
+                getattr(settings, "code_agent_engine", "") == _se.ENGINE
+            )
+            decider = None if _is_scripted else make_decider(settings)
         except Exception:  # noqa: BLE001 — the deterministic match still runs
             _log_caught(logger)
             decider = None
@@ -5863,15 +6005,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # own fallback keeps the keyword answer when the model cannot answer, an explicit spec tier
     # still wins inside it, and any failure here degrades to the old call outright.
     try:
+        from . import scripted_engine as _se
         from .pipeline_profiles import model_risk_tier
         from .typed_decisions import make_decider
 
-        _rt = model_risk_tier({**spec, "title": title}, profile, make_decider(settings))
-        risk_tier = int(_rt["tier"])
-        with _transaction(engine) as c:
-            emit_event(c, project_id, "code_task.risk_tier_decided", "boss", "code_task_run",
-                       run_id, {"tier": risk_tier, "sensitive": bool(_rt.get("sensitive")),
-                                "by": "model" if _rt.get("ok") else "keyword_fallback"})
+        _run_eng = str(spec.get("engine") or getattr(settings, "code_agent_engine", "") or "").lower()
+        if _run_eng == _se.ENGINE and _se.enabled():
+            risk_tier = infer_risk_tier({**spec, "title": title}, profile)
+        else:
+            _rt = model_risk_tier({**spec, "title": title}, profile, make_decider(settings))
+            risk_tier = int(_rt["tier"])
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.risk_tier_decided", "boss", "code_task_run",
+                           run_id, {"tier": risk_tier, "sensitive": bool(_rt.get("sensitive")),
+                                    "by": "model" if _rt.get("ok") else "keyword_fallback"})
     except Exception:  # noqa: BLE001 — the keyword tier is the floor this never falls below
         _log_caught(logger)
         risk_tier = infer_risk_tier({**spec, "title": title}, profile)
@@ -6203,6 +6350,41 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         return _build_budget.lifted_ceiling_usd(settings, float(requested),
                                                 **_ceiling_inputs(agent))
 
+    def _acquire_session_hold(agent=None, *, requested_usd=None):
+        money = _money_billed(agent)
+        if not money:
+            val = (_lift_ceiling(requested_usd, agent) if requested_usd is not None
+                   else _session_budget_ceiling(agent))
+            return None, (round(max(float(val), 0.01), 2) if val is not None else None)
+        repo_files = _repo_file_count()
+        try:
+            with _transaction(engine) as c:
+                list_spent = _build_budget.list_price_spend(c, run_id)
+                money_spent = _build_budget.unsettled_money(c, project_id, run_id)
+                return _build_budget.acquire_session_hold(
+                    budget, c, project_id, settings,
+                    run_id=run_id,
+                    list_spent_micros=list_spent,
+                    money=True,
+                    build_money_spent_micros=money_spent,
+                    risk_tier=risk_tier,
+                    repo_files=repo_files,
+                    requested_usd=requested_usd,
+                )
+        except _build_budget.SessionBudgetHoldBusy:
+            raise
+        except Exception:  # noqa: BLE001 — an unreadable ledger falls back to unclamped ceiling
+            _log_caught(logger)
+            val = (_lift_ceiling(requested_usd, agent) if requested_usd is not None
+                   else _session_budget_ceiling(agent))
+            return None, (round(max(float(val), 0.01), 2) if val is not None else None)
+
+    def _release_session_hold(hold_id: Optional[str]) -> None:
+        if not hold_id:
+            return
+        with _transaction(engine) as c:
+            _build_budget.release_session_hold(c, hold_id)
+
     def _agent_for_locked(engine_name: str):
         a = agents.get(engine_name)
         if a is None:
@@ -6220,6 +6402,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # (engine_contract._default_ceiling): set once here, enforced by the engine itself
             # where it can be (budget_limit), at the stage boundary where it cannot.
             a.budget_ceiling = (lambda _a=a: _session_budget_ceiling(_a))
+            a.session_budget_holder = (
+                lambda requested_usd=None, _a=a: _acquire_session_hold(
+                    _a, requested_usd=requested_usd
+                )
+            )
+            a.session_budget_releaser = _release_session_hold
             agents[engine_name] = a
         # A LOCAL REPOSITORY'S reviewers read the tree, never a GitHub connector (BOSSAPP-1350).
         a.local_repo = _is_local_owner_early(owner)
@@ -6270,11 +6458,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             raise RouteRefused(f"{step}: {decision.refusal}")
         stage_routes[step] = {"engine": decision.engine, "model": decision.model,
                               "route_id": decision.id, "tier": decision.tier,
+                              **({"effort": decision.effort} if decision.effort else {}),
                               **({"budget_lite": True} if decision.budget_lite else {}),
                               **({"escalated": True} if decision.escalation else {})}
         # Every llm_calls row of this boundary carries the route that chose its model: by its
         # stage (`routes`), which also reaches the panel's worker threads, else the last one.
-        set_llm_context(route_id=decision.id, routes=_route_ids())
+        # BOSSAPP-780: propagate per-stage effort override when the router bumped effort.
+        set_llm_context(route_id=decision.id, routes=_route_ids(),
+                        effort_override=decision.effort)
         return decision.engine, decision.model
 
     def _route_ids() -> dict:
@@ -6335,17 +6526,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         return FailoverAgent(agent, model, eng, reroute, on_hop), model
 
-    def _route(step: str):
+    def _route(step: str, **kw):
         """Resolve a step to (agent, model) through the router."""
-        return _routed_agent(step, _await_route(step))
+        return _routed_agent(step, _await_route(step, **kw))
 
-    def _route_escalated(step: str):
+    def _route_escalated(step: str, **kw):
         """The step again, one boundary later, on the evidence that its route produced no
         usable output (write_tests) or that this is the final attempt (implement). Fixed mode:
         the hard-problems lane, as before; Smart mode: the escalation rules."""
         signal = "no_output" if step == "write_tests" else "final_attempt"
         return _routed_agent(step, _await_route(step, signal=signal,
-                                                previous=stage_routes.get(step)))
+                                                previous=stage_routes.get(step), **kw))
 
     def _vm_escalation(step: str, escalate: bool, signal: str) -> str:
         """A micro-VM stage's escalation. Fixed: the hard-problems engine override, as before.
@@ -6566,6 +6757,45 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001 — a note never fails the build
             _log_caught(logger)
 
+    _app_map_entry: list = [None]
+
+    def _guard_write_boundary(stage: str, paths: list[str]) -> None:
+        """BOSSAPP-555: enforce or report writes outside the app's App Map root_path.
+
+        When a subfolder app has a stored App Map (or resolved app folder), emit
+        `code_task.write_outside_app` for any files outside `root_path` (+ `shared_paths` +
+        BOSS-owned root files). In enforce mode (confirmed App Map or explicit env
+        BOSS_APP_MAP_WRITE_BOUNDARY=enforce), refuse before pushing/committing."""
+        from . import app_root as _app_root
+
+        entry = _app_map_entry[0]
+        app_rel = entry.rel_or_none() if entry is not None else (_app_root.clean_rel(_app_id or _app_scope))
+        if not app_rel:
+            return
+        shared = entry.shared_paths if entry is not None else ()
+        outside = _app_root.files_outside_app(paths, app_rel, shared=shared)
+        if not outside:
+            return
+        env_mode = str(os.environ.get("BOSS_APP_MAP_WRITE_BOUNDARY") or "").strip().lower()
+        if env_mode in ("enforce", "refuse", "report", "off"):
+            mode = env_mode
+        else:
+            mode = "enforce" if (entry is not None and entry.status == "confirmed") else "report"
+        if mode == "off":
+            return
+        try:
+            with _transaction(engine) as c:
+                emit_event(
+                    c, project_id, "code_task.write_outside_app", "boss",
+                    "code_task_run", run_id,
+                    {"stage": stage, "app_root": app_rel, "offending_paths": outside[:50],
+                     "count": len(outside), "mode": mode},
+                )
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+        if mode in ("enforce", "refuse"):
+            raise _app_root.WriteBoundaryViolation(app_rel, outside, shared=shared)
+
     def _commit_stage(files, message: str, deleted=()) -> None:
         """Commit a stage's returned files to the work branch (control-plane-only git;
         requires the task repo to be the deployment's configured target repo). `deleted`: the
@@ -6573,6 +6803,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         nonlocal guest_base
         if not files and not deleted:
             return
+        _guard_write_boundary(
+            "stage_commit",
+            [fc.path for fc in (files or [])] + [str(p) for p in (deleted or ())],
+        )
         if _push_held("stage_commit"):
             return
         sf.github.ensure_branch(work_branch, base_branch)
@@ -7032,32 +7266,49 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             n = _checkpoint("exit")
             if not n:
                 return None
+            from . import test_evidence as _test_evidence
+
+            _rescue_host = "local" if getattr(sf.github, "kind", "") == "local" else "github"
+            _rescue_te = _test_evidence.render_pr_section(
+                _test_evidence.build_evidence_record(
+                    evidence={"substrate": "microvm" if use_microvm else "local"},
+                    host_kind=_rescue_host,
+                    extra_not_run=[f"Quality gates did not complete (partial rescue: {reason[:160]})"],
+                )
+            )
+            rescue_files = (
+                [FileChange(path=p, content=content) for p, content in accumulated.items()]
+                if use_microvm
+                else sandbox.diff()
+            )
+            rescue_deleted = _deleted_now()
+            rescue_pr_base = _release_target["pr_base"] if _release_target else repo_base_branch
+            # A RESCUE NEEDS NO FRESH RESERVATION (rescue_of_run): the money was spent, and
+            # this exit settles it on the build's own hold. Passing None here used to
+            # raise a blocking "Missing active reservation" card on every failure and never
+            # open the partial PR (since rc.1). run_id is named so a refused rescue can
+            # still see that the fix run is dead and leave no reservation decision
+            # (BOSSAPP-984).
+            pr = sf.propose_pull_request(
+                None, project_id, task_id, reservation_id=reservation_id,
+                rescue_of_run=run_id, run_id=run_id,
+                dedupe_key=f"code:task:{run_id}", title=_partial_title(title),
+                branch_name=work_branch,
+                summary=("INCOMPLETE — this run did not finish.\n\n"
+                         f"It stopped because: {reason}\n\n"
+                         f"The {n} file(s) it had written are on this branch, so the work is "
+                         "not lost and can be reviewed or continued with a retry. The quality "
+                         "gates did NOT run to completion — treat this as work-in-progress, "
+                         "not a reviewed change.\n\n"
+                         + _rescue_te),
+                files=rescue_files,
+                deleted_paths=rescue_deleted,
+                created_by_job_id=job_id, actual_usd_micros=cost,
+                pr_base=rescue_pr_base,
+                **({"parent_branch": parent_branch} if parent_branch else {}),
+                monitoring_removals=_monitoring_removals(spec),
+                db_engine=engine)
             with _transaction(engine) as c:
-                # A RESCUE NEEDS NO FRESH RESERVATION (rescue_of_run): the money was spent, and
-                # this exit settles it on the build's own hold. Passing None here used to
-                # raise a blocking "Missing active reservation" card on every failure and never
-                # open the partial PR (since rc.1). run_id is named so a refused rescue can
-                # still see that the fix run is dead and leave no reservation decision
-                # (BOSSAPP-984).
-                pr = sf.propose_pull_request(
-                    c, project_id, task_id, reservation_id=reservation_id,
-                    rescue_of_run=run_id, run_id=run_id,
-                    dedupe_key=f"code:task:{run_id}", title=_partial_title(title),
-                    branch_name=work_branch,
-                    summary=("INCOMPLETE — this run did not finish.\n\n"
-                             f"It stopped because: {reason}\n\n"
-                             f"The {n} file(s) it had written are on this branch, so the work is "
-                             "not lost and can be reviewed or continued with a retry. The quality "
-                             "gates did NOT run to completion — treat this as work-in-progress, "
-                             "not a reviewed change."),
-                    files=([FileChange(path=p, content=content)
-                            for p, content in accumulated.items()]
-                           if use_microvm else sandbox.diff()),
-                    deleted_paths=_deleted_now(),
-                    created_by_job_id=job_id, actual_usd_micros=cost,
-                    pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
-                    **({"parent_branch": parent_branch} if parent_branch else {}),
-                    monitoring_removals=_monitoring_removals(spec))
                 if pr.get("status") in ("created", "succeeded"):
                     url = pr.get("pull_request_url") or pr.get("url")
                     c.execute(sql("UPDATE code_task_runs SET pull_request_url=:u, updated_at=now() "
@@ -7161,6 +7412,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _note_left_out(sandbox)
         if not files and not gone:
             return 0
+        _guard_write_boundary(
+            f"checkpoint:{label}",
+            [fc.path for fc in (files or [])] + [str(p) for p in (gone or [])],
+        )
         try:
             sf.github.ensure_branch(work_branch, base_branch)  # deletions too (with_deletions)
             commit_change(sf.github, work_branch, with_deletions(files, gone),
@@ -7400,10 +7655,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _lineage_paths: list[str] = []
         _recorded_app: Optional[str] = None
         try:
-            from . import app_root as _app_root
+            from . import app_map as _app_map_mod, app_root as _app_root
 
             _lineage_paths[:] = [str(p) for p in (_app_root.identity_paths(engine, run) or [])]
             with _transaction(engine) as _c:
+                # Seed or load the canonical App Map record (BOSSAPP-555) and keep it on this run.
+                _seeded_map = _app_map_mod.seed_app_map(
+                    root, db=_c, project_id=project_id, run=run, spec=spec, finalize_ctx=fctx,
+                    lineage=_lineage_paths, actor="boss", persist=True,
+                )
+                if _seeded_map.entry is not None:
+                    _app_map_entry[0] = _seeded_map.entry
                 # The record only where THIS tree bears it out (app_root.home_on_tree): a stale
                 # `schema/` record never outranks the Go module at the root (BOSSAPP-1323).
                 _recorded_app = _app_root.home_on_tree(root, _app_root.recorded_app_dir(_c, run))
@@ -7414,7 +7676,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _gate_plan0 = verification_target.resolve_gate_plan(
             spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout,
             lineage=_lineage_paths, recorded=_recorded_app,
-            finalize_ctx=fctx)
+            finalize_ctx=fctx, app_map=_app_map_entry[0])
         # RECORD THE APP'S FOLDER once BOSS knows it, so every later attempt of this app reads it
         # (app_root.recorded_app_dir) instead of re-deriving it from its own diff.
         try:
@@ -7711,8 +7973,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         def _gate_app_dir(changed=None) -> Path:
             """THE APP'S DIRECTORY for a gate that runs before (or without) a recorded verify
             directory — the template gates, the web package check. The same identity every
-            plan uses (app_root.app_dir): the named app, this run's paths, the lineage's files.
-            Never the shared repository root for an app in a subfolder (crun_7768e91e)."""
+            plan uses (app_root.app_dir): the stored App Map, the named app, this run's paths,
+            the lineage's files. Never the shared repository root for an app in a subfolder."""
             from . import app_root
 
             # None = BOSS cannot place the app in a shared repository: the gate plan already
@@ -7720,7 +7982,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # template gate here only needs a directory to report against, never to test.
             return app_root.gate_dir(root, app_id=_app_id or _app_scope,
                                      changed=sorted(set(list(changed or []) + _changed_paths())),
-                                     lineage=_lineage_paths, recorded=_recorded_app) or Path(root)
+                                     lineage=_lineage_paths, recorded=_recorded_app,
+                                     app_map=_app_map_entry[0]) or Path(root)
 
         def _review_change_now() -> review_input.ChangeUnderReview:
             """THE change every reviewer seat judges (review_input.build): the live diff, plus
@@ -7889,7 +8152,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _log_caught(logger)
                 prep = {
                     "install_command": verification_target.NPM_INSTALL_CMD,
-                    "browser_install_command": verification_target.PLAYWRIGHT_INSTALL_CMD,
+                    "browser_install_command": "",
                     "changed": [],
                     "error": f"{type(exc).__name__}: {exc}",
                 }
@@ -8094,6 +8357,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _flaky_tests: list[str] = []
         _flaky_budget = {"checks": 0, "rerun_ms": 0}
         _manifest_tampered: list[Optional[str]] = [None]
+        from . import gate_integrity as _gate_integrity
+
+        _gate_tracker = _gate_integrity.GateVerificationTracker()
+
+        def _snapshot_changes_for_gate() -> list[tuple[str, Optional[str]]]:
+            if use_microvm:
+                pairs: list[tuple[str, Optional[str]]] = [
+                    (p, content) for p, content in accumulated.items()
+                ]
+                written = {p for p, _ in pairs}
+                for dp in deleted_acc:
+                    if str(dp) not in written:
+                        pairs.append((str(dp), None))
+                return pairs
+            try:
+                cur_files = sandbox.diff()
+                cur_deleted = _deleted_now()
+                return with_deletions(cur_files, cur_deleted)
+            except Exception:  # noqa: BLE001
+                return []
 
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
@@ -8165,6 +8448,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     from .suite_environment import failed_check as _env_check
 
                     _failed_check[0] = _env_check(env, str(getattr(result, "command", "") or ""))
+                # BOSSAPP-1029: bind this authoritative verify run to the exact tree & landing
+                # file set that was executed so any later edit invalidates the prior pass.
+                _gate_tracker.record_verification(
+                    root=None if use_microvm else root,
+                    changes=_snapshot_changes_for_gate(),
+                    passed=bool(result.ok),
+                    command=str(last_verify_command or getattr(result, "command", "") or ""),
+                    exit_code=getattr(result, "exit_code", None),
+                )
             return result
 
         def _run_verify_once(*, record: bool = True):
@@ -8222,22 +8514,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 from . import playwright_cache
                 from .sandbox import CommandResult as _PwResult
 
-                _pw = playwright_cache.ensure(playwright_cache.project_version(app_cwd))
-                if _pw.get("ok"):
-                    _emit_cmd("install browsers", _PwResult(
-                        command=f"boss: {_pw.get('detail')}", argv=[], exit_code=0,
-                        duration_ms=int(float(_pw.get("seconds") or 0) * 1000),
-                        timed_out=False, stdout="", stderr=""))
-                else:
-                    prep_note += f"[boss] shared browser cache: {_pw.get('detail')}\n"
-                    _emit_cmd("install browsers", sandbox.run(
-                        str(
-                            prep.get("browser_install_command")
-                            or verification_target.PLAYWRIGHT_INSTALL_CMD
-                        ),
-                        cwd=str(app_cwd),
-                        timeout=max(install_timeout, playwright_cache.install_timeout()),
-                    ))
+                if playwright_cache.uses_playwright(app_cwd):
+                    _pw = playwright_cache.ensure(playwright_cache.project_version(app_cwd))
+                    if _pw.get("ok"):
+                        _emit_cmd("install browsers", _PwResult(
+                            command=f"boss: {_pw.get('detail')}", argv=[], exit_code=0,
+                            duration_ms=int(float(_pw.get("seconds") or 0) * 1000),
+                            timed_out=False, stdout="", stderr=""))
+                    else:
+                        prep_note += f"[boss] shared browser cache: {_pw.get('detail')}\n"
+                        _emit_cmd("install browsers", sandbox.run(
+                            str(
+                                prep.get("browser_install_command")
+                                or verification_target.PLAYWRIGHT_INSTALL_CMD
+                            ),
+                            cwd=str(app_cwd),
+                            timeout=max(install_timeout, playwright_cache.install_timeout()),
+                        ))
             # npm install / the implementer can recreate leftover Playwright
             # configs. Force the official HookWatch tree again immediately
             # before the authoritative command so e2e cannot start itty-router
@@ -8546,9 +8839,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # `PLAN: REVISE`; read that (last marker wins), and a review with no marker at
                 # all counts as ok, which is what the old parse did for marker-free text.
                 plan_ok = _plan_verdict(d4.get("summary", "")) != "revise"
+                assumptions = _extract_assumptions(joint.get("summary", ""))
+                if not assumptions and d2.get("summary"):
+                    assumptions = _extract_assumptions(d2.get("summary", ""))
                 design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
                           "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
                           "plan_ok": plan_ok,
+                          "assumptions": assumptions,
                           # The partition BOSS runs the writing stages in parallel from
                           # (parallel_build); empty when the change is too small to split.
                           "packages": parts.get("packages", "")}
@@ -8581,6 +8878,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "WHERE id=:id"), {"d": json.dumps(design), "id": run_id})
                 emit_event(c, project_id, "code_task.design_persisted", "boss",
                            "code_task_run", run_id, {"plan_chars": len(design.get("plan") or "")})
+                assumptions = [
+                    str(a).strip() for a in (design.get("assumptions") or []) if str(a).strip()
+                ]
+                if assumptions:
+                    emit_event(c, project_id, "code_task.assumptions_recorded",
+                               "autonomy:dev:architect", "code_task_run", run_id,
+                               {"assumptions": assumptions})
+                    from . import autonomy_gate as _autonomy_gate
+
+                    _autonomy_gate.record_decided(
+                        c, project_id, task_id=task_id,
+                        question=f"Design assumptions for {title[:120]} ({len(assumptions)})",
+                        recommendation={"action": "design_assumptions", "run_id": run_id,
+                                        "assumptions": assumptions},
+                        found=_autonomy_gate.Route(
+                            "act", _autonomy_gate.ACT,
+                            "ambiguous brief resolved by choosing the most reasonable reading",
+                            "architect", _autonomy_gate.NONE_RECORD,
+                        ),
+                    )
             _mark_stage_done("design")
             # FAIL FAST: if the design reviewer says this isn't a coding task for this repo (a
             # research/PRD/spec deliverable, or an unrelated repo) it was mis-routed into codegen.
@@ -9362,6 +9679,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return ruling
 
         _budget_exhausted = [False]
+        _warm_fix_attempted = [False]
+        _warm_context_tokens = [0]
         baseline_record = None
         for attempt in range(max_repair + 2):
             _impl_ran[0] = True
@@ -9371,6 +9690,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _warm_fix_ran[0] = True
                 set_llm_context(stage_deadline=_impl_deadline)
             escalate_impl = attempt == max_repair + 1 and not _warm_fix[0]
+            if escalate_impl and not use_microvm and impl_session_id and not _warm_fix_attempted[0]:
+                # BOSSAPP-780: always run a same-model warm fix round with failing tests BEFORE
+                # paying for a cold model switch that throws away the prompt cache.
+                _warm_fix[0] = True
+                _warm_fix_ran[0] = True
+                escalate_impl = False
+                set_llm_context(stage_deadline=_impl_deadline)
             if escalate_impl:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_escalating", "boss",
@@ -9487,8 +9813,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             else:
                 set_llm_context(stage="implement" if do_separate_tests else "solo")
                 _prev_route = dict(stage_routes.get("implement") or {})
-                a, m = ((tuple(_esc_route) if _esc_route else _route_escalated("implement"))
-                        if escalate_impl else _route("implement"))
+                _route_kw = {
+                    "warm_context_tokens": _warm_context_tokens[0] if impl_session_id else 0,
+                    "warm_fix_attempted": _warm_fix_attempted[0],
+                    "current_effort": _prev_route.get("effort")
+                    or getattr(settings, "build_effort_writing", None),
+                }
+                a, m = ((tuple(_esc_route) if _esc_route
+                         else _route_escalated("implement", **_route_kw))
+                        if escalate_impl else _route("implement", **_route_kw))
                 # Resume-based repair: continue the implementer's own session so the
                 # repair rides the warm prompt cache (task context + its prior work are
                 # cache READS, not fresh ingestion). Escalated attempts stay cold —
@@ -9499,6 +9832,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     stage_routes["implement"].get("engine"), stage_routes["implement"].get("model"))
                 resume_sid = impl_session_id if (attempt and not escalate_impl
                                                  and _same_route) else None
+                if attempt and not _same_route:
+                    # BOSSAPP-780: escalate WITH EVIDENCE, not cold/blind — hand the stronger
+                    # model the failing tests, the current implementation diff, and any prior
+                    # review findings so it does not re-derive from scratch.
+                    from .model_router.escalation import build_escalation_handoff
+
+                    try:
+                        _diff_text = _render_change_for_review(
+                            {fc.path: fc.content for fc in sandbox.diff()})
+                    except Exception:  # noqa: BLE001
+                        _diff_text = ""
+                    _handoff = build_escalation_handoff(
+                        failing_tests=_repair_evidence if attempt else "",
+                        diff=_diff_text,
+                        prior_attempts=attempt,
+                        prior_model=str(_prev_route.get("model") or _prev_route.get("engine") or ""),
+                        signal="tests_failed",
+                    )
+                    impl_prompt = _repair_prompt(base_impl_prompt, _handoff, max(1, attempt))
                 # A CROSS-RUN REPAIR RESUMES THE PARENT ATTEMPT'S SESSION (BOSSAPP-1001). The
                 # child's first pass IS the repair, and the parent's implement session already
                 # holds the task, the repo and its own work warm — a cold start here re-paid the
@@ -9521,6 +9873,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                              if _carried_resume
                              else _repair_resume_prompt(evidence_text, attempt)), root,
                             model=m, resume_session_id=resume_sid)
+                        _warm_fix_attempted[0] = True
                         if _carried_resume:
                             _from = (fctx.get("resume_implement_session") or {}).get("from_run")
                             with _transaction(engine) as c:
@@ -9692,6 +10045,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                        tests_passed=tests_passed, output=fail_output,
                                        command=test_cmd, failing=failing_tests(fail_output),
                                        files=impl_files, summary=r2.get("summary"))
+            _r2_usage = r2.get("usage") if isinstance(r2.get("usage"), dict) else {}
+            _warm_context_tokens[0] = (
+                int(_r2_usage.get("prompt_tokens") or 0)
+                + int(_r2_usage.get("cache_read_tokens") or 0)
+                + int(_r2_usage.get("cache_write_tokens") or 0)
+            )
             if escalate_impl and ok:
                 escalated_recovered = True
                 with _transaction(engine) as c:
@@ -9699,6 +10058,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"step": "implement", "recovered_by": "frontier_retry",
                                 "attempt": attempt})
+            _cur_impl_route = stage_routes.get("implement") or {}
+            if _cur_impl_route.get("route_id") and (escalate_impl or _cur_impl_route.get("escalated")):
+                from .model_router.outcomes import record_route_outcome
+
+                with _transaction(engine) as c:
+                    record_route_outcome(
+                        c,
+                        route_id=str(_cur_impl_route["route_id"]),
+                        project_id=project_id,
+                        unit_id=run_id,
+                        repo=spec.get("repo") or None,
+                        task_type=str(spec.get("task_kind") or "unknown"),
+                        stage="implement",
+                        tier=str(_cur_impl_route.get("tier") or "frontier"),
+                        engine=_cur_impl_route.get("engine"),
+                        model=_cur_impl_route.get("model"),
+                        mode="smart" if stage_router.is_smart() else "fixed",
+                        tests_passed=bool(tests_passed),
+                        stage_passed=bool(ok),
+                        escalated=True,
+                        escalation_signal="tests_failed",
+                        escalation_strategy="tier_escalation",
+                        escalation_rescued=bool(ok),
+                        list_cost_usd_micros=int(r2.get("cost_usd_micros") or 0),
+                    )
             if ok or attempt == max_repair + 1 or _warm_fix_ran[0]:
                 break
             _can_warm_fix = (not use_microvm and bool(impl_session_id)
@@ -10037,13 +10421,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 q_ok = False
             reverted = False
             if not q_ok and snapshot:
+                # BOSSAPP-1029: remove any untracked/new files the failed quality pass added and
+                # restore the snapshot, then re-verify so tests_passed is proven on the restored tree.
+                _before_paths = set(snapshot.keys())
+                if not use_microvm:
+                    for fc in sandbox.diff():
+                        if fc.path not in _before_paths and not _is_test_path(fc.path):
+                            try:
+                                (root / fc.path).unlink(missing_ok=True)
+                            except OSError:
+                                pass
                 for _qp, _qc in snapshot.items():
                     try:
                         _ws_write(root / _qp, _qc)
                     except OSError:
                         pass
                 reverted = True
-                tests_passed = True
+                if not use_microvm:
+                    _q_recheck = _run_verify()
+                    tests_passed = bool(_q_recheck.ok)
+                    official_tests_passed = tests_passed
+                    official_test_exit = _q_recheck.exit_code
+                    official_verify_output = last_verify_output
+                else:
+                    tests_passed = True
             quality_passes_used = 1
             repair_log.append(quality_pass_record(
                 attempt=1, tests_passed=q_ok and not reverted, reverted=reverted,
@@ -11206,6 +11607,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "test_arbitrations": test_arbitrations,
             "panel_parallel": panel_parallel,
             "design": design,
+            "assumptions": list((design or {}).get("assumptions") or []),
             "plan_ok": design.get("plan_ok") if do_design else None,
             # Resolved per-step routing (VAG B2): model=None means the engine's default ran —
             # fall back to what the step actually reported.
@@ -11454,9 +11856,28 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # A TEST_WRONG round amends only the oracle — there is nothing for the
                     # implementer to do, and resuming it with an empty brief invites churn.
                     if finding_bits:
+                        # BOSSAPP-780: record changes_requested and gate_failed as escalation
+                        # signals INSIDE the run (not only on continuation runs).
+                        from .model_router.escalation import REVIEW_GATES, build_escalation_handoff
+
+                        if any(g in REVIEW_GATES for g in failing):
+                            stage_router.signal("implement", "changes_requested")
+                        if any(g not in REVIEW_GATES for g in failing):
+                            stage_router.signal("implement", "gate_failed")
+                        _prev_fix_route = dict(stage_routes.get("implement") or {})
                         set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                         stage="implement")
-                        a_fix, m_fix = _route("implement")
+                        a_fix, m_fix = _route(
+                            "implement",
+                            warm_context_tokens=_warm_context_tokens[0] if impl_session_id else 0,
+                            warm_fix_attempted=round_i > 1 or _warm_fix_attempted[0],
+                            current_effort=_prev_fix_route.get("effort")
+                            or getattr(settings, "build_effort_writing", None),
+                        )
+                        _fix_switched = (_prev_fix_route.get("engine"), _prev_fix_route.get("model")) != (
+                            stage_routes["implement"].get("engine"),
+                            stage_routes["implement"].get("model"),
+                        )
                         # A ROUND THAT CHANGES NOTHING IS NOT A ROUND OF PROGRESS.
                         #
                         # Measured on a live loop (deepseek implementing, Claude reviewing): one
@@ -11469,10 +11890,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         # The comments, numbered as shown, so the implementer's RESPONSE lines
                         # can be matched back and posted beside each one on the pull request.
                         _answered = review_comments.implementer_order(_open) if _open else []
+                        # BOSSAPP-1029: any repair edit invalidates prior gate pass until re-verified.
+                        _gate_tracker.invalidate(f"in-run fix round {round_i} started")
+                        _fix_findings = "\n\n".join(finding_bits)
+                        if _fix_switched:
+                            # Escalated to a stronger model mid-run: start cold on the new model
+                            # and pass failing tests + current diff + review findings.
+                            _fix_findings = build_escalation_handoff(
+                                review_findings=_fix_findings,
+                                diff=_render_change_for_review(_before),
+                                prior_attempts=round_i,
+                                prior_model=str(_prev_fix_route.get("model")
+                                                or _prev_fix_route.get("engine") or ""),
+                                signal=("changes_requested"
+                                        if any(g in REVIEW_GATES for g in failing)
+                                        else "gate_failed"),
+                            )
                         rfix = a_fix.run_role(
-                            _targeted_fix_prompt("\n\n".join(finding_bits), round_i)
+                            _targeted_fix_prompt(_fix_findings, round_i)
                             + ("\n" + review_comments.response_clause() if _answered else ""),
-                            root, model=m_fix, resume_session_id=impl_session_id)
+                            root, model=m_fix,
+                            resume_session_id=None if _fix_switched else impl_session_id)
                         impl_session_id = rfix.get("session_id") or impl_session_id
                         cost += int(rfix.get("cost_usd_micros") or 0)
                         impl_session_id = _install_until_it_passes(
@@ -12428,6 +12866,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 try:
                     _files = (list(accumulated.items()) if use_microvm
                               else [(fc.path, fc.content) for fc in sandbox.diff()])
+                    if _files:
+                        _guard_write_boundary("repair_handoff", [p for p, _ in _files])
                     if _files and not _push_held("repair_handoff"):
                         sf.github.ensure_branch(work_branch, base_branch)
                         for _path, _content in _files:
@@ -12647,17 +13087,114 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                           if getattr(rc_, "ref", None) in _want]
                 if _lines:
                     a_ans, m_ans = _route("implement")
+                    _before_ans_tree = _gate_integrity.compute_tree_fingerprint(
+                        None if use_microvm else root,
+                        changes=_snapshot_changes_for_gate(),
+                    )
                     r_ans = a_ans.run_role(
                         "These line comments from a PERSON still have no answer. Answer each one "
                         "now (fix it first if it is not fixed yet):\n" + "\n".join(_lines) + "\n"
                         + review_comments.response_clause(), root, model=m_ans,
                         resume_session_id=impl_session_id)
                     cost += int(r_ans.get("cost_usd_micros") or 0)
+                    _after_ans_tree = _gate_integrity.compute_tree_fingerprint(
+                        None if use_microvm else root,
+                        changes=_snapshot_changes_for_gate(),
+                    )
+                    if (
+                        _after_ans_tree.get("tree_sha") != _before_ans_tree.get("tree_sha")
+                        or _after_ans_tree.get("changes_digest") != _before_ans_tree.get("changes_digest")
+                    ):
+                        # BOSSAPP-1029: the late comment-answer turn modified files after the last
+                        # gate run — invalidate the prior pass so the pre-PR integrity barrier
+                        # re-verifies the exact tree before landing.
+                        _gate_tracker.invalidate("post-gate comment answer turn modified files")
                     _record_comment_responses(engine, run_id, project_id, _ord,
                                               r_ans.get("summary") or "", round_i=99,
                                               changed_files=[])
         except Exception:  # noqa: BLE001 — Merge stays held by the open comments (ci_gate)
             _log_caught(logger)
+        # GATE INTEGRITY BARRIER (BOSSAPP-1029): verify that the exact tree about to land on
+        # the branch is byte-for-byte identical to the tree verified by the last authoritative
+        # test run. Any repair/edit after the last test run invalidates the prior pass and forces
+        # a re-run on the exact landing tree; if re-verification fails, refuse to ship a passing PR.
+        _landing_files_check = (
+            [FileChange(path=p, content=content) for p, content in accumulated.items()]
+            if use_microvm else sandbox.diff()
+        )
+        _landing_deleted_check = _deleted_now()
+        _landing_pairs_check = with_deletions(_landing_files_check, _landing_deleted_check)
+        if not _recheck and test_cmd and not evidence.get("checks_failing"):
+            _integrity = _gate_tracker.check_integrity(
+                root=None if use_microvm else root,
+                changes=_landing_pairs_check,
+            )
+            if not _integrity["ok"]:
+                with _transaction(engine) as c:
+                    emit_event(
+                        c, project_id, "code_task.gate_verification_invalidated", "boss",
+                        "code_task_run", run_id,
+                        {
+                            "reason": _integrity["reason"],
+                            "verified_tree_sha": _integrity.get("verified_tree_sha"),
+                            "current_tree_sha": _integrity.get("current_tree_sha"),
+                            "verified_changes_digest": _integrity.get("verified_changes_digest"),
+                            "current_changes_digest": _integrity.get("current_changes_digest"),
+                        },
+                    )
+                if not use_microvm:
+                    _reverify = _run_verify(record=True)
+                    tests_passed = bool(_reverify.ok)
+                    official_tests_passed = tests_passed
+                    official_test_exit = _reverify.exit_code
+                    official_verify_output = last_verify_output
+                    evidence["tests_passed"] = tests_passed
+                    evidence["test_exit_code"] = official_test_exit
+                    evidence["last_verify_output"] = official_verify_output
+                    if "written_tests_pass" in gates:
+                        gates["written_tests_pass"] = tests_passed
+                    if "nothing_broke" in gates:
+                        gates["nothing_broke"] = tests_passed
+                    if not tests_passed:
+                        evidence["gate_integrity_invalidated"] = True
+                        evidence["gate_integrity_reason"] = (
+                            f"Re-verification after post-gate edit failed: {_integrity['reason']}"
+                        )
+                        with _transaction(engine) as c:
+                            qg_id, qg_status = _record_quality_gate(
+                                c, run_id=run_id, project_id=project_id, task_id=task_id,
+                                job_id=job_id, evidence=evidence, gates=gates,
+                            )
+                            _release(
+                                budget, c, project_id, reservation_id,
+                                f"gate integrity re-verification failed: {qg_id}",
+                                run_id=run_id,
+                            )
+                            c.execute(
+                                sql(
+                                    "UPDATE code_task_runs SET status='blocked', phase='done', "
+                                    "error=:e, updated_at=now() WHERE id=:id"
+                                ),
+                                {
+                                    "e": evidence["gate_integrity_reason"],
+                                    "id": run_id,
+                                },
+                            )
+                            on_status_written(c, run_id)
+                        return {
+                            "status": "blocked",
+                            "done": True,
+                            "quality_gate_id": qg_id,
+                            "failing_gates": [k for k, v in gates.items() if not v],
+                            "gate_integrity_invalidated": True,
+                        }
+        if _gate_tracker.verified_tree_sha:
+            evidence["verified_tree_sha"] = _gate_tracker.verified_tree_sha
+        if _gate_tracker.verified_changes_digest:
+            evidence["verified_changes_digest"] = _gate_tracker.verified_changes_digest
+        if _gate_tracker.verified_head_sha:
+            evidence["verified_head_sha"] = _gate_tracker.verified_head_sha
+
         _finish_vms(success=True)
         _declare_preview_app()
         _commit_approved_prd()
@@ -12707,15 +13244,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         with _transaction(engine) as c:
             _phase(c, "opening_pr")
-            # The budget reservation is taken for 45 minutes at run start. propose_pull_request
-            # BLOCKS when it has expired ("Missing active reservation for PR proposal"), so any
-            # run longer than 45 minutes could not open a PR at all — regardless of how good the
-            # code was. Observed on crun_9f8febe8: every quality gate resolved, the work was
-            # finished and PAID FOR, and the PR was refused purely because a stalled stage had
-            # pushed the run past the reservation window.
-            #
-            # Blocking here saves nothing: the spend has ALREADY happened. Refusing the PR only
-            # destroys the work the user paid for. So re-acquire a reservation and proceed.
             try:
                 if not budget.assert_active_reservation(c, project_id, reservation_id):
                     renewed = budget.reserve(
@@ -12735,84 +13263,79 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _log_caught(logger)
                 emit_event(c, project_id, "code_task.reservation_renew_failed", "boss",
                            "code_task_run", run_id, {"error": f"{type(exc).__name__}: {exc}"[:200]})
-            # THE STOP WINS WHEN IT CAN (factory walk D1). The PR step is one long transaction
-            # with no phase change inside, so a Stop pressed during it was only seen after the
-            # PR existed. Checked right before the first GitHub write (the push and the PR).
-            # CHECKS FAILING (checks_failing.py): the description OPENS with them, and the PR
-            # is a draft with the label, so nobody reads it as a passing change.
             from .checks_failing import KEY as _CF_KEY, pr_section as _cf_section
+            from . import pr_follow_up as _pr_fu, review_packet as _rp_title
 
             _checks = evidence.get(_CF_KEY) if isinstance(evidence.get(_CF_KEY), dict) else None
-            # PAST THE LAST STAGE BOUNDARY. The final `take_pending_guidance` read is behind us;
-            # from here to the terminal write no stage reads the queue again, so a steer queued
-            # now would be the silent no-op this task exists to end (crun_e470d6dc). Mark it, so
-            # `steer_code_task` answers in words / lands it on a follow-up instead of dropping it.
             c.execute(sql(
                 "UPDATE code_task_runs SET finalize_ctx = "
                 "COALESCE(finalize_ctx,'{}'::jsonb) "
                 "|| jsonb_build_object('past_last_stage_boundary', true), updated_at=now() "
                 "WHERE id=:id"), {"id": run_id})
-            _abort_if_cancelled("before opening the PR", spends=False)
-            if use_microvm:
-                _replan_microvm()
-            _halt_if_needs_person()  # never a PR of code no gate could run
-            _pr_files = ([FileChange(path=p, content=content)
-                          for p, content in accumulated.items()]
-                         if use_microvm else sandbox.diff())
-            # A DELETION REACHES THE BRANCH (dry run 2, gap 1): what the tree removed is
-            # deleted on the change branch, and propose_pull_request reads the branch back.
-            _pr_deleted = _deleted_now()
-            if _recheck:
-                # A RE-CHECK COMMITS NOTHING: whatever BOSS's own gate preparation touched in
-                # the checkout stays there; the PR gets the new verdict and card, not a commit.
-                if _pr_files:
+            _change_title = (_rp_title.work_root_title(c, run_id, fctx)
+                             or _pr_fu.work_name(title) or title)
+            _pr_trailers = agent_acts.pr_trailers(c, run_id)
+
+        _abort_if_cancelled("before opening the PR", spends=False)
+        if use_microvm:
+            _replan_microvm()
+        _halt_if_needs_person()  # never a PR of code no gate could run
+        _pr_files = ([FileChange(path=p, content=content)
+                      for p, content in accumulated.items()]
+                     if use_microvm else sandbox.diff())
+        _pr_deleted = _deleted_now()
+        if _recheck:
+            if _pr_files:
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.recheck_discarded_changes", "boss",
                                "code_task_run", run_id,
                                {"paths": [f.path for f in _pr_files][:40]})
-                _pr_files = []
-                _pr_deleted = []
-            _pr_summary = _cf_section(_checks) + _generated_pr_summary(
-                engine, settings, run_id, project_id, title=title, evidence=evidence,
-                gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
-            # THE MUST-HAVE TABLE (acceptance_gate.pr_section) right after the failing checks.
-            _acc_section = _acceptance_gate.pr_section(evidence.get(_acceptance_gate.KEY))
-            if _acc_section:
-                _cf_lead = _cf_section(_checks)
-                _pr_summary = _cf_lead + _acc_section + _pr_summary[len(_cf_lead):]
-            # THE CHANGE IS TITLED FOR THE WORK ("Lumen Pay tenant onboarding"): its workflow
-            # run's own title, never this step build's, and never with "· retry N".
-            from . import pr_follow_up as _pr_fu, review_packet as _rp_title
-
-            _change_title = (_rp_title.work_root_title(c, run_id, fctx)
-                             or _pr_fu.work_name(title) or title)
-            proposal = sf.propose_pull_request(
-                c, project_id, task_id, reservation_id=reservation_id,
-                dedupe_key=f"code:task:{run_id}", title=_change_title,
-                branch_name=work_branch,
-                summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
-                files=_pr_files, deleted_paths=_pr_deleted,
-                created_by_job_id=job_id, actual_usd_micros=cost,
-                evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
-                pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
-                **({"parent_branch": parent_branch} if parent_branch else {}),
-                **({"checks_failing": _checks} if _checks else {}),
-                monitoring_removals=_monitoring_removals(spec))
+            _pr_files = []
+            _pr_deleted = []
+        _pr_summary = _cf_section(_checks) + _generated_pr_summary(
+            engine, settings, run_id, project_id, title=title, evidence=evidence,
+            gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id,
+            host_kind=("local" if getattr(sf.github, "kind", "") == "local" else "github"),
+            head_sha=str(evidence.get("verified_head_sha") or ""))
+        # THE MUST-HAVE TABLE (acceptance_gate.pr_section) right after the failing checks.
+        _acc_section = _acceptance_gate.pr_section(evidence.get(_acceptance_gate.KEY))
+        if _acc_section:
+            _cf_lead = _cf_section(_checks)
+            _pr_summary = _cf_lead + _acc_section + _pr_summary[len(_cf_lead):]
+        _expected_digest = (
+            None if (_recheck or _checks) else _gate_tracker.verified_changes_digest
+        )
+        _abort_if_cancelled("before opening the PR", spends=False)
+        _guard_write_boundary(
+            "propose_pull_request",
+            [f.path for f in (_pr_files or [])] + [str(p) for p in (_pr_deleted or [])],
+        )
+        proposal = sf.propose_pull_request(
+            None, project_id, task_id, reservation_id=reservation_id,
+            dedupe_key=f"code:task:{run_id}", title=_change_title,
+            branch_name=work_branch,
+            summary=_pr_summary + _pr_trailers,
+            files=_pr_files, deleted_paths=_pr_deleted,
+            created_by_job_id=job_id, actual_usd_micros=cost,
+            evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
+            pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+            require_test_evidence=True,
+            verified_changes_digest=_expected_digest,
+            verified_tree_sha=_gate_tracker.verified_tree_sha,
+            gate_integrity_invalidated=(False if (_recheck or _checks) else _gate_tracker.invalidated),
+            gate_integrity_reason=_gate_tracker.invalidation_reason,
+            **({"parent_branch": parent_branch} if parent_branch else {}),
+            **({"checks_failing": _checks} if _checks else {}),
+            monitoring_removals=_monitoring_removals(spec),
+            db_engine=engine)
 
         status = proposal.get("status")
-        # RETRY THE PR ITSELF. A transient GitHub error, an expired reservation, a network
-        # blip — none of these are reasons to hand the operator nothing after a run that
-        # PASSED its gates. Two runs blocked tonight on "PR not created: failed" having done
-        # all the work. The PR is the deliverable; opening it gets the same persistence as
-        # any other critical step.
         for _pr_attempt in (2, 3):
             if status in ("created", "succeeded", "reused"):
                 break
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.pr_retry", "boss", "code_task_run", run_id,
                            {"attempt": _pr_attempt, "prior_status": status})
-                # First attempt may have released the reservation (model overflow,
-                # missing entitlement). Retries with the dead id only mint
-                # "Missing active reservation" decisions. Re-reserve each try.
                 try:
                     if not budget.assert_active_reservation(c, project_id, reservation_id):
                         renewed = budget.reserve(
@@ -12836,23 +13359,35 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "code_task_run", run_id,
                         {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]},
                     )
-                _abort_if_cancelled("before retrying the PR", spends=False)
-                try:
-                    proposal = sf.propose_pull_request(
-                        c, project_id, task_id, reservation_id=reservation_id,
-                        dedupe_key=f"code:task:{run_id}", title=_change_title,
-                        branch_name=work_branch,
-                        summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
-                        files=_pr_files, deleted_paths=_pr_deleted,
-                        created_by_job_id=job_id, actual_usd_micros=cost,
-                        evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
-                        pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
-                        **({"parent_branch": parent_branch} if parent_branch else {}),
-                        **({"checks_failing": _checks} if _checks else {}),
-                        monitoring_removals=_monitoring_removals(spec))
-                    status = proposal.get("status")
-                except Exception as exc:  # noqa: BLE001
-                    _log_caught(logger)
+                _pr_trailers = agent_acts.pr_trailers(c, run_id)
+            _abort_if_cancelled("before retrying the PR", spends=False)
+            try:
+                _guard_write_boundary(
+                    "propose_pull_request",
+                    [f.path for f in (_pr_files or [])] + [str(p) for p in (_pr_deleted or [])],
+                )
+                proposal = sf.propose_pull_request(
+                    None, project_id, task_id, reservation_id=reservation_id,
+                    dedupe_key=f"code:task:{run_id}", title=_change_title,
+                    branch_name=work_branch,
+                    summary=_pr_summary + _pr_trailers,
+                    files=_pr_files, deleted_paths=_pr_deleted,
+                    created_by_job_id=job_id, actual_usd_micros=cost,
+                    evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
+                    pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+                    require_test_evidence=True,
+                    verified_changes_digest=_expected_digest,
+                    verified_tree_sha=_gate_tracker.verified_tree_sha,
+                    gate_integrity_invalidated=(False if (_recheck or _checks) else _gate_tracker.invalidated),
+                    gate_integrity_reason=_gate_tracker.invalidation_reason,
+                    **({"parent_branch": parent_branch} if parent_branch else {}),
+                    **({"checks_failing": _checks} if _checks else {}),
+                    monitoring_removals=_monitoring_removals(spec),
+                    db_engine=engine)
+                status = proposal.get("status")
+            except Exception as exc:  # noqa: BLE001
+                _log_caught(logger)
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.pr_retry_failed", "boss",
                                "code_task_run", run_id,
                                {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]})
@@ -13188,7 +13723,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         reason = f"{reason} [substrate={execution_substrate}]"
         from .code_task_service import classify_pipeline_exception
         from .spend_cap_failover import apply_spend_cap_failover
-        fclass, rcode = classify_pipeline_exception(reason)
+        fclass, rcode = classify_pipeline_exception(
+            reason, provider_error=getattr(exc, "provider_error", None)
+        )
         if re.search(r"\b[a-z0-9_]+_(?:base_url|api_key)\s+is\s+not\s+configured\b", reason, re.I):
             fclass, rcode = "needs_human", "model_not_configured"
             reason = (
@@ -13329,6 +13866,33 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            failure_class=fclass, reason_code=rcode)
             if decision_id:
                 result = {**result, "decision_id": decision_id}
+            # BOSSAPP-541: every failed run deterministically classifies its cause and proposes
+            # a pre-check artifact linked to issue reporting (never self-modifying without approval).
+            try:
+                from . import precheck_proposals as _pp
+
+                prop_rec = _pp.record_failure_proposal(
+                    c,
+                    settings,
+                    project_id=project_id,
+                    run_id=run_id,
+                    error=reason,
+                    run_kind="code_task",
+                    engine=build_engine,
+                    failure_class=fclass,
+                    reason_code=rcode,
+                    stage=_current_phase_name(engine, run_id),
+                    harness_verdict=harness.as_dict() if harness is not None else None,
+                    actor="boss",
+                )
+                if prop_rec.get("id"):
+                    result = {
+                        **result,
+                        "precheck_proposal_id": prop_rec["id"],
+                        "precheck_cause_class": (prop_rec.get("proposal") or {}).get("cause_class"),
+                    }
+            except Exception:  # noqa: BLE001 — never mask the original run failure
+                _log_caught(logger)
         if fclass == "infra":
             # Committed first: the retry reads this run as failed, and the workflow step that
             # waits on it follows the successor (workflow_capability_runner._successor_attempt).

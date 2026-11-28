@@ -924,7 +924,7 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
     `governance` proves this is the apply of an approved Resource Plane ChangeSet
     (services/governed_host_deploy.py). With it, the write carries its own approval, reservation
     and receipt, so it needs only outward SSH; without it Community refuses outright."""
-    from .governed_host_deploy import check_governed, ungoverned_refusal
+    from .governed_host_deploy import check_governed
 
     if governance is not None:
         check_governed(engine, governance)
@@ -933,10 +933,11 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         if not outward_ssh_allowed(settings):
             raise PermissionError("outward SSH is disabled (BOSS_SSH_OUTWARD_ALLOWED is false)")
     else:
-        if str(getattr(settings, "boss_edition", "community")).strip().lower() in {"community", "oss", "local"}:
-            raise PermissionError(ungoverned_refusal("Community SSH deployment"))
         if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
-            raise PermissionError("BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off")
+            raise PermissionError(
+                "BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off; "
+                "start a governed deployment from Deploy or Infra so a person approves it in Approvals."
+            )
     _validate_ssh_target(host, user)
 
     # A deployment does NOT require a code task run. A run supplies three things — owner/repo,

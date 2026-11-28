@@ -727,9 +727,13 @@ def _lookup_once(settings, name: str, *, connection=None,
         record_system_read,
         resolve_system_ref,
     )
-    from .secrets_service import ref_key_for
+    from .secrets_service import legacy_ref_key_for, ref_key_for
 
-    keys = (name, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name))
+    keys = (
+        name,
+        ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name),
+        legacy_ref_key_for(SUBSCRIPTION_SECRET_SCOPE, name),
+    )
     try:
         value = resolve_system_ref(settings, keys, connection=connection, project_id=project_id)
     except SecretUnavailable as exc:   # refused, or the reference's store did not answer

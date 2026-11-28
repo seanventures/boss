@@ -22,6 +22,7 @@ breaker under it can never fire. The escape built for a person was taken by the 
 """
 
 import inspect
+import pytest
 
 from boss_engine.services import shepherd_service
 
@@ -109,3 +110,137 @@ def test_no_automated_caller_retries_without_a_ceiling():
             assert "attempt_ceiling" in head, (
                 "an automated (BACKGROUND) retry with no ceiling is the unbounded chain:\n"
                 + " ".join(head.split())[:160])
+
+
+# ── BOSSAPP-1300(b): bounded infra breaker bypass + step/recovery attempt_ceiling ─────────────
+
+def test_infra_failure_stamps_boss_commit_and_bounds_breaker_bypass(monkeypatch):
+    from unittest.mock import MagicMock
+    from boss_engine.config import Settings
+    from boss_engine.services import code_task_service as cts, step_recovery
+
+    monkeypatch.setenv("BOSS_SOURCE_SHA", "1111111111111111111111111111111111111111")
+    monkeypatch.setattr(step_recovery, "_BUILD_ID", None)
+    v1 = step_recovery.boss_build()
+
+    # 1. _fail(..., failure_class="infra") records infra_boss_commit.
+    saved = {}
+
+    class _MemConn:
+        def get_run(self, rid):
+            return {"finalize_ctx": {"attempt": 2}}
+
+        def save_run(self, rid, data):
+            saved.update(data)
+
+        def execute(self, *a, **k):
+            return MagicMock()
+
+    cts._fail(_MemConn(), "crun_1", "p1", "infra boom", failure_class="infra", reason_code="infra")
+    assert saved["finalize_ctx"]["infra_boss_commit"] == v1
+
+    # 2. Breaker bypass is allowed ONCE per lineage per BOSS version, then refused until version changes.
+    runs = {
+        "crun_a2": {
+            "id": "crun_a2", "project_id": "p1", "task_id": None, "title": "App",
+            "status": "failed", "phase": "done", "error": "infra boom",
+            "pull_request_url": None, "spec": {"instructions": "build", "owner": "o", "repo": "r"},
+            "state": {},
+            "finalize_ctx": {
+                "attempt": 2, "root_run_id": "crun_a1",
+                "failure_class": "infra", "execution_substrate": "local_subprocess",
+                "infra_boss_commit": v1,
+            },
+        }
+    }
+
+    class _Tx:
+        def __init__(self, c):
+            self.c = c
+
+        def __enter__(self):
+            return self.c
+
+        def __exit__(self, *_a):
+            return False
+
+    class _Conn:
+        def execute(self, *a, **k):
+            return MagicMock()
+
+    created_fctx = []
+    monkeypatch.setattr(cts, "_transaction", lambda _e: _Tx(_Conn()))
+    monkeypatch.setattr(cts, "load_code_task_run", lambda _c, rid: runs.get(rid))
+    monkeypatch.setattr(cts, "_recorded_failed_gates", lambda _c, _rid: [])
+    monkeypatch.setattr(cts, "_failed_at", lambda _c, _rid: None)
+    monkeypatch.setattr(cts, "lineage_branch_owner", lambda *_a, **_k: None)
+
+    def _fake_start(_c, **kw):
+        nid = f"crun_a{kw['finalize_ctx']['attempt']}"
+        created_fctx.append(kw["finalize_ctx"])
+        runs[nid] = {
+            **runs["crun_a2"], "id": nid,
+            "finalize_ctx": {**kw["finalize_ctx"], "failure_class": "infra",
+                             "execution_substrate": "local_subprocess", "infra_boss_commit": v1},
+        }
+        return nid
+
+    monkeypatch.setattr(cts, "start_code_task", _fake_start)
+    monkeypatch.setattr(cts, "emit_event", lambda *_a, **_k: None)
+
+    s = Settings(_env_file=None)
+    # First bypass on v1 succeeds (records infra_breaker_bypasses={v1: 1}).
+    r3 = cts.retry_code_task(object(), s, MagicMock(), "crun_a2", fix_note="restarted")
+    assert r3["run_id"] == "crun_a3"
+    assert created_fctx[-1]["infra_breaker_bypasses"] == {v1: 1}
+
+    # Second bypass on the SAME BOSS build v1 is refused (both fix_note and by_person).
+    with pytest.raises(ValueError, match="already bypassed once on BOSS build"):
+        cts.retry_code_task(object(), s, MagicMock(), "crun_a3", fix_note="try again")
+    with pytest.raises(ValueError, match="already bypassed once on BOSS build"):
+        cts.retry_code_task(object(), s, MagicMock(), "crun_a3", by_person=True)
+
+    # Bumping BOSS version to v2 allows ONE bypass on v2.
+    monkeypatch.setenv("BOSS_SOURCE_SHA", "2222222222222222222222222222222222222222")
+    monkeypatch.setattr(step_recovery, "_BUILD_ID", None)
+    v2 = step_recovery.boss_build()
+    assert v2 != v1
+    r4 = cts.retry_code_task(object(), s, MagicMock(), "crun_a3", fix_note="upgraded boss")
+    assert r4["run_id"] == "crun_a4"
+    assert created_fctx[-1]["infra_breaker_bypasses"] == {v1: 1, v2: 1}
+
+    # A second bypass on v2 without another BOSS change is refused.
+    runs["crun_a4"]["finalize_ctx"]["infra_boss_commit"] = v2
+    with pytest.raises(ValueError, match="already bypassed once on BOSS build"):
+        cts.retry_code_task(object(), s, MagicMock(), "crun_a4", fix_note="still stuck")
+
+
+def test_workflow_capability_runner_passes_attempt_ceiling_to_retry_code_task():
+    from boss_engine.services import workflow_capability_runner as wcr
+
+    src_retried = inspect.getsource(wcr._retried_build)
+    src_recovery = inspect.getsource(wcr._start_recovery_build)
+    assert "attempt_ceiling=" in src_retried
+    assert "attempt_ceiling=" in src_recovery
+
+
+def test_breaker_bypass_state_handles_malformed_infra_breaker_bypasses():
+    from boss_engine.services import code_task_service as cts
+
+    for bad in (["abc111"], "abc111", {"abc111": None}, {"abc111": "not_an_int"}, {"abc111": True},
+                {"abc111": float("inf")}, {"abc111": float("-inf")}, {"abc111": float("nan")}):
+        allowed, bypasses = cts._breaker_bypass_state(
+            {"infra_breaker_bypasses": bad, "infra_boss_commit": "abc111"}, "abc111"
+        )
+        assert allowed is True
+        assert isinstance(bypasses, dict)
+        assert bypasses.get("abc111", 0) == 0
+
+    allowed_none, bypasses_none = cts._breaker_bypass_state(None, "abc111")  # type: ignore[arg-type]
+    assert allowed_none is True and bypasses_none == {}
+
+    blocked, valid = cts._breaker_bypass_state(
+        {"infra_breaker_bypasses": {"abc111": 1, "bad": "x"}, "infra_boss_commit": "abc111"},
+        "abc111",
+    )
+    assert blocked is False and valid == {"abc111": 1, "bad": 0}

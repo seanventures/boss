@@ -379,12 +379,14 @@ def test_a_victims_rotation_never_reaches_an_attackers_bound_slot(eng):
     from boss_engine.config import get_settings
     from boss_engine.services.github_connections import (GitHubConnectionService,
                                                         credential_host_for)
-    from boss_engine.services.secrets_service import ref_key_for
+    from boss_engine.services.secrets_service import legacy_ref_key_for, ref_key_for
 
     u = uuid.uuid4().hex[:8]
     attacker = _named_project(eng, f"x{u}_acme")
     victim = _named_project(eng, f"x{u}_acme-github")
-    assert ref_key_for(attacker, "github_github_ci") == ref_key_for(victim, "github_ci")
+    # Pre-BOSSAPP-1489 legacy builder collided; injective ref_key_for no longer does.
+    assert legacy_ref_key_for(attacker, "github_github_ci") == legacy_ref_key_for(victim, "github_ci")
+    assert ref_key_for(attacker, "github_github_ci") != ref_key_for(victim, "github_ci")
 
     service = GitHubConnectionService(get_settings())
     a_cid, a_ref = _connect(eng, service, attacker, "github ci", "attacker-own-value", GHES)
@@ -404,9 +406,10 @@ def test_a_victims_rotation_never_reaches_an_attackers_bound_slot(eng):
                                           credential_ref=again, connection_id=v_cid)
     assert _material(a_ref) == "attacker-own-value"          # never reached
     assert _material(v_ref) == "victim-third-value"
-    # Both slots stay bound to their own connection (a re-save keeps the binding).
+    # Both slots stay bound to their own connection and host (BOSSAPP-1490).
     assert credential_host_for(_row(eng, attacker, a_ref), GHES, attacker, a_cid) == GHES
-    assert credential_host_for(_row(eng, victim, v_ref), GHES, victim, v_cid) == GHES
+    assert credential_host_for(_row(eng, victim, v_ref), G.PUBLIC_API, victim, v_cid) == G.PUBLIC_API
+    assert credential_host_for(_row(eng, victim, v_ref), GHES, victim, v_cid) == ""
     assert credential_host_for(_row(eng, victim, v_ref), GHES, victim, a_cid) == ""
 
 

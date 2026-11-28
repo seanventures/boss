@@ -858,14 +858,17 @@ def card_checks_failing(lineage: Mapping[str, Any], *, run_id: str) -> Optional[
 
 
 def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
-                      checks_failing: Optional[dict], pr_url: Optional[str] = None
+                      checks_failing: Optional[dict], pr_url: Optional[str] = None,
+                      head_sha: Optional[str] = None
                       ) -> tuple[Optional[dict], Optional[dict]]:
     """(the checks-failing record the merge card carries, the acceptance record it shows).
 
     The run's own checks-failing record when it has one; else the pull request's lineage's
     (`lineage_failures`) — so a follow-up whose own checks passed still shows the gates its PR's
-    earlier builds shipped past. The acceptance record is None when the must-haves were never
-    checked against the root's items: the card then says so, never "passed". Never raises."""
+    earlier builds shipped past. When an outer Acceptance Agent step (`layer='step'`) has checked
+    the head SHA, it supersedes the inner static gate and enriches the card payload (AA-H).
+    Open ledger rows >= MAJOR or open contract items prevent any surface from claiming "passed"
+    (Invariant I4). Never raises."""
     import logging
 
     acceptance = evidence.get(KEY) if isinstance(evidence, Mapping) else None
@@ -873,7 +876,11 @@ def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
     if not run_id:
         return card, acceptance
     try:
+        from sqlalchemy import text as _text
+
         from . import checks_failing as cf
+        from .acceptance import ledger as _ledger
+        from .acceptance import report as _acc_report
 
         with connection.begin_nested():
             lineage = lineage_failures(connection, run_id=run_id, pr_url=pr_url,
@@ -881,6 +888,52 @@ def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
                                        current_failing=cf.gate_names(checks_failing))
         acceptance = lineage.get("acceptance") or (
             acceptance if isinstance(acceptance, Mapping) else None)
+
+        # AA-H: prefer newest acceptance_checks row for the lineage/head SHA (layer='step' beats
+        # layer='build_gate') and attach open ledger rows so I4 holds on the merge card.
+        try:
+            with connection.begin_nested():
+                r_meta = connection.execute(
+                    _text(
+                        "SELECT project_id, COALESCE(finalize_ctx->>'root_run_id', id) AS root "
+                        "  FROM code_task_runs WHERE id = :r"
+                    ),
+                    {"r": run_id},
+                ).mappings().first()
+                if r_meta:
+                    pid = str(r_meta["project_id"])
+                    root_id = str(r_meta["root"])
+                    step_check = _acc_report.latest_for_lineage(
+                        connection, pid,
+                        lineage_root_run_id=root_id,
+                        pr_url=pr_url,
+                        head_sha=head_sha,
+                    )
+                    open_rows = _acc_report.enrich_ledger_rows(
+                        connection, pid,
+                        _ledger.open_for(connection, project_id=pid, lineage=root_id,
+                                         min_severity="minor"),
+                    )
+                    if step_check is not None and (
+                        step_check.get("layer") == "step" or acceptance is None
+                    ):
+                        payload = _acc_report.card_payload(
+                            step_check, open_rows, head_sha=head_sha,
+                        )
+                        acceptance = {**(dict(acceptance) if isinstance(acceptance, Mapping) else {}),
+                                      **payload}
+                    elif isinstance(acceptance, Mapping) and open_rows:
+                        blocking = _acc_report.has_blocking_open_rows(open_rows)
+                        acceptance = {
+                            **dict(acceptance),
+                            "open_tickets": _acc_report.card_payload(
+                                acceptance, open_rows, head_sha=head_sha,
+                            ).get("open_tickets", []),
+                            **({"accepted": False} if blocking else {}),
+                        }
+        except Exception:  # noqa: BLE001 — optional v2 enrichment never breaks legacy card
+            pass
+
         reg = lineage.get("regressed")
         if lineage.get("followups") and isinstance(acceptance, Mapping):
             acceptance = {**acceptance, "bar_followups": list(lineage["followups"])}
@@ -899,8 +952,9 @@ def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
 
 def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[str, Any]],
                validation_status: str) -> str:
-    """The card's "Automated checks" sentence. Never "passed" while a gate of the PR failed or
-    the must-haves were not checked, met in full, against the root's items."""
+    """The card's "Automated checks" sentence. Never "passed" while a gate of the PR failed,
+    while open ledger rows >= MAJOR or open contract items exist (I4), or while the must-haves
+    were not checked, met in full, against the root's items."""
     from . import checks_failing as cf
 
     if card:
@@ -912,6 +966,19 @@ def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[s
         return (f"Automated checks: {validation_status}; must-haves: {gaps} gap"
                 f"{'s' if gaps != 1 else ''} are follow-ups at the "
                 f"{acceptance['bar'].get('bar') or 'standard'} quality bar (not blocking)")
+    # Invariant I4: open >= MAJOR findings or open acceptance gaps forbid claiming "passed".
+    open_tickets = (acceptance or {}).get("open_tickets") or []
+    blocking_open = [
+        t for t in open_tickets
+        if isinstance(t, Mapping)
+        and (str(t.get("kind") or "") == "acceptance_gap"
+             or str(t.get("severity") or "").lower() in ("blocker", "major"))
+    ]
+    if blocking_open or (acceptance is not None and acceptance.get("accepted") is False):
+        why = headline(acceptance) if acceptance else "Must-haves: not accepted"
+        extra = (f" · {len(blocking_open)} open finding{'s' if len(blocking_open) != 1 else ''}"
+                 if blocking_open else "")
+        return f"Automated checks: not accepted (CI {validation_status}; {why}{extra})"
     if not acceptance or acceptance.get("verdict") not in ("met", "no_items"):
         why = headline(acceptance) if acceptance else "Must-haves: not checked"
         return f"Automated checks: CI {validation_status}; {why}"

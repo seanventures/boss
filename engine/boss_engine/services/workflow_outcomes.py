@@ -309,9 +309,29 @@ def role_agent(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     return Verdict(FAILED, _reason(result) or "the step produced nothing")
 
 
+def accepted(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """`acceptance` settled check outcome (AA-G, LLD §6.2): SUCCEEDED on met / no_items /
+    label-advisory, AWAITING while the check runs, FAILED for not_run after retries."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    st = _status(result)
+    if st in ("awaiting", "started", "queued", "running"):
+        return Verdict(AWAITING)
+    if result.get("advisory") and st == "succeeded":
+        return Verdict(SUCCEEDED)
+    v = str(result.get("verdict") or "").strip().lower()
+    if v in ("met", "no_items"):
+        return Verdict(SUCCEEDED)
+    if v == "not_run" or st in DID_NOT_SHIP:
+        return Verdict(FAILED, _reason(result) or str(result.get("why") or "acceptance check did not run"))
+    return Verdict(SUCCEEDED if st == "succeeded" else AWAITING)
+
+
 #: Every capability in the catalogue, and how to tell whether its work happened. A capability
 #: missing from here fails `test_every_capability_has_an_outcome_verdict`.
 VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] = {
+    "acceptance": awaited_work,
     "research": awaited_work,
     "meeting": awaited_work,
     "build": awaited_work,
@@ -393,12 +413,12 @@ FAILURE_SHAPES: dict[str, tuple[dict[str, Any], ...]] = {
         {"url": "http://127.0.0.1:9/", "status": 503, "ms": 3, "body_excerpt": "down"},
         {"url": "http://127.0.0.1:9/", "status": None, "ms": 1,
          "error": "URLError: <urlopen error [Errno 61] Connection refused>"},
-        # Community refuses URL probes outright.
-        {"ok": False, "error": "Community URL probes require a project-bound destination and "
-                               "a network policy; use recorded deployment health."},
+        # SSRF / invalid-URL refusal.
+        {"ok": False, "error": "refused: 169.254.169.254 is a metadata or link-local address; a "
+                               "contract test never sends there."},
     ),
     # tools/builtin.py contract_test: cases that cannot be run as written; a run where a case
-    # failed (the tool ran, `ok` is True, the contract did not hold); Community's refusal.
+    # failed (the tool ran, `ok` is True, the contract did not hold); permission/SSRF refusal.
     "contract_test": (
         {"ok": False, "error": "cases must be a non-empty list of case objects."},
         {"ok": True, "total": 1, "passed": 0, "failed": 1,
@@ -408,8 +428,8 @@ FAILURE_SHAPES: dict[str, tuple[dict[str, Any], ...]] = {
                     "body_excerpt": "down"}],
          "results_table": "| Case | Request | Status | Time | Result |",
          "failed_cases": ["health"]},
-        {"ok": False, "error": "Community URL probes require a project-bound destination and "
-                               "a network policy; use recorded deployment health."},
+        {"ok": False, "error": "Not allowed to contract test: mutating methods need "
+                               "observability:manage."},
     ),
     # tools/github_tools.py github_comment: no repository bound to the project.
     "github_comment": (

@@ -539,6 +539,16 @@ class AgentStudioService:
             )
         if selection_mode not in self.MODEL_SELECTION_MODES:
             errors.append("model_policy.selection_mode must be router, pinned, or local.")
+        pinned_harness = str(
+            model_policy.get("pinned_harness") or model_policy.get("pinned_engine") or ""
+        ).strip().lower()
+        if pinned_harness:
+            from .harness_registry import is_registered_harness
+
+            if not is_registered_harness(pinned_harness):
+                errors.append(
+                    f"model_policy.pinned_harness '{pinned_harness}' is not a registered harness."
+                )
         if execution_mode == "live_model" and not model_policy.get(
             "preferred_capabilities"
         ):

@@ -30,6 +30,7 @@ import { AlwaysAllowOption, alwaysAllowOffer } from "./always-allow-ui";
 import { parseForm } from "../lib/typed-form";
 import { SubmitButton } from "./submit-button";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
+import { LOCAL, useLocalTime } from "../lib/local-time";
 import { sentenceCut } from "../lib/decision-excerpt";
 import {
   DEFAULT_DECISION_INBOX_FILTER,
@@ -100,7 +101,7 @@ function formatDeadline(deadlineAt?: string): string {
 
 /** The card's deadline, labelled (a bare future date in the evidence row read as an unexplained
  *  timestamp): "Decide by …" before it, "Deadline passed …" after, nothing when there is none. */
-export function deadlineLabel(deadlineAt?: string | null, now: number = Date.now()): string {
+export function deadlineLabel(deadlineAt?: string | null, now: number = LOCAL.now()): string {
   if (!deadlineAt) return "";
   const at = Date.parse(deadlineAt);
   const when = formatDateTimeShared(deadlineAt, "");
@@ -458,6 +459,9 @@ export function approvalEffectLabel(recommendation: Record<string, unknown>,
     case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
     case "self_improvement.begin_canary":
     case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
+    case "promote_agent_deployment":
+      return serverApproveEffect(offers)
+        || "Approving promotes this agent version to prod without dropping in-flight runs.";
     // A re-check's Fix card (engine change_recheck): pressing it starts the follow-up build.
     case "start_recheck_followup":
       return serverApproveEffect(offers)
@@ -477,6 +481,7 @@ function decisionImpact(decision: DecisionFeedItem): { label: string; tone: stri
     typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
   if (action === "resume_code_task" || action === "review_plan_draft") return { label: "plan", tone: "amber" };
   if (action === "review_pull_request" || action.startsWith("github.")) return { label: "merge", tone: "blue" };
+  if (action === "promote_agent_deployment") return { label: "promote", tone: "teal" };
   if (action === "review_deployment" || action === "deploy_host") return { label: "deploy", tone: "teal" };
   if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
   if (action === "role.autonomy_change") return { label: "access", tone: "red" };
@@ -1324,6 +1329,22 @@ export function decisionCardLines(decision: DecisionFeedItem, projectId: string,
     const page = prUrl ? changeHref(prUrl) : null;
     // A GitHub PR has no BOSS Checks page: line 2 opens this card's Details, and says so.
     more = page && isLocalChangeUrl(prUrl) ? { label: "Checks", href: `${page}?tab=checks` } : { label: "Details", href: null };
+  } else if (action === "promote_agent_deployment") {
+    variant = "deploy";
+    const ag = recText(rec, "agent_key") || app || "agent";
+    const toEnv = recText(rec, "to_environment") || env || "prod";
+    const fromEnv = recText(rec, "from_environment") || "staging";
+    const ver = typeof rec.version === "number" ? ` v${rec.version}` : "";
+    const checksArr = Array.isArray(rec.checks) ? rec.checks as Array<{ ok?: boolean | null; label?: string }> : [];
+    const failedChecks = checksArr.filter((c) => c.ok === false);
+    const inFlight = rec.in_flight && typeof rec.in_flight === "object" ? (rec.in_flight as { runs?: number; note?: string }) : null;
+    cardTitle = `Promote ${ag}${ver} (${fromEnv} → ${toEnv})`;
+    tone = failedChecks.length ? "bad" : "ok";
+    phrases = [
+      failedChecks.length ? `${failedChecks.length} check(s) failed` : checksArr.length ? "✓ Promotion checks passed" : "",
+      inFlight && typeof inFlight.runs === "number" ? `${inFlight.runs} in-flight run(s) keep current version` : "",
+    ].filter(Boolean);
+    more = { label: "Deployments", href: `?area=workforce&role=${encodeURIComponent(ag)}&tab=deployments` };
   } else if (isDeployDecision(rec)) {
     variant = "deploy";
     const host = recText(rec, "host");
@@ -1512,7 +1533,8 @@ export function DecisionCard({
     ? <a href={lines.more.href} data-testid="decision-status-more">{lines.more.label} ›</a>
     : detailsButton(`${lines.more.label} ›`, "decision-status-more");
   const detailsInLinks = lines.more.href ? detailsButton(open ? "Hide details" : "Details", "decision-details-toggle") : null;
-  const when = deadlineLabel(decision.deadlineAt);
+  const lt = useLocalTime();
+  const when = deadlineLabel(decision.deadlineAt, lt.now());
   const occurrences = typeof rec.occurrences === "number" ? rec.occurrences : 0;
   const autoApproved = isApproved && decision.approvedBy === "auto_approval";
 

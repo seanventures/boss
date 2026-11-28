@@ -49,8 +49,11 @@ import os
 import re
 import secrets as _secrets
 import shlex
+import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import quote
 
@@ -529,11 +532,77 @@ class HostAccess:
                              str(proc.stderr or ""))
 
 
+class LocalHostAdapter:
+    """Execute stack deploy steps on BOSS's built-in `'this machine'` without SSH.
+
+    Maps `/opt/boss-apps` under `settings.artifact_root / 'local-deploys' / <host_id>` so
+    local installs and containers without root `/opt/boss-apps` access can deploy stacks
+    cleanly using `owned_process.run`.
+    """
+
+    def __init__(self, settings: Settings, host_id: str = "local") -> None:
+        self.settings = settings
+        self.host_id = host_id
+        self.root = Path(settings.artifact_root) / "local-deploys" / (host_id or "local")
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _translate_command(self, command: str) -> str:
+        from .deploy_service import REMOTE_BASE
+
+        translated = command.replace(REMOTE_BASE, str(self.root))
+        if sys.platform == "darwin":
+            # BSD mv on macOS has no `-T` flag; emulate atomic switch safely.
+            translated = re.sub(
+                r"\bmv\s+-Tf\s+(\S+)\s+(\S+)",
+                r"rm -rf \2 && mv \1 \2",
+                translated,
+            )
+        return translated
+
+    def stack_exec(self, *, host: str, user: str, port: int, key_material: str,
+                   command: str, timeout: int = 120, write: bool = False,
+                   changeset_id: Optional[str] = None, stdin_text: Optional[str] = None,
+                   stdin_path: Optional[str] = None) -> CommandResult:
+        from . import owned_process
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        cmd = self._translate_command(command)
+        stdin_bytes: Optional[bytes] = None
+        if stdin_text is not None:
+            stdin_bytes = stdin_text.encode("utf-8")
+        elif stdin_path is not None:
+            stdin_bytes = Path(stdin_path).read_bytes()
+        try:
+            proc = owned_process.run(
+                ["bash", "-lc", cmd],
+                cwd=str(self.root),
+                input=stdin_bytes,
+                capture_output=True,
+                timeout=timeout,
+            )
+            return CommandResult(
+                int(proc.returncode),
+                (proc.stdout or b"").decode("utf-8", "replace"),
+                (proc.stderr or b"").decode("utf-8", "replace"),
+            )
+        except subprocess.TimeoutExpired:
+            return CommandResult(124, "", f"local stack command timed out after {timeout}s")
+
+
 def host_access_for(connection: Connection, settings: Settings, host: dict,
                     adapter: Any = None) -> HostAccess:
+    from .deployment_fleet import is_builtin_local_host
     from .secret_backends import SecretUnavailable, resolve_secret_ref
     from .ssh_host_adapter import SSHHostAdapter
 
+    if adapter is None and is_builtin_local_host(host):
+        return HostAccess(
+            host=str(host.get("address") or "127.0.0.1"),
+            user=str(host.get("ssh_user") or "local"),
+            port=0,
+            key_material="",
+            adapter=LocalHostAdapter(settings, host_id=str(host.get("id") or "local")),
+        )
     ref = str(host.get("key_secret_ref") or "")
     if not ref:
         raise StackDeployError(
@@ -1508,13 +1577,37 @@ def _describe(connection: Connection, rows: list[Any]) -> list[dict[str, Any]]:
     decisions = {d["id"]: d["status"] for d in connection.execute(
         text("SELECT id, status FROM decisions WHERE id = ANY(:d)"),
         {"d": decision_ids}).mappings().all()} if decision_ids else {}
+    active_target_ids = sorted({r["target_id"] for r in rows if r.get("status") in ACTIVE_STATES})
+    targets_by_id = {
+        t["id"]: dict(t) for t in connection.execute(
+            text("SELECT * FROM deployment_targets WHERE id = ANY(:t)"),
+            {"t": active_target_ids}).mappings().all()
+    } if active_target_ids else {}
+    host_ids = sorted({
+        h for h in (
+            [t.get("host_id") for t in targets_by_id.values()]
+            + [r.get("host_id") for r in rows if r.get("status") in ACTIVE_STATES]
+        ) if h
+    })
+    hosts_by_id = {
+        h["id"]: dict(h) for h in connection.execute(
+            text("SELECT * FROM deployment_hosts WHERE id = ANY(:h)"),
+            {"h": host_ids}).mappings().all()
+    } if host_ids else {}
     out = []
     for r in rows:
         option = rollback_option(r, history[r["target_id"]])
-        out.append({**serialize(r),
-                    "actions": deployment_actions(r, history[r["target_id"]],
-                                                  decisions.get(r.get("decision_id"))),
-                    "rollback_commit": option["rollback_commit"]})
+        item = {**serialize(r),
+                "actions": deployment_actions(r, history[r["target_id"]],
+                                              decisions.get(r.get("decision_id"))),
+                "rollback_commit": option["rollback_commit"]}
+        if r.get("status") in ACTIVE_STATES:
+            t = targets_by_id.get(r["target_id"])
+            if t is not None:
+                h = hosts_by_id.get(t.get("host_id") or r.get("host_id") or "")
+                if t.get("public_url") or (_json(t.get("domains")) or []) or (h and h.get("address")):
+                    item["open_url"] = target_address(t, h or {"address": ""})
+        out.append(item)
     return out
 
 

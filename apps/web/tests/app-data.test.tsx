@@ -61,7 +61,7 @@ beforeEach(() => {
     }
     if (method === "POST" && path.endsWith("/restore")) {
       const id = path.split("/").slice(-2)[0];
-      const row = page.trash.find((item) => item.id === id) as { id: string; cells: Record<string, string> } | undefined;
+      const row = page.trash.find((item) => item.id === id) as { id: string; cells: { name: string; city: string } } | undefined;
       page = {
         ...page,
         trash: page.trash.filter((item) => item.id !== id),

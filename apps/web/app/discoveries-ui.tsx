@@ -189,8 +189,7 @@ function ResearchHero({ projectId, researchAvailable, discoveries, totals, onSta
           </form>
         ) : (
           <p className="rp-paused" data-testid="discovery-research-paused">
-            New research is paused in Community until budget and recovery safeguards are ready.
-            Saved dossiers stay below.
+            New research is disabled. Saved dossiers stay below.
           </p>
         )}
         <How steps={["Sweep the web for signals", "A critic tries to refute it", "Outcomes you can pilot",
@@ -681,7 +680,7 @@ function DiscoveryDetail({ id, row, projectId, actor = "", researchAvailable, on
           {run.context ? <p className="rp-sub">Context: {run.context}</p> : null}
           <Stepper stages={researchStages(run)} live={live} testId="discovery-flow" />
           {!researchAvailable ? (
-            <p className="rp-sub">Deeper research is paused in Community; this dossier stays available.</p>
+            <p className="rp-sub">Deeper research is disabled; this dossier stays available.</p>
           ) : null}
         </div>
         <div className="rp-dh-r">

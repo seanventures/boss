@@ -6,6 +6,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 type Turn = { mode: string; text: string; reply: string; wrote_code: boolean };
 type Plan = { id: string; steps: string[]; writes_code: boolean };
@@ -331,7 +332,7 @@ export function BuilderChatPlan({ projectId }: Props) {
           <form className="bcp-compose" onSubmit={onSend}>
             <textarea data-testid="bcp-message" aria-label="Message" placeholder="Say what to plan" value={draft} onChange={(event) => setDraft(event.target.value)} />
             <div className="bcp-actions">
-              <button type="submit" className="bcp-send" data-testid="bcp-send" disabled={!threadId || busy}>Send</button>
+              <GatedButton permission="assistant:chat" type="submit" className="bcp-send" data-testid="bcp-send" disabled={!threadId || busy}>Send</GatedButton>
               <button type="button" className="bcp-approve" data-testid="bcp-approve" title="You allow one build" disabled={!plan || approved || busy} onClick={onApprove}>Approve plan</button>
               <p className="bcp-note">{approved ? "Ready to build." : "Closed until you approve."}</p>
             </div>

@@ -37,13 +37,16 @@ def test_entitlement_kinds_that_are_not_money():
 
 def test_the_claude_cli_says_subscription_on_its_login_and_metered_on_a_key(monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t" * 12)    # the login, not a store lookup
-    data = {"usage": {"input_tokens": 10, "output_tokens": 5}, "total_cost_usd": 0.25,
+    # 50k input @ $3/Mtok ($0.15) + 6,667 output @ $15/Mtok ($0.10) = $0.25 list price.
+    # BOSSAPP-782: CLI calls with tokens are priced at list from tokens rather than CLI total_cost_usd.
+    data = {"usage": {"input_tokens": 50_000, "output_tokens": 6_667}, "total_cost_usd": 0.45,
             "modelUsage": {"claude-sonnet-4-5": {}}}
     adapter = ClaudeCliAdapter(Settings(claude_code_oauth_token="t" * 12))
     adapter._child_env()
     usage = adapter._usage(data)
     assert usage["billing"] == "subscription"
-    assert usage["cost_usd_micros"] == 250_000, "the list-price value is still reported"
+    assert usage["cost_usd_micros"] == 250_005, "the list-price value from tokens is reported"
+    assert usage["cli_reported_cost_usd_micros"] == 450_000
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k" * 12)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)

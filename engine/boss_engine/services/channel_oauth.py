@@ -34,6 +34,7 @@ model-provider capacity — keeps meaning only that.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import secrets
 from typing import Any, Optional
@@ -43,6 +44,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from ..db import WaitInWrittenTransactionError, assert_not_in_written_tx, begin
 from .core import emit_event, make_id, now_utc
 from .secret_backends import SecretUnavailable, backend_for, durable_secret_backend
 
@@ -624,11 +626,12 @@ def start(
 
 
 def complete(
-    connection: Connection,
+    connection: Optional[Connection],
     settings: Settings,
     *,
     code: str,
     state: str,
+    db_engine: Any = None,
 ) -> dict[str, Any]:
     """Exchange the consent code, store the refresh token, activate the connection."""
     # THE NONCE IS CHECKED BEFORE ANYTHING ELSE, INCLUDING CONFIGURATION.
@@ -641,20 +644,30 @@ def complete(
     # happen until it holds.
     if not code or not state:
         raise ChannelOAuthError("Google did not return both a code and a state.")
+    if connection is None and db_engine is None:
+        raise ValueError("complete requires either connection or db_engine")
 
-    pending = connection.execute(
-        text("SELECT id, project_id, connection_key, provenance FROM integration_connections "
-             "WHERE status = 'pending' AND provenance->>'state' = :s"),
-        {"s": state},
-    ).mappings().first()
-    if not pending:
-        # Also covers replay: the row is deleted or activated once used, so a second callback
-        # with the same state finds nothing.
-        raise ChannelOAuthError(
-            "That authorisation has expired or was already used. Start the connection again.")
+    tx = (lambda: begin(db_engine)) if connection is None else (lambda: contextlib.nullcontext(connection))
 
-    client_id, client_secret, redirect = _require_client(
-        settings, connection, str(pending["project_id"]))
+    # Short Tx 1: validate pending state nonce & read OAuth client config (read-only).
+    with tx() as conn:
+        pending = conn.execute(
+            text("SELECT id, project_id, connection_key, provenance FROM integration_connections "
+                 "WHERE status = 'pending' AND provenance->>'state' = :s"),
+            {"s": state},
+        ).mappings().first()
+        if not pending:
+            # Also covers replay: the row is deleted or activated once used, so a second callback
+            # with the same state finds nothing.
+            raise ChannelOAuthError(
+                "That authorisation has expired or was already used. Start the connection again.")
+        pending_data = dict(pending)
+        project_id = str(pending_data["project_id"])
+        client_id, client_secret, redirect = _require_client(
+            settings, conn, project_id)
+
+    # No Tx: exchange code, verify YouTube channel identity, and store refresh token durably.
+    assert_not_in_written_tx("channel_oauth.token_exchange")
     httpx = _http()
     try:
         response = httpx.post(
@@ -684,8 +697,9 @@ def complete(
             "authorised this app — remove BOSS at myaccount.google.com/permissions and "
             "connect again.")
 
-    project_id = str(pending["project_id"])
-    ref_key = f"channel/{project_id}/{pending['connection_key']}/refresh_token"
+    channel = _channel_identity(settings, refresh_token, client_id, client_secret)
+
+    ref_key = f"channel/{project_id}/{pending_data['connection_key']}/refresh_token"
     # DURABLE, NOT MERELY PROTECTED. The console writes this and a WORKER reads it back
     # days later, through a redeploy. See durable_secret_backend for what that cost.
     kind = durable_secret_backend(settings)
@@ -694,88 +708,98 @@ def complete(
     except SecretUnavailable as error:
         raise ChannelOAuthError(f"Could not store the token: {error}") from error
 
-    # RECONNECTING THE SAME CHANNEL REUSES ITS ROW.
-    #
-    # `ref_key` is derived from the project and the connection key, and `secret_refs` has
-    # UNIQUE(project_id, ref_kind, ref_key) — so a plain INSERT succeeded exactly once per
-    # channel, ever. Every reconnect after the first died on
-    #
-    #   duplicate key value violates unique constraint "secret_refs_project_id_ref_kind_ref_key_key"
-    #
-    # which the operator saw as a raw psycopg IntegrityError after completing Google's consent
-    # screen. The comment on the console's Reconnect button calls this "the weekly path",
-    # because a testing-mode refresh token expires after seven days; it had never once worked
-    # on a channel that was already connected.
-    #
-    # The token ITSELF was already overwritten by `backend_for(...).put(...)` above — only the
-    # row describing it refused to be written twice. RETURNING id gives the existing row's id,
-    # so `secret_ref_ids` below points at the record that actually holds the token rather than
-    # at an id that was never inserted.
-    secret_ref_id = str(connection.execute(
-        text(
-            """
-            INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key,
-                                     provider, secret_kind, storage_backend, status, metadata,
-                                     created_by)
-            VALUES (:id, :p, 'project', :p, :kind, :ref_key, 'google', 'oauth_refresh_token',
-                    :kind, 'active', CAST(:meta AS JSONB), :actor)
-            ON CONFLICT (project_id, ref_kind, ref_key) DO UPDATE
-               SET status = 'active',
-                   storage_backend = EXCLUDED.storage_backend,
-                   secret_kind = EXCLUDED.secret_kind,
-                   provider = EXCLUDED.provider,
-                   metadata = EXCLUDED.metadata,
-                   -- A re-authorisation is the opposite of a revocation, and a row that still
-                   -- carried one would read as revoked while holding a live token.
-                   revoked_at = NULL,
-                   revoked_by = NULL,
-                   updated_at = now()
-            RETURNING id
-            """
-        ),
-        {"id": make_id("secref"), "p": project_id, "kind": kind, "ref_key": ref_key,
-         "meta": json.dumps({"scopes": list(YOUTUBE_SCOPES), "provider": "google"}),
-         "actor": str((pending["provenance"] or {}).get("started_by") or "system")},
-    ).scalar())
+    # Short Tx 2: lock pending row, upsert secret_refs, activate connection, seed skills, emit event.
+    with tx() as conn:
+        claimed = conn.execute(
+            text("SELECT id FROM integration_connections "
+                 "WHERE id = :id AND status = 'pending' AND provenance->>'state' = :s FOR UPDATE"),
+            {"id": pending_data["id"], "s": state},
+        ).mappings().first()
+        if not claimed:
+            raise ChannelOAuthError(
+                "That authorisation has expired or was already used. Start the connection again.")
 
-    channel = _channel_identity(settings, refresh_token, client_id, client_secret)
-    connection.execute(
-        text(
-            """
-            UPDATE integration_connections
-               SET status = 'active', health_status = 'healthy', health_checked_at = now(),
-                   secret_ref_ids = CAST(:refs AS JSONB),
-                   provenance = provenance || CAST(:prov AS JSONB),
-                   updated_at = now()
-             WHERE id = :id
-            """
-        ),
-        {"id": pending["id"], "refs": json.dumps([secret_ref_id]),
-         "prov": json.dumps({
-             # The state is REMOVED, not kept: it has been spent, and a spent nonce left in a
-             # readable column is a replay waiting for a bug elsewhere.
-             "state": None,
-             "connected_at": now_utc().isoformat(),
-             "channel": channel,
-         })},
-    )
-    # The standards become relevant the moment a channel exists to publish to. Seeded here so
-    # an operator meets them while publishing is on their mind, rather than discovering an
-    # unexplained row in the Skills page months later.
-    try:
-        seed_publishing_standards(
-            connection, project_id,
-            str((pending["provenance"] or {}).get("started_by") or "system"))
-    except Exception:  # noqa: BLE001
-        # A failed seed must not fail a connection that is already established and stored.
-        pass
+        # RECONNECTING THE SAME CHANNEL REUSES ITS ROW.
+        #
+        # `ref_key` is derived from the project and the connection key, and `secret_refs` has
+        # UNIQUE(project_id, ref_kind, ref_key) — so a plain INSERT succeeded exactly once per
+        # channel, ever. Every reconnect after the first died on
+        #
+        #   duplicate key value violates unique constraint "secret_refs_project_id_ref_kind_ref_key_key"
+        #
+        # which the operator saw as a raw psycopg IntegrityError after completing Google's consent
+        # screen. The comment on the console's Reconnect button calls this "the weekly path",
+        # because a testing-mode refresh token expires after seven days; it had never once worked
+        # on a channel that was already connected.
+        #
+        # The token ITSELF was already overwritten by `backend_for(...).put(...)` above — only the
+        # row describing it refused to be written twice. RETURNING id gives the existing row's id,
+        # so `secret_ref_ids` below points at the record that actually holds the token rather than
+        # at an id that was never inserted.
+        secret_ref_id = str(conn.execute(
+            text(
+                """
+                INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key,
+                                         provider, secret_kind, storage_backend, status, metadata,
+                                         created_by)
+                VALUES (:id, :p, 'project', :p, :kind, :ref_key, 'google', 'oauth_refresh_token',
+                        :kind, 'active', CAST(:meta AS JSONB), :actor)
+                ON CONFLICT (project_id, ref_kind, ref_key) DO UPDATE
+                   SET status = 'active',
+                       storage_backend = EXCLUDED.storage_backend,
+                       secret_kind = EXCLUDED.secret_kind,
+                       provider = EXCLUDED.provider,
+                       metadata = EXCLUDED.metadata,
+                       -- A re-authorisation is the opposite of a revocation, and a row that still
+                       -- carried one would read as revoked while holding a live token.
+                       revoked_at = NULL,
+                       revoked_by = NULL,
+                       updated_at = now()
+                RETURNING id
+                """
+            ),
+            {"id": make_id("secref"), "p": project_id, "kind": kind, "ref_key": ref_key,
+             "meta": json.dumps({"scopes": list(YOUTUBE_SCOPES), "provider": "google"}),
+             "actor": str((pending_data["provenance"] or {}).get("started_by") or "system")},
+        ).scalar())
 
-    emit_event(connection, project_id, "channel.connected",
-               str((pending["provenance"] or {}).get("started_by") or "system"),
-               "integration_connection", str(pending["id"]),
-               {"provider": "google", "channel": channel})
+        conn.execute(
+            text(
+                """
+                UPDATE integration_connections
+                   SET status = 'active', health_status = 'healthy', health_checked_at = now(),
+                       secret_ref_ids = CAST(:refs AS JSONB),
+                       provenance = provenance || CAST(:prov AS JSONB),
+                       updated_at = now()
+                 WHERE id = :id
+                """
+            ),
+            {"id": pending_data["id"], "refs": json.dumps([secret_ref_id]),
+             "prov": json.dumps({
+                 # The state is REMOVED, not kept: it has been spent, and a spent nonce left in a
+                 # readable column is a replay waiting for a bug elsewhere.
+                 "state": None,
+                 "connected_at": now_utc().isoformat(),
+                 "channel": channel,
+             })},
+        )
+        # The standards become relevant the moment a channel exists to publish to. Seeded here so
+        # an operator meets them while publishing is on their mind, rather than discovering an
+        # unexplained row in the Skills page months later.
+        try:
+            seed_publishing_standards(
+                conn, project_id,
+                str((pending_data["provenance"] or {}).get("started_by") or "system"))
+        except Exception:  # noqa: BLE001
+            # A failed seed must not fail a connection that is already established and stored.
+            pass
+
+        emit_event(conn, project_id, "channel.connected",
+                   str((pending_data["provenance"] or {}).get("started_by") or "system"),
+                   "integration_connection", str(pending_data["id"]),
+                   {"provider": "google", "channel": channel})
     return {
-        "connection_id": pending["id"],
+        "connection_id": pending_data["id"],
         "project_id": project_id,
         "channel": channel,
         "status": "active",
@@ -792,6 +816,7 @@ def _channel_identity(
     it proves the token works without publishing anything.
     """
     try:
+        assert_not_in_written_tx("channel_oauth.channel_identity")
         access = _exchange_refresh(settings, refresh_token, client_id, client_secret)
         httpx = _http()
         r = httpx.get(
@@ -821,6 +846,7 @@ def _channel_identity(
 def _exchange_refresh(
     settings: Settings, refresh_token: str, client_id: str, client_secret: str
 ) -> str:
+    assert_not_in_written_tx("channel_oauth.refresh")
     httpx = _http()
     r = httpx.post(
         TOKEN_ENDPOINT,
@@ -871,42 +897,62 @@ def access_token_for(
 
 
 def disconnect(
-    connection: Connection, settings: Settings, *,
+    connection: Optional[Connection], settings: Settings, *,
     project_id: str, connection_key: str, actor: str,
+    db_engine: Any = None,
 ) -> dict[str, Any]:
     """Revoke at Google AND locally. Either alone leaves a live credential somewhere."""
     from .secret_backends import resolve_secret_ref
 
-    row = connection.execute(
-        text("SELECT id, secret_ref_ids FROM integration_connections "
-             "WHERE project_id = :p AND connection_key = :k"),
-        {"p": project_id, "k": connection_key},
-    ).mappings().first()
-    if not row:
-        raise ChannelOAuthError(f"No '{connection_key}' connection on this project.")
+    if connection is None and db_engine is None:
+        raise ValueError("disconnect requires either connection or db_engine")
+
+    tx = (lambda: begin(db_engine)) if connection is None else (lambda: contextlib.nullcontext(connection))
+
+    with tx() as conn:
+        row = conn.execute(
+            text("SELECT id, secret_ref_ids FROM integration_connections "
+                 "WHERE project_id = :p AND connection_key = :k"),
+            {"p": project_id, "k": connection_key},
+        ).mappings().first()
+        if not row:
+            raise ChannelOAuthError(f"No '{connection_key}' connection on this project.")
+        row_id = row["id"]
+        refs = [str(ref) for ref in (row["secret_ref_ids"] or [])]
+        tokens: list[str] = []
+        for ref in refs:
+            try:
+                tokens.append(resolve_secret_ref(conn, ref, settings))
+            except Exception:  # noqa: BLE001
+                pass
 
     revoked_upstream = False
-    for ref in (row["secret_ref_ids"] or []):
+    for token in tokens:
         try:
-            token = resolve_secret_ref(connection, str(ref), settings)
+            assert_not_in_written_tx("channel_oauth.revoke")
             _http().post(REVOKE_ENDPOINT, data={"token": token}, timeout=20.0)
             revoked_upstream = True
+        except WaitInWrittenTransactionError:
+            raise
         except Exception:  # noqa: BLE001
             # Google being unreachable must not block the local revoke: a connection nobody can
             # revoke because a third party is down is worse than one revoked on one side.
             pass
-        connection.execute(
-            text("UPDATE secret_refs SET status='revoked', revoked_at=now(), revoked_by=:a "
-                 "WHERE id = :i"),
-            {"i": str(ref), "a": actor},
+
+    with tx() as conn:
+        for ref in refs:
+            conn.execute(
+                text("UPDATE secret_refs SET status='revoked', revoked_at=now(), revoked_by=:a "
+                     "WHERE id = :i"),
+                {"i": ref, "a": actor},
+            )
+        conn.execute(
+            text("UPDATE integration_connections SET status='revoked', health_status='revoked', "
+                 "secret_ref_ids='[]'::jsonb, updated_at=now() WHERE id = :i"),
+            {"i": row_id},
         )
-    connection.execute(
-        text("UPDATE integration_connections SET status='revoked', health_status='revoked', "
-             "secret_ref_ids='[]'::jsonb, updated_at=now() WHERE id = :i"),
-        {"i": row["id"]},
-    )
-    emit_event(connection, project_id, "channel.disconnected", actor,
-               "integration_connection", str(row["id"]),
-               {"connection_key": connection_key, "revoked_upstream": revoked_upstream})
+        emit_event(conn, project_id, "channel.disconnected", actor,
+                   "integration_connection", str(row_id),
+                   {"connection_key": connection_key, "revoked_upstream": revoked_upstream})
     return {"connection_key": connection_key, "status": "revoked",
             "revoked_upstream": revoked_upstream}

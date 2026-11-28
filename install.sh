@@ -843,9 +843,6 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   MON_METRICS_PORT="${MON_METRICS_PORT:-9464}"
   MON_METRICS_HOST="${MON_METRICS_HOST:-0.0.0.0}"
   ui_ok "Monitoring: bundled Prometheus and Grafana (Grafana on port $GRAFANA_PORT)"
-  if port_in_use "$GRAFANA_PORT" && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'grafana'; then
-    ui_warn "Port $GRAFANA_PORT is already in use — set BOSS_GRAFANA_PORT to another port and re-run if Grafana does not start."
-  fi
 else
   ui_ok "Mission Control: skipped"
 fi
@@ -1373,12 +1370,23 @@ BOSS_EDITION=community
 # The company's root CA (PEM, absolute path): trusted by image builds and by every container.
 BOSS_EXTRA_CA_FILE=${BOSS_EXTRA_CA_FILE:-${BOSS_BUILD_CA_FILE:-}}
 BOSS_NPM_REGISTRY=${BOSS_NPM_REGISTRY:-}
+BOSS_NPM_CREDENTIAL_REF=${BOSS_NPM_CREDENTIAL_REF:-}
+BOSS_BUILD_NPMRC_FILE=${BOSS_BUILD_NPMRC_FILE:-}
 BOSS_PIP_INDEX_URL=${BOSS_PIP_INDEX_URL:-}
+BOSS_PIP_CREDENTIAL_REF=${BOSS_PIP_CREDENTIAL_REF:-}
+BOSS_BUILD_PIP_CONF_FILE=${BOSS_BUILD_PIP_CONF_FILE:-}
 BOSS_GOPROXY=${BOSS_GOPROXY:-}
 BOSS_GOSUMDB=${BOSS_GOSUMDB:-}
 BOSS_GONOSUMDB=${BOSS_GONOSUMDB:-}
 BOSS_MAVEN_MIRROR=${BOSS_MAVEN_MIRROR:-}
+BOSS_MAVEN_CREDENTIAL_REF=${BOSS_MAVEN_CREDENTIAL_REF:-}
 BOSS_PLAYWRIGHT_DOWNLOAD_HOST=${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
+BOSS_TOOLCHAIN_MIRROR_URL=${BOSS_TOOLCHAIN_MIRROR_URL:-}
+BOSS_GITHUB_WEB_URL=${BOSS_GITHUB_WEB_URL:-}
+BOSS_GITHUB_API_URL=${BOSS_GITHUB_API_URL:-}
+BOSS_GITHUB_GIT_URL=${BOSS_GITHUB_GIT_URL:-}
+BOSS_GITLAB_BASE_URL=${BOSS_GITLAB_BASE_URL:-}
+BOSS_GITLAB_REPOS=${BOSS_GITLAB_REPOS:-}
 BOSS_UPSTREAM_PROXY=${BOSS_UPSTREAM_PROXY:-}
 BOSS_UPSTREAM_HTTP_PROXY=${BOSS_UPSTREAM_HTTP_PROXY:-}
 BOSS_UPSTREAM_NO_PROXY=${BOSS_UPSTREAM_NO_PROXY:-}
@@ -1945,6 +1953,10 @@ fi
 
 # Start the worker and optional console only after the project and actors are
 # available. The same order applies to a first install, rerun, and upgrade.
+if [[ "$WITH_WEB" -eq 1 ]] && port_in_use "$GRAFANA_PORT" && \
+   ! "${DOCKER[@]}" ps --format '{{.Names}}' 2>/dev/null | grep -q 'grafana'; then
+  ui_warn "Port $GRAFANA_PORT is already in use — set BOSS_GRAFANA_PORT to another port and re-run if Grafana does not start."
+fi
 # shellcheck disable=SC2086
 ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build </dev/null

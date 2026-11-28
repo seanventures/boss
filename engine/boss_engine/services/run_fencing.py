@@ -98,6 +98,14 @@ def claim_run(connection, run_id: str, token_hash: Optional[str]) -> bool:
     """
     if not token_hash:
         return False
+    # BOSSAPP-1482: lock the run row FIRST so rival_alive and our own lease liveness are
+    # read under the run-row lock rather than before it.
+    run_epoch = connection.execute(
+        sql("SELECT fence_epoch FROM code_task_runs WHERE id = :id FOR UPDATE"),
+        {"id": run_id}).scalar()
+    if run_epoch is None:
+        return False
+    run_epoch = int(run_epoch or 0)
     # THIS EXECUTION'S OWN LEASE, not "the newest live job for the run" (BOSSAPP-1364). Two live
     # rows can name one run: the job a person's approval enqueued, and a stale one from before
     # the run parked (a redelivery joined while the laptop slept, its lease lapsing since).
@@ -130,21 +138,22 @@ def claim_run(connection, run_id: str, token_hash: Optional[str]) -> bool:
     # being fenced by a ghost. A takeover is a handover like any other: the epoch moves strictly
     # forward, on this job's lease AND on the run, so the ghost's older epoch can never write.
     rival_alive = any(j["id"] != mine["id"] and j["current"] for j in live_jobs)
-    run_epoch = connection.execute(
-        sql("SELECT fence_epoch FROM code_task_runs WHERE id = :id FOR UPDATE"),
-        {"id": run_id}).scalar()
-    if run_epoch is None:
-        return False
-    run_epoch = int(run_epoch or 0)
     if run_epoch > epoch:
-        if rival_alive:
-            # The run carries a NEWER epoch held by a live lease: claimed by a successor.
+        if rival_alive or not bool(mine["current"]):
+            # Either a live rival holds the newer epoch, or our own lease already expired.
             raise RunFenced(run_id, "claim")
+        old_epoch = epoch
         epoch = run_epoch + 1
+        # Record takeover_from_epoch on this same lease so a P8 replica holding this lease token
+        # stays aligned across run_plane.fence / _LEASE_HELD until its next heartbeat updates it.
         bumped = connection.execute(
-            sql("UPDATE jobs SET fence_epoch = :e, updated_at = now() "
-                "WHERE id = :j AND lease_token_hash = :t"),
-            {"e": epoch, "j": mine["id"], "t": token_hash}).rowcount
+            sql("UPDATE jobs SET fence_epoch = :e, "
+                "payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{takeover_from_epoch}', "
+                "                    to_jsonb(CAST(:old_e AS INT)), true), "
+                "updated_at = now() "
+                "WHERE id = :j AND lease_token_hash = :t "
+                "  AND (lease_expires_at IS NULL OR lease_expires_at > now())"),
+            {"e": epoch, "old_e": old_epoch, "j": mine["id"], "t": token_hash}).rowcount
         if not bumped:
             raise RunFenced(run_id, "claim")
     n = connection.execute(

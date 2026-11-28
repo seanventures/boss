@@ -45,7 +45,7 @@ describe("provider guard", () => {
   });
 
   it("posts the import and the seat price for an allowed provider", async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ added: 2, skipped_existing: 1 }), {
+    const fetchImpl = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ added: 2, skipped_existing: 1 }), {
       status: 201, headers: { "Content-Type": "application/json" },
     }));
     const invoice = await postInvoice(fetchImpl, { projectId: "p1", provider: "anthropic", content: "csv" });

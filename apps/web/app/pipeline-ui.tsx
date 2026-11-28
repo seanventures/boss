@@ -29,54 +29,41 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function CustomProfileForm({ projectId, edition }: { projectId: string; edition: string }) {
-  const isEnterprise = edition.startsWith("enterprise");
+function CustomProfileForm({ projectId }: { projectId: string }) {
   return (
     <div style={{ marginTop: 26, border: "1px solid var(--border)", borderRadius: 12, padding: 16, background: "var(--surface)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <h3 style={{ margin: 0, color: "var(--ink)", fontSize: 15 }}>Create a custom profile</h3>
-        <span style={{ fontSize: 10.5, color: isEnterprise ? "var(--boss-c-3fb950)" : "var(--boss-c-d29922)", border: `1px solid ${isEnterprise ? "var(--boss-c-3fb950)" : "var(--boss-c-d29922)"}`, padding: "1px 8px", borderRadius: 999 }}>
-          {isEnterprise ? "Enterprise" : "Enterprise only"}
-        </span>
       </div>
-      {!isEnterprise ? (
-        <p style={{ color: "var(--muted)", fontSize: 12.5, margin: 0, lineHeight: 1.6 }}>
-          Custom profiles are a BOSS Enterprise feature. This instance runs{" "}
-          <b style={{ color: "var(--ink-soft)" }}>{edition}</b> edition, which uses the lean / balanced /
-          strict presets. To enable them, run with an enterprise edition
-          (set <code style={{ color: "var(--accent-text)" }}>BOSS_EDITION=enterprise</code>).
+      <ActionForm permission="pipeline:manage" action={createPipelineProfileAction} style={{ display: "grid", gap: 14 }}>
+        <input type="hidden" name="project_id" value={projectId} />
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <Field label="Name (lowercase, no spaces)"><input name="name" required placeholder="qa-heavy" style={inputStyle} /></Field>
+          <Field label="Label (shown on the card)"><input name="label" placeholder="QA-heavy for billing" style={{ ...inputStyle, minWidth: 220 }} /></Field>
+        </div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <Field label="Min rigor (tier floor)">
+            <select name="tier_floor" defaultValue="0" style={inputStyle}>{[0, 1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}</select>
+          </Field>
+          <Field label="Max rigor (tier cap)">
+            <select name="tier_cap" defaultValue="3" style={inputStyle}>{[0, 1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}</select>
+          </Field>
+          <Field label="Default model">
+            <select name="default_model" defaultValue="low_cost" style={inputStyle}>
+              <option value="low_cost">low-cost</option>
+              <option value="strong">strong</option>
+            </select>
+          </Field>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--ink-soft)", fontSize: 12.5 }}>
+          <input type="checkbox" name="strong_hard" defaultChecked /> Use the strong model for the hard steps (implement, review, security)
+        </label>
+        <div><SubmitButton type="submit" style={primaryBtn}>Create profile</SubmitButton></div>
+        <p style={{ color: "var(--muted)", fontSize: 11.5, margin: 0 }}>
+          Tier floor/cap clamp how much rigor runs (e.g. floor 2 = always at least standard; cap 1 = never
+          beyond low). After creating, use “Set default” on its card to make it the project default.
         </p>
-      ) : (
-        <ActionForm permission="pipeline:manage" action={createPipelineProfileAction} style={{ display: "grid", gap: 14 }}>
-          <input type="hidden" name="project_id" value={projectId} />
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <Field label="Name (lowercase, no spaces)"><input name="name" required placeholder="qa-heavy" style={inputStyle} /></Field>
-            <Field label="Label (shown on the card)"><input name="label" placeholder="QA-heavy for billing" style={{ ...inputStyle, minWidth: 220 }} /></Field>
-          </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <Field label="Min rigor (tier floor)">
-              <select name="tier_floor" defaultValue="0" style={inputStyle}>{[0, 1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}</select>
-            </Field>
-            <Field label="Max rigor (tier cap)">
-              <select name="tier_cap" defaultValue="3" style={inputStyle}>{[0, 1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}</select>
-            </Field>
-            <Field label="Default model">
-              <select name="default_model" defaultValue="low_cost" style={inputStyle}>
-                <option value="low_cost">low-cost</option>
-                <option value="strong">strong</option>
-              </select>
-            </Field>
-          </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--ink-soft)", fontSize: 12.5 }}>
-            <input type="checkbox" name="strong_hard" defaultChecked /> Use the strong model for the hard steps (implement, review, security)
-          </label>
-          <div><SubmitButton type="submit" style={primaryBtn}>Create profile</SubmitButton></div>
-          <p style={{ color: "var(--muted)", fontSize: 11.5, margin: 0 }}>
-            Tier floor/cap clamp how much rigor runs (e.g. floor 2 = always at least standard; cap 1 = never
-            beyond low). After creating, use “Set default” on its card to make it the project default.
-          </p>
-        </ActionForm>
-      )}
+      </ActionForm>
     </div>
   );
 }
@@ -263,7 +250,7 @@ export function PipelineView({ data }: { data: PipelineData }) {
         ))}
       </div>
 
-      <CustomProfileForm projectId={data.projectId} edition={data.edition} />
+      <CustomProfileForm projectId={data.projectId} />
 
       <h3 style={{ margin: "26px 0 10px", color: "var(--ink)", fontSize: 15 }}>Recent run costs</h3>
       {data.recentRuns.length === 0 ? (
@@ -307,9 +294,8 @@ export function PipelineView({ data }: { data: PipelineData }) {
       )}
 
       <p style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 18, lineHeight: 1.6 }}>
-        Custom profiles (your own tier ranges and per-step model routing) are available on BOSS
-        Enterprise. Community edition uses the lean / balanced / strict presets and defaults new
-        projects to lean.
+        Custom profiles let you configure your own tier ranges and per-step model routing alongside
+        the built-in lean / balanced / strict presets.
       </p>
     </div>
   );

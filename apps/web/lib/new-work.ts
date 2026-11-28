@@ -267,6 +267,8 @@ export type StartFields = {
   profile?: string;
   /** This run's quality bar (BOSSAPP-1362), only when the person picked one other than the project's. */
   quality_bar?: string;
+  /** Execution lane (BOSSAPP-799): quick fix vs full workflow vs auto triage. */
+  lane?: "auto" | "quick" | "full";
 };
 
 /** The body Start and Add to Next send: the words, the confirmed brief, the chips. */
@@ -284,8 +286,16 @@ export function workBody(kind: WorkKind, text: string, f: StartFields): R {
     ...(f.infer_app ? { infer_app: true } : {}),
     ...(f.profile ? { profile: f.profile } : {}),
     ...(f.quality_bar ? { quality_bar: f.quality_bar } : {}),
+    ...(f.lane && f.lane !== "auto" ? { lane: f.lane } : {}),
   };
 }
+
+export const startQuickFix = (
+  projectId: string,
+  title: string,
+  instructions: string,
+  extra: { repro?: string; touched_paths?: string[] } = {},
+) => pxWrite("/v1/quick-lane/runs", { project_id: projectId, title, instructions, source: "console", ...extra }, "Quick fix");
 
 export const startNewWork = (projectId: string, kind: WorkKind, text: string, f: StartFields) =>
   startWork(projectId, kind, text, workBody(kind, text, f));

@@ -174,6 +174,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   // system; Start then imports it and starts it from the ticket, on the workflow its type picks.
   const resolved = useResolvedTicket(pid, text, !ctx.demo);
   const tkGate = useGate("work_tracker:write", pid);
+  const chatGate = useGate("assistant:chat", pid);
   // THE PROFILE IT RUNS ON (BOSSAPP-1334): opens on the project's default; the person may pick.
   const defaultProfile = useDefaultProfile(pid, !ctx.demo);
   const [profilePick, setProfilePick] = useState<RunProfile | null>(null);
@@ -277,6 +278,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   }, [chat]);
 
   const read = useCallback(async (how: "words" | "chat" | "rewrite", talk: ChatMsg[] = chat, hint = "") => {
+    if (!chatGate.allowed) return;
     const words = text.trim();
     if (!words && !talk.length) return;
     const mine = ++turn.current;

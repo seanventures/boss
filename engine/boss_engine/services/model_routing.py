@@ -377,6 +377,10 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
     from .openai_adapter import OpenAIAdapter
 
     engine = choice.engine
+    if engine == "scripted":
+        from .scripted_engine import ScriptedChatAdapter
+
+        return ScriptedChatAdapter()
     if not engine:
         # Nothing connected. The OpenAI adapter's own "OPENAI_API_KEY is not configured" is
         # what reaches the step, and model_failures explains it as "no connected model".
@@ -706,7 +710,10 @@ class GovernedChatAdapter:
             return None
 
         def stream(*args: Any, **kwargs: Any):
+            from ..db import assert_not_in_written_tx
+
             held = self._open()
+            assert_not_in_written_tx("model_routing.stream_text_response")
             usage: dict = {}
             try:
                 for piece in inner(*args, **kwargs):
@@ -749,7 +756,10 @@ class GovernedChatAdapter:
         return lambda *args, **kwargs: self._governed("create_embeddings", args, kwargs, usage_at=1)
 
     def _governed(self, method: str, args: tuple, kwargs: dict, *, usage_at: int):
+        from ..db import assert_not_in_written_tx
+
         held = self._open()
+        assert_not_in_written_tx(f"model_routing.{method}")
         try:
             result = getattr(self._inner, method)(*args, **kwargs)
         except Exception as error:

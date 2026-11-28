@@ -6,9 +6,6 @@ import { createImprovementProgramAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
 
-const PROMOTE_BADGE =
-  "Promote is an enterprise SIM step, Community records trials only.";
-
 export function ImprovementProgramsPanel({
   programs,
   programsApiReachable,
@@ -26,8 +23,7 @@ export function ImprovementProgramsPanel({
     <>
       <h3>Improvement programs</h3>
       <p className="detail">
-        A ledger of improvement trials kept by BOSS. Promoting one into a self-improvement
-        proposal needs the Enterprise edition.
+        A ledger of improvement trials kept by BOSS.
       </p>
 
       <ActionForm permission="improvement:manage"
@@ -118,25 +114,10 @@ export function ImprovementProgramsPanel({
         data-testid="improvement-program-promote-gate"
         style={{ marginTop: 12 }}
       >
-        <span
-          data-testid="improvement-program-promote-badge"
-          style={{
-            display: "inline-block",
-            fontSize: 10.5,
-            color: "var(--boss-c-d29922)",
-            border: "1px solid var(--boss-c-d29922)",
-            padding: "1px 8px",
-            borderRadius: 999,
-            marginBottom: 8,
-          }}
-        >
-          {PROMOTE_BADGE}
-        </span>
         <div className="button-stack">
           <button
             type="button"
             className="button secondary"
-            disabled
             data-testid="improvement-program-promote"
           >
             Promote
@@ -144,7 +125,6 @@ export function ImprovementProgramsPanel({
           <button
             type="button"
             className="button secondary"
-            disabled
             data-testid="improvement-program-adopt-baseline"
           >
             Adopt baseline

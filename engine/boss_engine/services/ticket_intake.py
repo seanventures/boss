@@ -62,6 +62,16 @@ from .core import emit_event, make_id
 
 logger = logging.getLogger(__name__)
 
+#: Ticket label that routes an imported/picked-up ticket directly into Quick Lane (BOSSAPP-799).
+QUICK_LANE_LABEL = "boss:quick"
+
+
+def ticket_lane(labels: Optional[Iterable[str]]) -> Optional[str]:
+    """Return ``'quick'`` when ``boss:quick`` is present in a ticket's labels, else ``None``."""
+    from .quick_lane import lane_from_labels
+
+    return lane_from_labels(labels)
+
 # ---------------------------------------------------------------------------------------------
 # Errors: one typed code + one plain sentence the console shows
 # ---------------------------------------------------------------------------------------------

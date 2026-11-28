@@ -165,13 +165,31 @@ ADMISSION_RETRY_PAUSES = (0.2, 0.4, 0.8)
 
 
 def _try_admit(connection: Connection, project_id: str) -> bool:
-    """The project's budget-admission lock (transaction-scoped), tried a few times."""
+    """Budget-admission locks (transaction-scoped), tried a few times in canonical scope order
+    (org -> team -> project, BOSSAPP-1502) so concurrent reservations across projects sharing
+    a scoped hard cap serialize deadlock-free."""
     import time
+    from .scoped_budgets import admission_lock_keys
 
+    try:
+        keys = admission_lock_keys(connection, project_id)
+    except Exception:  # noqa: BLE001 — minimal test stub without scoped_budget_policies
+        keys = [f"boss-budget:{project_id}"]
+
+    acquired: set[str] = set()
     for pause in (*ADMISSION_RETRY_PAUSES, None):
-        if connection.execute(text(
-                "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
-                {"p": project_id}).scalar_one():
+        all_ok = True
+        for lock_key in keys:
+            if lock_key in acquired:
+                continue
+            if connection.execute(text(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(:k, 0))"),
+                    {"k": lock_key}).scalar_one():
+                acquired.add(lock_key)
+            else:
+                all_ok = False
+                break
+        if all_ok:
             return True
         if pause is not None:
             time.sleep(pause)

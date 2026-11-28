@@ -1,0 +1,24 @@
+id: mturn_fixture_04:1
+event: turn.started
+data: {"turn_id":"mturn_fixture_04","thread_id":"athr_fixture_04","model":"gpt-4o","mode":"ask","tools":["ssh_run"],"dropped":[{"name":"write_file","reason":"policy:tpol_deny_write"}]}
+
+id: mturn_fixture_04:2
+event: usage
+data: {"input_tokens":20,"output_tokens":9,"cost":{"amount":0.00015,"currency":"USD","source":"gpt-4o"}}
+
+id: mturn_fixture_04:3
+event: policy.denied
+data: {"call_id":"call_pol_1","reason":"DENY: rule tpol_deny_rm matched first.","rule_id":"tpol_deny_rm"}
+
+id: mturn_fixture_04:4
+event: text.delta
+data: {"text":"That command is blocked by project policy."}
+
+id: mturn_fixture_04:5
+event: usage
+data: {"input_tokens":34,"output_tokens":10,"cost":{"amount":0.00022,"currency":"USD","source":"gpt-4o"}}
+
+id: mturn_fixture_04:6
+event: turn.completed
+data: {"turn_id":"mturn_fixture_04","stop_reason":"end_turn"}
+

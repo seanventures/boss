@@ -76,6 +76,8 @@ EVENT_ACTIONS: dict[str, str] = {
     "code_task.failed": "failed",
     "workflow.step_deadlettered": "failed",
     "workflow.run_blocked": "blocked",
+    # AA-J (BOSSAPP-1225): post acceptance verdict on the source ticket ONLY on change.
+    "acceptance.checked": "acceptance_comment",
 }
 #: Events that also re-read the ticket for a mid-run change (build start).
 CHANGE_CHECK_EVENTS = frozenset({"code_task.started"})
@@ -93,6 +95,8 @@ ACTION_EFFECTS: dict[str, tuple[tuple[str, Optional[str]], ...]] = {
     # Answers to the mid-run change card (apply_answers).
     "change_included": (("comment", None),),
     "change_deferred": (("comment", None),),
+    # AA-J: acceptance verdict comment on the source ticket (deduped by verdict+items digest).
+    "acceptance_comment": (("comment", None),),
 }
 #: operation -> the write_back switch that turns it off, and the capability it needs.
 OP_SWITCH = {"comment": "comment", "transition": "transition", "link": "link_pr"}
@@ -463,6 +467,28 @@ def resolve(db: Any, entity_type: str, entity_id: str,
             return _code_task_subject(db, str(data["code_task_run_id"]))
         if data.get("workflow_run_id"):
             return _workflow_subject(db, str(data["workflow_run_id"]))
+    if entity_type == "acceptance_check":
+        for key_name, fn in (("code_task_run_id", _code_task_subject),
+                             ("lineage_root_run_id", _code_task_subject),
+                             ("workflow_run_id", _workflow_subject)):
+            val = str(data.get(key_name) or "").strip()
+            if val:
+                found = fn(db, val)
+                if found is not None:
+                    return found
+        row = db.execute(
+            text("SELECT code_task_run_id, lineage_root_run_id, workflow_run_id "
+                 "FROM acceptance_checks WHERE id = :id"),
+            {"id": entity_id},
+        ).mappings().first()
+        if row:
+            for col, fn in (("code_task_run_id", _code_task_subject),
+                            ("lineage_root_run_id", _code_task_subject),
+                            ("workflow_run_id", _workflow_subject)):
+                if row[col]:
+                    found = fn(db, str(row[col]))
+                    if found is not None:
+                        return found
     return None
 
 
@@ -528,6 +554,17 @@ def comment_for(action: str, subject: Subject, data: Optional[Mapping[str, Any]]
     if action == "change_deferred":
         return ("BOSS will finish this build as it was asked; the changed acceptance criteria "
                 f"are left for the next ticket (run `{run}`).")
+    if action == "acceptance_comment":
+        pre = str(data.get("comment_markdown") or "").strip()
+        if pre:
+            return pre
+        from .acceptance import report as _acc_report
+
+        return _acc_report.ticket_comment(
+            data.get("check") if isinstance(data.get("check"), Mapping) else data,
+            data.get("ledger_rows") or (),
+            report_url=data.get("report_url"),
+        )
     return None
 
 
@@ -544,6 +581,17 @@ def _discriminator(action: str, subject: Subject, data: Mapping[str, Any],
         return str(data.get("open_url") or "") + "|" + subject.entity_id
     if action in ("change_included", "change_deferred"):
         return str(data.get("decision_id") or "")
+    if action == "acceptance_comment":
+        # Hash of (verdict, item statuses): posts ONLY when the acceptance outcome changed (LLD §7).
+        digest = str(data.get("digest") or "").strip()
+        if digest:
+            return digest
+        from .acceptance import report as _acc_report
+
+        return _acc_report.comment_digest(
+            data.get("check") if isinstance(data.get("check"), Mapping) else data,
+            open_rows=data.get("ledger_rows") or (),
+        )
     return f"{event_type}|{subject.entity_id}"
 
 

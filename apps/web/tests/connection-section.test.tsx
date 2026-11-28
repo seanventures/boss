@@ -19,7 +19,8 @@ describe("a connection", () => {
     installKitApi(clone(KITS.failing));
     const email = ability(KITS.failing, "email");
     await render(<ConnectionSection ability={email} projectId="p1" actor="ceo" onChanged={() => {}} />);
-    expect($('[data-testid="kit-field-password-set"]')!.textContent).toBe("Set · …a1f3");
+    await click('[data-testid="kit-edit"]');
+    expect($('[data-testid="kit-field-password-set"]')!.textContent).toBe("Set");
     expect($('[data-testid="kit-field-password-input"]')).toBeNull();
     await click('[data-testid="kit-field-password-replace"]');
     const input = $('[data-testid="kit-field-password-input"]') as HTMLInputElement;

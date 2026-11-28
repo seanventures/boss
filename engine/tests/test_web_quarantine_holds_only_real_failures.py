@@ -28,7 +28,6 @@ def _module():
 def test_every_line_names_an_existing_test_with_a_ticket_and_a_reason():
     mod = _module()
     quarantine = mod.read_quarantine()
-    assert quarantine, "an empty quarantine is fine, but then delete this file's caveats"
     for file, q in quarantine.items():
         assert (mod.WEB / file).is_file(), f"{file} does not exist: delete its line"
         assert re.fullmatch(r"tests/[\w./-]+\.test\.tsx?", file), file

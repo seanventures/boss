@@ -1,0 +1,6 @@
+{
+  "npmScope": "acme",
+  "affected": {
+    "defaultBase": "main"
+  }
+}

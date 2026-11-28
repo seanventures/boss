@@ -47,6 +47,7 @@ export const CAST: readonly CastMember[] = [
   hand("adversarial_reviewer", "Adversarial Reviewer", "Rook", "I'll find what you missed.", ["rook", "target", "amber", "monocle"]),
   hand("security_reviewer", "Security Reviewer", "Sentry", "Who else can reach this?", ["crest", "lock", "slate", "shield"]),
   hand("qa", "QA Lead", "Vera", "Show me the test.", ["magnifier", "check", "green", "lens"]),
+  picked("acceptance_agent", "Acceptance Agent", ["magnifier", "check", "teal", "scope"]),
   hand("release_manager", "Release Manager", "Pilot", "Ready when the checklist is green.", ["flag", "rocket", "green", "slit"]),
   hand("design_critic", "Design Critic", "Muse", "Would a first-time user get this?", ["beret", "nib", "pink", "band"]),
   hand("docs_writer", "Documentation Writer", "Quill", "If it's not written, it didn't ship.", ["quill", "page", "slate", "glasses"]),

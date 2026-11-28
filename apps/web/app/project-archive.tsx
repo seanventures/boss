@@ -24,12 +24,14 @@ import {
 } from "./project-archive-actions";
 import styles from "./project-archive.module.css";
 
+const ARCHIVE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
 /** "Archived 3 Oct 2026 by ceo", a date a person reads, not an ISO string. */
 export function archivedSentence(at: string | null | undefined, by?: string | null): string {
   if (!at) return "Archived";
   const when = new Date(at);
   const day = Number.isNaN(when.getTime()) ? at
-    : when.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    : `${when.getUTCDate()} ${ARCHIVE_MONTHS[when.getUTCMonth()]} ${when.getUTCFullYear()}`;
   return `Archived ${day}${by ? ` by ${by}` : ""}`;
 }
 

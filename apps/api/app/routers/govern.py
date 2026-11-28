@@ -107,6 +107,54 @@ def get_govern_spend(request: Request, project_id: str = Query(...),
     return _etagged(request, body)
 
 
+@router.get("/v1/govern/routing-savings")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
+def get_govern_routing_savings(request: Request, project_id: str = Query(...),
+                               days: int = Query(30, ge=1, le=365)) -> Response:
+    """BOSSAPP-782: per-project model routing savings report vs all-frontier baseline,
+    separating metered cash saved from subscription capacity saved."""
+    from boss_engine.services.model_router.savings import savings_report
+
+    main = _main()
+    with begin(main.engine) as connection:
+        main.require_project_reader(connection, project_id)
+        body = savings_report(connection, project_id, days=days)
+    return _etagged(request, body)
+
+
+@router.get("/v1/govern/routing-savings/export")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
+def get_govern_routing_savings_export(
+    project_id: str = Query(...),
+    days: int = Query(30, ge=1, le=365),
+    format: str = Query("html", pattern="^(html|markdown|md)$"),
+) -> Response:
+    """BOSSAPP-782: one-page printable HTML or Markdown savings report for customer/sales use."""
+    from sqlalchemy import text as _sql
+    from boss_engine.services.model_router.savings import render_one_page_report, savings_report
+
+    main = _main()
+    with begin(main.engine) as connection:
+        main.require_project_reader(connection, project_id)
+        name = str(connection.execute(
+            _sql("SELECT name FROM projects WHERE id = :p"), {"p": project_id}
+        ).scalar() or project_id)
+        report = savings_report(connection, project_id, days=days)
+    rendered = render_one_page_report(report, project_name=name, format=format)
+    is_md = format in ("markdown", "md")
+    media = "text/markdown; charset=utf-8" if is_md else "text/html; charset=utf-8"
+    ext = "md" if is_md else "html"
+    safe_id = "".join(ch for ch in project_id if ch.isalnum() or ch in ("-", "_")) or "project"
+    return Response(
+        content=rendered,
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="boss-routing-savings-{safe_id}-{days}d.{ext}"',
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 @router.get("/v1/govern/envelopes")
 @permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def get_govern_envelopes(request: Request, project_id: str = Query(...)) -> Response:

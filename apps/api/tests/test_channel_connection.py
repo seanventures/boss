@@ -610,3 +610,58 @@ def test_disconnecting_revokes_locally_even_when_google_is_unreachable(client, e
         ).mappings().one()
     assert row["status"] == "revoked"
     assert row["secret_ref_ids"] == []
+
+
+def test_callback_completes_phased_without_holding_a_transaction(client, engine, monkeypatch):
+    """BOSSAPP-1232: Google OAuth token exchange & channel identity HTTP requests run outside any
+    DB transaction (and pass BOSS_STRICT_TX_GUARD=1), then activate the connection cleanly."""
+    from types import SimpleNamespace
+    from boss_engine.db import STRICT_TX_GUARD_ENV, in_written_transaction, open_transactions
+    from boss_engine.services import channel_oauth
+
+    monkeypatch.setenv(STRICT_TX_GUARD_ENV, "1")
+    _save_client(client)
+    started = client.post("/v1/channels/youtube/connect", json={"project_id": PROJECT, "actor": "ceo"})
+    assert started.status_code == 201, started.text
+    state = started.json()["state"]
+
+    tx_snapshots: list[tuple[int, bool]] = []
+
+    class _FakeHttpx:
+        @staticmethod
+        def post(url, data=None, timeout=None):
+            tx_snapshots.append((len(open_transactions()), in_written_transaction()))
+            grant = (data or {}).get("grant_type")
+            if grant == "authorization_code":
+                return SimpleNamespace(status_code=200, json=lambda: {"refresh_token": "rt_test_phased"})
+            if grant == "refresh_token":
+                return SimpleNamespace(status_code=200, json=lambda: {"access_token": "at_test_phased"})
+            return SimpleNamespace(status_code=200, json=lambda: {})
+
+        @staticmethod
+        def get(url, params=None, headers=None, timeout=None):
+            tx_snapshots.append((len(open_transactions()), in_written_transaction()))
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: {"items": [{"id": "UC_phased", "snippet": {"title": "Phased Channel"}}]},
+            )
+
+    monkeypatch.setattr(channel_oauth, "_http", lambda: _FakeHttpx)
+    cb = client.get("/v1/channels/youtube/callback", params={"code": "auth_code_1", "state": state})
+    assert cb.status_code == 200, cb.text
+    assert "Phased Channel" in cb.text
+    assert len(tx_snapshots) == 3
+    assert all(open_count == 0 and not written for open_count, written in tx_snapshots), tx_snapshots
+
+    # Replay with the same spent state must be refused.
+    replay = client.get("/v1/channels/youtube/callback", params={"code": "auth_code_1", "state": state})
+    assert replay.status_code == 400
+    assert "expired or was already used" in replay.text
+
+    # Clean up via phased disconnect
+    disc = client.delete(
+        "/v1/channels/youtube",
+        params={"project_id": PROJECT, "connection_key": "youtube_default", "actor": "ceo"},
+    )
+    assert disc.status_code == 200, disc.text
+    assert disc.json()["revoked_upstream"] is True

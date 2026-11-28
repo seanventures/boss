@@ -65,7 +65,7 @@ export function CaptainDrawer({ ctx, onClose }: { ctx: PxCtx; onClose: () => voi
             title={<span className="px-row" style={{ gap: 8 }}>{name}<Tag tone="blue">Captain</Tag></span>}
             sub={<span className="px-row px-capd-scope" data-testid="px-capd-scope">
               <Folders size={12} aria-hidden /> {scope}
-              {c ? <><span aria-hidden>·</span><span className="px-dot" data-s="done" data-round aria-hidden /> knows {c.facts.toLocaleString()} facts</> : null}
+              {c ? <><span aria-hidden>·</span><span className="px-dot" data-s="done" data-round aria-hidden /> knows {c.facts.toLocaleString("en-US")} facts</> : null}
             </span>}
             actions={<><ChatFullscreenButton full={fs.full} onToggle={fs.toggle} className="px-icon-btn" testid="px-capd-fullscreen" />
                      <button type="button" className="px-icon-btn" aria-pressed={history} title="Past conversations" aria-label="Past conversations"

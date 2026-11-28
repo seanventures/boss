@@ -214,7 +214,7 @@ def update_gateway(connection: Connection, settings: Any, project_id: str, gatew
     if secret is not None:
         if not str(secret).strip():
             raise GatewayError("a rotated key cannot be empty")
-        _store(settings).put(secret_key_for(gateway_id), str(secret).strip())
+        _store(settings).put(gw.get("secret_key") or secret_key_for(gateway_id), str(secret).strip())
         sets["last_test"] = None
     if not sets:
         return gw
@@ -241,7 +241,7 @@ def delete_gateway(connection: Connection, settings: Any, project_id: str, gatew
     gw = _owned(connection, project_id, gateway_id)
     connection.execute(text("DELETE FROM llm_gateways WHERE id = :i"), {"i": gateway_id})
     try:
-        _store(settings).delete(secret_key_for(gateway_id))
+        _store(settings).delete(gw.get("secret_key") or secret_key_for(gateway_id))
     except Exception:  # noqa: BLE001 — the row is gone; a store that kept the key is logged
         _log.warning("could not delete the stored key of gateway %s", gateway_id)
     reset_cache()

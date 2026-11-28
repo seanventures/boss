@@ -131,11 +131,18 @@ def fence(connection: Any, settings: Any, host_id: str, run_id: str, lease: Leas
             allow_expired=settling))
     except LeaseNotFoundError as exc:
         raise fenced(str(exc)) from exc
-    if int(row.get("fence_epoch") or 0) != int(lease.epoch):
-        raise fenced(f"epoch {lease.epoch} is stale; the job is at {row.get('fence_epoch')}")
     payload = row.get("payload") or {}
     if isinstance(payload, str):
         payload = json.loads(payload)
+    job_epoch = int(row.get("fence_epoch") or 0)
+    takeover_from = payload.get("takeover_from_epoch") if isinstance(payload, dict) else None
+    takeover_aligned = (
+        takeover_from is not None
+        and int(takeover_from) == int(lease.epoch)
+        and job_epoch >= int(lease.epoch)
+    )
+    if job_epoch != int(lease.epoch) and not takeover_aligned:
+        raise fenced(f"epoch {lease.epoch} is stale; the job is at {row.get('fence_epoch')}")
     if str(payload.get("run_id") or "") != run_id:
         raise fenced("that lease is not this run's")
     return row
@@ -1059,14 +1066,16 @@ def heartbeat(connection: Any, settings: Any, host_id: str, run_id: str, lease: 
           UPDATE jobs SET status = CASE WHEN status = 'leased' THEN 'running' ELSE status END,
                  heartbeat_at = now(), lease_expires_at = now() + make_interval(secs => :ttl),
                  updated_at = now()
-           WHERE id IN (SELECT id FROM lease) RETURNING lease_expires_at)
+           WHERE id IN (SELECT id FROM lease) RETURNING lease_expires_at, fence_epoch)
         SELECT (SELECT lease_expires_at FROM beat) AS expires_at,
+               (SELECT fence_epoch FROM beat) AS fence_epoch,
                (SELECT t.metadata->>'stop_run' FROM agent_runs r
                   JOIN agent_threads t ON t.id = r.thread_id WHERE r.id = :run) AS stop_run"""),
         {**_lease_params(lease, run_id), "ttl": _ttl(ttl)}).mappings().first()
     if row is None or row["expires_at"] is None:
         _refused(connection, settings, host_id, run_id, lease)
     return {"lease_expires_at": row["expires_at"].isoformat(),
+            "fence_epoch": int(row["fence_epoch"] or lease.epoch),
             "stop": bool(row["stop_run"]) and row["stop_run"] == run_id}
 
 
@@ -1238,7 +1247,15 @@ _LEASE_HELD = """
     SELECT id FROM jobs
      WHERE id = :job AND lease_owner = :owner AND lease_token_hash = :token_hash
        AND status IN ('leased', 'running') AND lease_expires_at > now()
-       AND fence_epoch = :epoch AND payload->>'run_id' = :run
+       AND (
+         fence_epoch = :epoch
+         OR (
+           payload ? 'takeover_from_epoch'
+           AND (payload->>'takeover_from_epoch')::int = :epoch
+           AND fence_epoch >= :epoch
+         )
+       )
+       AND payload->>'run_id' = :run
      FOR UPDATE"""
 
 

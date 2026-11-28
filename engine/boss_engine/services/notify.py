@@ -842,7 +842,7 @@ def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, l
     an earlier one are rescheduled WITHOUT spending an attempt."""
     from ..db import begin
     from . import chat_reply
-    from .chat_adapters import ChatRateLimited
+    from .chat_adapters import ChatRateLimited, ChatWritesBlocked
     from .core import emit_event
 
     now = now or _now()
@@ -860,6 +860,13 @@ def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, l
             " ORDER BY o.created_at, o.op_seq LIMIT :n FOR UPDATE OF o SKIP LOCKED) RETURNING *"),
             {"now": now, "lease": now + timedelta(minutes=2), "n": limit,
              "ep": endpoint_id}).mappings().all()]
+        ep_ids = sorted({str(r["endpoint_id"]) for r in rows if r.get("endpoint_id")})
+        ep_kinds: dict[str, tuple[str, dict]] = {}
+        if ep_ids:
+            for er in c.execute(sql(
+                "SELECT id, kind, config FROM chat_endpoints WHERE id = ANY(:ids)"),
+                {"ids": ep_ids}).mappings().all():
+                ep_kinds[str(er["id"])] = (str(er["kind"]), _json(er.get("config"), {}) or {})
     rows.sort(key=lambda r: (r["created_at"], r.get("op_seq") or 0))
     out = {"sent": 0, "failed": 0, "dead": 0, "waiting": 0, "rate_limited": 0, "skipped": 0}
 
@@ -875,9 +882,15 @@ def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, l
 
     for row in rows:
         payload = _json(row.get("payload"), {}) or {}
+        ep_kind, ep_cfg = ep_kinds.get(str(row.get("endpoint_id") or ""), ("", {}))
         key = chat_reply.bucket_key(row, payload)
         if key:
-            wait = chat_reply.BUCKETS.wait_for(key)
+            if ep_kind == "teams":
+                app_id = str(ep_cfg.get("app_id") or "")
+                app_key = f"teams_app:{app_id}" if app_id else (chat_reply.teams_app_key(row, payload) or "")
+                wait = chat_reply.BUCKETS.wait_for_teams(key, app_key)
+            else:
+                wait = chat_reply.BUCKETS.wait_for(key)
             if wait > 0:
                 later(row["id"], wait)
                 out["waiting"] += 1
@@ -889,6 +902,30 @@ def deliver_chat_due(engine, settings: Any, *, now: Optional[datetime] = None, l
             except chat_reply.NotYet as waiting:
                 later(row["id"], waiting.delay)
                 out["waiting"] += 1
+                continue
+            except ChatWritesBlocked as blocked_err:
+                word = f"ChatWritesBlocked: {blocked_err.reason}"[:300]
+                c.execute(sql(
+                    "UPDATE chat_outbox SET attempts = attempts + 1, status = 'dead', "
+                    " last_error = :w WHERE id = :i"), {"w": word, "i": row["id"]})
+                if row.get("chat_thread_id"):
+                    c.execute(sql(
+                        "UPDATE chat_threads SET blocked_at = :now, blocked_reason = :r, "
+                        " updated_at = :now WHERE id = :t"),
+                        {"now": now, "r": blocked_err.reason[:200], "t": row["chat_thread_id"]})
+                ext_user = str(payload.get("user") or "")
+                if ext_user:
+                    c.execute(sql(
+                        "UPDATE chat_identity_links SET blocked_at = :now, blocked_reason = :r, "
+                        " updated_at = :now WHERE endpoint_id = :e AND external_user_id = :u "
+                        " AND revoked_at IS NULL"),
+                        {"now": now, "r": blocked_err.reason[:200],
+                         "e": row["endpoint_id"], "u": ext_user})
+                emit_event(c, row["project_id"], "chat.writes_blocked", "boss.chat",
+                           "chat_endpoint", row["endpoint_id"],
+                           {"outbox_id": row["id"], "kind": row["kind"],
+                            "reason": blocked_err.reason})
+                out["dead"] += 1
                 continue
             except ChatRateLimited as slow:
                 # NOT A FAILURE: wait what the channel asked, then try again; no attempt spent —

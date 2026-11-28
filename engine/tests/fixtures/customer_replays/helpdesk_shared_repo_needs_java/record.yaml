@@ -1,0 +1,34 @@
+schema: boss.customer_failure_record/v1
+id: helpdesk_shared_repo_needs_java
+recorded_at: "2026-10-16"
+source: retrospective
+title: Shared monorepo root pom.xml caused Node app in subfolder to be refused as needing Java
+scrubbed: true
+symptom: >
+  HelpDesk AI retry builds in a multi-app repository were blocked four times with "This project
+  needs Java" in under two minutes without running the app's npm tests.
+root_cause: >
+  Gate planners inspected the shared repository root (which held an unrelated Java demo pom.xml)
+  when the changed file list only named a root manifest/lockfile alongside the app's own subfolder files.
+raw_evidence: |
+  Run wfr_fb4fb5ded8c84a4dab12 (HelpDesk Delivery): retry 4 refused with "This app needs Java"
+  because repo root pom.xml outvoted 27 files under helpdesk-ai/.
+replay:
+  kind: app_root_java_build
+  target: boss_engine.services.app_root.java_build
+  inputs:
+    files:
+      pom.xml: "<project><modelVersion>4.0.0</modelVersion></project>\n"
+      helpdesk-ai/package.json: '{"name": "helpdesk-ai", "scripts": {"test": "node --test"}}'
+      helpdesk-ai/src/index.js: "export const ok = true;\n"
+      other-app/package.json: '{"name": "other-app"}'
+      third-app/pyproject.toml: "[project]\nname = 'third-app'\n"
+    changed:
+      - package.json
+    lineage:
+      - helpdesk-ai/src/index.js
+      - helpdesk-ai/package.json
+  expected:
+    equals:
+      app_dir_name: helpdesk-ai
+      build_tool: null

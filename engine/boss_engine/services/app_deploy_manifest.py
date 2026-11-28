@@ -123,14 +123,38 @@ def manifests_in(root: Any, *, depth: int = 3) -> list[str]:
     return found
 
 
-def app_manifest(files: Any, existing: Any = ()) -> Optional[str]:
+def app_manifest(files: Any, existing: Any = (), *, app_map: Any = None) -> Optional[str]:
     """The boss.deploy.yaml this build's app is deployed from: one it WROTE (`declared_manifest`),
     else one its repository ALREADY HAD for it.
 
-    An existing manifest in a folder is the app's only when the build wrote code in that folder
-    (a repository's other apps and its test fixtures keep theirs). An existing ROOT manifest is
-    the app's when the app lives at the root (`app_folder` is None); one that belongs to another
-    app is refused at plan time (stack_deploy.root_manifest_misfit), as for a written one."""
+    When `app_map` is supplied (BOSSAPP-555), a subfolder app ONLY considers manifests under its
+    own `root_path` — never selecting a repository root manifest belonging to another app."""
+    from . import app_map as _app_map
+
+    entry = _app_map.coerce_entry(app_map)
+    if entry is not None and not entry.is_root():
+        prefix = entry.root_path.rstrip("/") + "/"
+        target_manifest = f"{prefix}{DEFAULT_MANIFEST_PATH}"
+        paths = [str(f).strip().removeprefix("./").lstrip("/") for f in (files or [])
+                 if str(f or "").strip()]
+        had = [str(m).strip().removeprefix("./").lstrip("/") for m in (existing or [])
+               if str(m or "").strip()]
+        in_app_written = [p for p in paths if p == target_manifest or (p.startswith(prefix) and p.rsplit("/", 1)[-1] == DEFAULT_MANIFEST_PATH)]
+        if in_app_written:
+            return target_manifest if target_manifest in in_app_written else sorted(in_app_written)[0]
+        in_app_existing = [m for m in had if m == target_manifest or (m.startswith(prefix) and m.rsplit("/", 1)[-1] == DEFAULT_MANIFEST_PATH)]
+        if in_app_existing:
+            return target_manifest if target_manifest in in_app_existing else sorted(in_app_existing)[0]
+        return None
+    if entry is not None and entry.is_root():
+        written = declared_manifest(files)
+        if written:
+            return written
+        had_clean = [str(m).strip().removeprefix("./").lstrip("/") for m in (existing or [])
+                     if str(m or "").strip()]
+        if DEFAULT_MANIFEST_PATH in had_clean:
+            return DEFAULT_MANIFEST_PATH
+        return None
     written = declared_manifest(files)
     if written:
         return written
@@ -146,7 +170,7 @@ def app_manifest(files: Any, existing: Any = ()) -> Optional[str]:
             nested.append((held, manifest.count("/"), manifest))
     if nested:
         return max(nested)[2]
-    if DEFAULT_MANIFEST_PATH in had and paths and app_folder(paths) is None:
+    if DEFAULT_MANIFEST_PATH in had and paths and app_folder(paths, app_map=entry) is None:
         return DEFAULT_MANIFEST_PATH
     return None
 
@@ -157,9 +181,15 @@ _SOURCE_DIRS = frozenset({"src", "lib", "app", "apps", "server", "client", "web"
                           "docs", "assets", "components", "pages", "routes", "api", ".github"})
 
 
-def app_folder(files: Any) -> Optional[str]:
+def app_folder(files: Any, *, app_map: Any = None) -> Optional[str]:
     """The one top-level folder every non-manifest file a build wrote lives in — the app's own
-    folder in a repository of several apps — or None (the app is at the root, or spread out)."""
+    folder in a repository of several apps — or None (the app is at the root, or spread out).
+    When `app_map` is supplied (BOSSAPP-555), it is authoritative."""
+    from . import app_map as _app_map
+
+    entry = _app_map.coerce_entry(app_map)
+    if entry is not None:
+        return entry.rel_or_none()
     paths = [str(f).strip().removeprefix("./").lstrip("/") for f in (files or [])
              if str(f or "").strip()]
     others = [p for p in paths if p != DEFAULT_MANIFEST_PATH]

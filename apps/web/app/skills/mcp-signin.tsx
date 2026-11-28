@@ -20,6 +20,7 @@ import {
   mcpApi, type AccessGrant, type CredentialPolicy, type CrewMember, type McpCredential, type McpCredentials,
   type McpServer,
 } from "../../lib/kit-api";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { showToast } from "../client-forms";
 import { agentName, shortError } from "./kit-copy";
 
@@ -64,6 +65,7 @@ export function useCredentials(projectId: string, serverId: string) {
 export function SignInSection({ projectId, actor, server, crew, onChanged }: {
   projectId: string; actor: string; server: McpServer; crew: CrewMember[]; onChanged: () => void;
 }) {
+  useIdentityVersion();
   const { data, reload } = useCredentials(projectId, server.id);
   const [busy, setBusy] = useState(false);
   const oauth = server.auth?.type === "oauth";
@@ -192,6 +194,7 @@ export function SignInSection({ projectId, actor, server, crew, onChanged }: {
 export function AccessGrantsList({ projectId, actor, serverId, onChanged }: {
   projectId: string; actor: string; serverId: string; onChanged: () => void;
 }) {
+  useIdentityVersion();
   const [grants, setGrants] = useState<AccessGrant[]>([]);
   const reload = useCallback(async () => {
     const r = await mcpApi.accessGrants(projectId, serverId);

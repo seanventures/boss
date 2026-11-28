@@ -182,10 +182,10 @@ type GlyphId = keyof typeof GLYPHS;
 const DOMAIN_GRADIENTS: Record<string, [string, string, string]> = {
   Ops:      ["hsl(330 81% 58%)", "hsl(292 83% 60%)", "hsl(262 83% 63%)"],
   Money:    ["hsl(24 95% 58%)",  "hsl(38 94% 56%)",  "hsl(330 81% 58%)"],
-  Team:     ["hsl(199 70% 48%)", "hsl(186 60% 42%)", "hsl(172 55% 40%)"],
+  Team:     ["hsl(199 70% 48%)", "hsl(186 60% 42%)", "hsl(172 60% 40%)"],
   Content:  ["hsl(172 66% 45%)", "hsl(186 78% 48%)", "hsl(199 89% 55%)"],
   Sales:    ["hsl(24 95% 58%)",  "hsl(348 85% 60%)", "hsl(330 81% 58%)"],
-  Quality:  ["hsl(205 55% 46%)", "hsl(199 50% 42%)", "hsl(186 45% 40%)"],
+  Quality:  ["hsl(205 62% 46%)", "hsl(199 60% 42%)", "hsl(186 60% 40%)"],
   Learning: ["hsl(142 71% 45%)", "hsl(160 70% 44%)", "hsl(172 66% 45%)"],
   Growth:   ["hsl(330 81% 58%)", "hsl(0 84% 62%)",   "hsl(24 95% 58%)"],
 };
@@ -1938,8 +1938,8 @@ export function AskBossHero({
                 ))}
                 <span className="askboss-research-hint">→ then press Research</span>
               </div> : <div className="askboss-research-row" role="status"
-                  title="Discovery research is paused in Community while budget and recovery safeguards are completed. Saved dossiers are available under Discovery.">
-                Research is paused in Community
+                  title="Discovery research is disabled on this view. Saved dossiers are available under Discovery.">
+                Research is disabled
               </div>}
               {/* A SCROLL STRIP, NOT A SLIDESHOW.
                   These flipped pages on a nine-second timer, which means the one you were
@@ -2219,12 +2219,12 @@ export function AskBossHero({
                   <h4>What BOSS will do</h4>
                   <ol>
                     {researchAvailable ? <li>Research the idea and cite what it finds</li>
-                      : <li>Start from your brief, new Discovery research is paused in Community</li>}
+                      : <li>Start from your brief; Discovery research is disabled</li>}
                     <li>Convene a panel of roles to argue the shape of it</li>
                     <li>Write a PRD, <strong>you approve it</strong> before any code</li>
                     <li>Build, review and test it, then open a pull request</li>
                     {deploymentAvailable ? <li>Deploy it, asking you first unless the plan says your deploy policy decides</li>
-                      : <li>Review the release; SSH host deployment is paused in Community</li>}
+                      : <li>Review the release; deployment is disabled</li>}
                   </ol>
                 </section>
 

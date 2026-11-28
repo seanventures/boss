@@ -166,29 +166,43 @@ def load(connection: Any) -> list[CatalogModel]:
     return models
 
 
-def refresh(connection: Any, settings: Any, project_id: Optional[str]) -> list[CatalogModel]:
+def refresh(connection: Optional[Any], settings: Any, project_id: Optional[str], *,
+            db_engine: Any = None) -> list[CatalogModel]:
     """Fetch with this project's stored OpenRouter key (or the environment's), remember and
     persist. Never raises: returns what is cached when the fetch fails."""
-    key, base_url = None, ""
-    try:
-        # THE SOURCE'S OWN STORED KEY AND URL (a custom OpenRouter endpoint, a proxy), the same
-        # binding a call on this lane uses; the environment only when nothing is stored.
-        from .code_agent import _project_api_model_binding
+    from ..db import begin
 
-        bound = _project_api_model_binding(connection, settings, project_id or "", "openrouter")
-        if bound:
-            key, _model, base_url = bound
-    except Exception:  # noqa: BLE001
-        key = None
-    if not key:
+    def _read_key(conn: Any) -> tuple[Optional[str], str]:
+        key, base_url = None, ""
         try:
-            from .credential_resolve import resolve_project_credential
+            # THE SOURCE'S OWN STORED KEY AND URL (a custom OpenRouter endpoint, a proxy), the same
+            # binding a call on this lane uses; the environment only when nothing is stored.
+            from .code_agent import _project_api_model_binding
 
-            key = resolve_project_credential(connection, settings, project_id=project_id,
-                                             provider=PROVIDER,
-                                             env_fallback_attr="openrouter_api_key")
+            bound = _project_api_model_binding(conn, settings, project_id or "", "openrouter")
+            if bound:
+                key, _model, base_url = bound
         except Exception:  # noqa: BLE001
-            key = str(getattr(settings, "openrouter_api_key", "") or "") or None
+            key = None
+        if not key:
+            try:
+                from .credential_resolve import resolve_project_credential
+
+                key = resolve_project_credential(conn, settings, project_id=project_id,
+                                                 provider=PROVIDER,
+                                                 env_fallback_attr="openrouter_api_key")
+            except Exception:  # noqa: BLE001
+                key = str(getattr(settings, "openrouter_api_key", "") or "") or None
+        return key, base_url
+
+    if connection is None:
+        if db_engine is None:
+            raise ValueError("refresh requires either connection or db_engine")
+        with begin(db_engine) as conn:
+            key, base_url = _read_key(conn)
+    else:
+        key, base_url = _read_key(connection)
+
     try:
         models = fetch(base_url or str(getattr(settings, "openrouter_base_url", "") or ""), key)
     except Exception:  # noqa: BLE001
@@ -196,8 +210,12 @@ def refresh(connection: Any, settings: Any, project_id: Optional[str]) -> list[C
         return list(cached().values())
     remember(models)
     try:
-        with connection.begin_nested():
-            store(connection, models)
+        if connection is None:
+            with begin(db_engine) as conn:
+                store(conn, models)
+        else:
+            with connection.begin_nested():
+                store(connection, models)
     except Exception:  # noqa: BLE001
         log.warning("OpenRouter catalogue not persisted", exc_info=True)
     return models

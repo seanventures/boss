@@ -270,6 +270,7 @@ class DeploymentRolloutEngine:
         rollout_id = make_id("dproll")
         commit_ref = str(deployment_run.get("commit_ref") or "unknown")
         repo = str(deployment_run["repo"])
+        commit_url = self._rollout_commit_url(connection, project_id, repo, commit_ref)
         connection.execute(
             text(
                 """
@@ -298,7 +299,7 @@ class DeploymentRolloutEngine:
                 ),
                 "environment": deployment_run["environment"],
                 "merged_sha": commit_ref,
-                "pull_request_url": f"https://github.com/{repo}/commit/{commit_ref}",
+                "pull_request_url": commit_url,
                 "current_stage": stage_names[0],
                 "stages": json.dumps(stage_state),
                 "started_at": timestamp,
@@ -335,6 +336,61 @@ class DeploymentRolloutEngine:
             },
         )
         return self._get_rollout(connection, project_id, rollout_id)
+
+    @staticmethod
+    def _rollout_commit_url(
+        connection: Connection, project_id: str, repo: str, commit_ref: str
+    ) -> str:
+        """Commit reference URL for a rollout: local projects use http://boss-local/... (never
+        fabricating a https://github.com/... link — BOSSAPP-1469)."""
+        clean_repo = str(repo or "").strip().strip("/")
+        if not clean_repo or clean_repo.startswith(("local/", "boss-local/")) or "/" not in clean_repo:
+            return f"http://boss-local/{clean_repo or project_id}/commit/{commit_ref}"
+        is_local = False
+        try:
+            with connection.begin_nested():
+                row = connection.execute(
+                    text(
+                        "SELECT lower(COALESCE(provider, '')) AS provider "
+                        "FROM project_repositories "
+                        "WHERE project_id = :p AND (repo_full_name = :r OR full_name = :r) "
+                        "LIMIT 1"
+                    ),
+                    {"p": project_id, "r": clean_repo},
+                ).mappings().first()
+                if row and row["provider"] == "local":
+                    is_local = True
+        except Exception:  # noqa: BLE001 — column/table shape varies across schemas
+            try:
+                with connection.begin_nested():
+                    row = connection.execute(
+                        text(
+                            "SELECT 1 FROM local_change_sets "
+                            "WHERE project_id = :p AND repository = :r LIMIT 1"
+                        ),
+                        {"p": project_id, "r": clean_repo},
+                    ).first()
+                    if row is not None:
+                        is_local = True
+            except Exception:  # noqa: BLE001
+                pass
+        if not is_local:
+            try:
+                with connection.begin_nested():
+                    row = connection.execute(
+                        text(
+                            "SELECT lower(COALESCE(config->>'repo_host', config->>'host_kind', '')) "
+                            "FROM projects WHERE id = :p"
+                        ),
+                        {"p": project_id},
+                    ).scalar()
+                    if row == "local":
+                        is_local = True
+            except Exception:  # noqa: BLE001
+                pass
+        if is_local:
+            return f"http://boss-local/{clean_repo}/commit/{commit_ref}"
+        return f"https://github.com/{clean_repo}/commit/{commit_ref}"
 
     def advance_rollout(
         self,

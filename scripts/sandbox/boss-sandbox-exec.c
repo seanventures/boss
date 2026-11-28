@@ -17,7 +17,9 @@
  *                              child's status.
  *   kill  <uid>                every process of <uid> gets SIGKILL (run end, revoke, uid reuse).
  *   adopt <uid> <dir>          <dir> must be a direct child of RUN_ROOT, a real directory owned by
- *                              the caller: it becomes <uid>:boss 2770 (the run and BOSS only).
+ *                              the caller: it becomes boss:<uid> 1770 (BOSS-owned, sticky,
+ *                              group-writable to <uid> so <uid> cannot rename BOSS-created entries;
+ *                              BOSSAPP-1486).
  *   sock  <uid> <path>         <path> must be a socket directly in SHIM_ROOT owned by the caller:
  *                              it becomes <uid>:<uid> 0600 (that run's agent only).
  *
@@ -215,8 +217,11 @@ static int op_adopt(uid_t uid, const char *path, int want_socket) {
         if (!S_ISDIR(st.st_mode)) refuse("not a directory");
         int fd = openat(rootfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (fd < 0) die("open dir");
-        if (fchown(fd, uid, getgid()) != 0) die("chown");
-        if (fchmod(fd, 02770) != 0) die("chmod");
+        /* BOSSAPP-1486: keep run_dir owned by BOSS (getuid()) with group <uid> and sticky bit
+         * 01770 so the sandbox uid can work inside run_dir but cannot rename or unlink
+         * BOSS-created subdirectories (home, tmp, workspaces, .boss-sessions). */
+        if (fchown(fd, getuid(), uid) != 0) die("chown");
+        if (fchmod(fd, 01770) != 0) die("chmod");
         close(fd);
     }
     close(rootfd);

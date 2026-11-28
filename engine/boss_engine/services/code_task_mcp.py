@@ -37,6 +37,24 @@ from typing import Any, Optional
 
 from sqlalchemy.engine import Connection
 
+#: Read-only Knowledge Graph tools exposed to build harnesses and Quick Lane sessions
+#: (BOSSAPP-796 / PRINCIPAL_ENGINEER_INTELLIGENCE.md §3.A). Read-only so no write credential
+#: boundary is crossed.
+READONLY_KG_TOOLS: tuple[str, ...] = (
+    "kg_callers",
+    "kg_blast_radius",
+    "kg_precedent",
+    "kg_why",
+    "kg_symbol",
+    "kg_search",
+)
+
+
+def readonly_kg_tool_names(server_name: str = "boss_kg") -> list[str]:
+    """Return MCP tool identifiers for read-only KG tools exposed inside build harnesses."""
+    prefix = _cli_name(server_name)
+    return [f"mcp__{prefix}__{tool}" for tool in READONLY_KG_TOOLS]
+
 
 @dataclass
 class HarnessMcp:
@@ -180,8 +198,9 @@ def plan(connection: Connection, settings: Any, project_id: str, role_key: str,
 
 
 def _gateway_plan(connection: Connection, settings: Any, project_id: str, role: str,
-                  run_id: Optional[str]) -> tuple[dict[str, Any], str]:
-    """The planned servers pointed at the MCP gateway, plus the run's own `boss_run` tools;
+                  run_id: Optional[str], *, include_kg: bool = False) -> tuple[dict[str, Any], str]:
+    """The planned servers pointed at the MCP gateway, plus the run's own `boss_run` tools
+    (and PE-A read-only KG tools on `boss_kg`: kg_callers, kg_blast_radius, kg_precedent, kg_why);
     returns (planned, gateway token)."""
     from . import mcp_gateway, model_proxy
 
@@ -197,7 +216,12 @@ def _gateway_plan(connection: Connection, settings: Any, project_id: str, role: 
     servers = {name: {"type": "http", "url": f"{base}/{name}"} for name in held}
     servers[mcp_gateway.RUN_SERVER] = {"type": "http",
                                        "url": f"{base}/{mcp_gateway.RUN_SERVER}"}
+    if include_kg:
+        servers[mcp_gateway.KG_SERVER] = {"type": "http",
+                                          "url": f"{base}/{mcp_gateway.KG_SERVER}"}
     planned = {**planned, "servers": servers,
+               "readonly_kg_tools": list(mcp_gateway.READONLY_KG_TOOLS),
+               "kg_server_url": f"{base}/{mcp_gateway.KG_SERVER}",
                "disallowed": [d for d in planned["disallowed"]
                               if d.split("__")[1] in servers]}
     return planned, token

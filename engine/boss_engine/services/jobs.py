@@ -75,6 +75,8 @@ _RUN_TABLE_FOR_KIND: dict[str, str] = {
     "discovery.run": "discovery_runs",
     # An agent run on a worker (AP-P2): a cancelled or finished run gets no new job.
     "agent.run": "agent_runs",
+    # Quick Lane (BOSSAPP-795): a cancelled or completed quick fix gets no follow-up job.
+    "quick.fix": "quick_lane_runs",
 }
 
 #: A run in one of these can never advance, so nothing should be queued on its behalf.
@@ -939,6 +941,7 @@ class JobLeaseService:
                         lease_expires_at = :lease_expires_at,
                         heartbeat_at = :now_utc,
                         attempt = jobs.attempt + 1,
+                        payload = COALESCE(jobs.payload, '{}'::jsonb) - 'takeover_from_epoch',
                         fence_epoch = """ + _NEXT_EPOCH_SQL + """,
                         updated_at = :now_utc
                     WHERE id = :job_id
@@ -1124,6 +1127,7 @@ class JobLeaseService:
                     lease_expires_at = :lease_expires_at,
                     heartbeat_at = :now_utc,
                     attempt = jobs.attempt + 1,
+                    payload = COALESCE(jobs.payload, '{}'::jsonb) - 'takeover_from_epoch',
                     fence_epoch = """ + _NEXT_EPOCH_SQL + """,
                     updated_at = :now_utc
                 WHERE id = :job_id

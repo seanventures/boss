@@ -259,7 +259,7 @@ describe("the voice request", () => {
     }, fetchImpl as unknown as typeof fetch);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/v1/tasks/tsk%20door/voice");
     expect(init.method).toBe("POST");
     const body = JSON.parse(String(init.body));

@@ -16,7 +16,7 @@
  * The Conversation tab keeps the timeline (who said what, when); this tab is the work queue.
  */
 import React from "react";
-import { ChatCircleDots, CheckCircle, FileText } from "@phosphor-icons/react";
+import { ChatCircleDots, CheckCircle, DownloadSimple, FileText } from "@phosphor-icons/react";
 
 import { Markdown } from "../../../markdown";
 import type { ChangeSet, ChangeSetNote } from "../../../../lib/repo-links";
@@ -62,6 +62,43 @@ export function OverviewTab({ cs, at, files, onChanged, onJump, onJumpLoc, onFil
           ? <div className="cs-body-md gr-ov-body" data-user-text><Markdown text={cs.body} /></div>
           : <p className="cs-empty">No description yet: the build writes one when it proposes the change.</p>}
       </section>
+
+      {cs.test_evidence ? (
+        <section className="cs-card" aria-label="Test evidence" data-testid="gr-ov-test-evidence">
+          <div className="cs-card-h">
+            <DownloadSimple size={15} aria-hidden />
+            <b>Test evidence</b>
+            <span className="cs-pill" data-tone={cs.test_evidence.status === "passed" ? "green" : cs.test_evidence.status === "failed" ? "red" : "grey"}>
+              {cs.test_evidence.status}
+            </span>
+          </div>
+          <div className="cs-note-b">
+            <p>
+              {cs.test_evidence.counts.suites_run ?? cs.test_evidence.suites.length} suite(s)
+              {cs.test_evidence.counts.cases_total
+                ? ` · ${cs.test_evidence.counts.cases_passed ?? 0} passed, ${cs.test_evidence.counts.cases_failed ?? 0} failed, ${cs.test_evidence.counts.cases_skipped ?? 0} skipped`
+                : ""}
+              {cs.test_evidence.head_sha ? <> · commit <code>{cs.test_evidence.head_sha.slice(0, 12)}</code></> : null}
+            </p>
+            {cs.test_evidence.not_run.length ? (
+              <p className="cs-faint">Not run: {cs.test_evidence.not_run.join("; ")}</p>
+            ) : null}
+            <div className="fx-out-links">
+              <a href={cs.test_evidence.download_url} download data-testid="gr-ov-test-download">
+                Download full test results
+              </a>
+              {cs.source === "github" && cs.test_evidence.check_run_url ? (
+                <>
+                  {" · "}
+                  <a href={cs.test_evidence.check_run_url} target="_blank" rel="noreferrer" data-testid="gr-ov-test-check-run">
+                    View GitHub check run ↗
+                  </a>
+                </>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="cs-card" aria-label="Active comments" data-testid="gr-ov-active">
         <div className="cs-card-h"><ChatCircleDots size={15} aria-hidden /><b>Active</b><span className="cs-faint">{active.length}</span></div>

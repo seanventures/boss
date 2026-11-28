@@ -86,6 +86,26 @@ LOGICAL_KEYS: dict[str, tuple[tuple[str, ...], str]] = {
     "sandbox_violation_counts": (("lineage_id",),
                                  "lineage_id IN (SELECT lineage_id FROM lineage_sandboxes "
                                  "WHERE project_id = :p)"),
+    "autonomy_policies": (("scope_kind", "scope_id"),
+                          "scope_kind = 'project' AND scope_id = :p"),
+    "portability_imports": (("scope", "target_id"),
+                            "scope = 'project' AND target_id = :p"),
+    "agent_checkpoint_writes": (
+        ("checkpoint_id",),
+        "checkpoint_id IN (SELECT checkpoint_id FROM agent_checkpoints WHERE run_id IN "
+        "(SELECT id FROM agent_runs WHERE project_id = :p "
+        "UNION SELECT id FROM code_task_runs WHERE project_id = :p))",
+    ),
+    "agent_checkpoints": (
+        ("run_id",),
+        "run_id IN (SELECT id FROM agent_runs WHERE project_id = :p "
+        "UNION SELECT id FROM code_task_runs WHERE project_id = :p)",
+    ),
+    "runner_sessions": (
+        ("run_id",),
+        "run_id IN (SELECT id FROM code_task_runs WHERE project_id = :p "
+        "UNION SELECT id FROM agent_runs WHERE project_id = :p)",
+    ),
 }
 
 #: Tables kept as they are, by name, with why. Org-level, install-level or the security log.
@@ -103,6 +123,28 @@ KEPT_TABLES: dict[str, str] = {
     "subscription_accounts": "install model subscriptions", "secret_material": "the install vault",
     "signal_adapter_cursors": "install signal adapters", "workload_profiles": "install profiles",
     "schema_apply_runs": "schema history", "schema_once": "schema history",
+    "schema_backfills": "schema history",
+    "agent_ca": "install agent CA", "agent_certs": "org/host agent certificates",
+    "agent_host_join_tokens": "org host join tokens", "agent_hosts": "org host fleet",
+    "backup_scheduler_lease": "install backup lease", "backups": "install backups",
+    "director_leases": "org director leases", "director_nodes": "org director nodes",
+    "extension_installs": "install extensions", "extension_job_leases": "install extension leases",
+    "factory_launch_attachments": "org launch attachments", "fleet_ca": "install fleet CA",
+    "guest_calls": "org/host guest call audit", "host_events": "org host lifecycle events",
+    "ip_allow_audit": "install IP allowlist audit", "ip_allowlist": "install IP allowlist",
+    "kg_action_priors": "org procedural priors",
+    "mcp_oauth_clients": "install MCP OAuth clients", "mcp_oauth_codes": "org MCP OAuth codes",
+    "mcp_oauth_device_codes": "install MCP OAuth device codes", "mcp_oauth_grants": "org MCP OAuth grants",
+    "member_monthly_build_caps": "org member build caps", "policy_versions": "immutable policy versions",
+    "publish_guards": "org publish guards", "remote_agent_profiles": "org remote agent profiles",
+    "retention_rules": "host storage retention rules", "storage_samples": "host storage telemetry",
+    "system_services": "install daemon health registry",
+    "trace_export_destinations": "org trace export config",
+    "vip_pool": "org VIP pool", "vm_images": "org/install VM images",
+    "vm_snapshots": "host VM snapshots",
+    "workspace_design_apps": "workspace design system apps",
+    "workspace_design_systems": "workspace design systems",
+    "golden_journey_results": "install daily golden-journey check results",
 }
 #: Kept by prefix: identity (people, roles, keys, the security audit log), BOSS as an OIDC
 #: provider, and the install's telemetry.
@@ -249,6 +291,12 @@ def _cols(cols: Iterable[str], alias: str = "") -> str:
     return cs[0] if len(cs) == 1 else "(" + ", ".join(cs) + ")"
 
 
+def _select_cols(cols: Iterable[str], alias: str = "") -> str:
+    """Column list for SELECT inside an IN (SELECT ...) subquery (no tuple parens)."""
+    pre = f"{alias}." if alias else ""
+    return ", ".join(pre + _q(c) for c in cols)
+
+
 class _Preds:
     """The WHERE clause that picks each table's rows for the project (`:p`)."""
 
@@ -277,7 +325,7 @@ class _Preds:
                 parent_pred = self.of(fk.parent, depth + 1)
                 if parent_pred == "FALSE":
                     continue
-                parts.append(f"{_cols(fk.cols)} IN (SELECT {_cols(fk.pcols)} FROM {_q(fk.parent)} "
+                parts.append(f"{_cols(fk.cols)} IN (SELECT {_select_cols(fk.pcols)} FROM {_q(fk.parent)} "
                              f"WHERE {parent_pred})")
             pred = " OR ".join(f"({x})" for x in parts) if parts else "FALSE"
         else:
@@ -359,10 +407,46 @@ KEEPS = [
     "Your organization, its people, its GitHub connection and repository list.",
 ]
 
+LOCAL_KEEPS = [
+    "No external repository is affected; local BOSS repository copies on this machine are removed.",
+    "The organization's security audit log, with one more entry saying who deleted it.",
+    "Your organization, its people, and its other projects.",
+]
+
+
+def _is_local_first(connection: Any, cat: Any, project_id: str) -> bool:
+    """True when the project uses local BOSS repositories only (no GitHub repo binding)."""
+    has_local = False
+    if cat.has("local_change_sets", "project_id"):
+        has_local = bool(connection.execute(
+            text("SELECT 1 FROM local_change_sets WHERE project_id = :p LIMIT 1"),
+            {"p": project_id}).first())
+    if not has_local and cat.has("project_repositories", "project_id"):
+        cols = cat.columns.get("project_repositories", set())
+        if "provider" in cols:
+            providers = {
+                str(r[0] or "").strip().lower()
+                for r in connection.execute(
+                    text("SELECT DISTINCT provider FROM project_repositories WHERE project_id = :p"),
+                    {"p": project_id}).all()
+            }
+            if providers and providers == {"local"}:
+                return True
+            if "github" in providers:
+                return False
+    if cat.has("github_connections", "project_id"):
+        if connection.execute(
+            text("SELECT 1 FROM github_connections WHERE project_id = :p LIMIT 1"),
+            {"p": project_id}).first():
+            return False
+    return has_local
+
 
 def preview(connection: Any, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
     """What deleting the project would remove, counted by kind, and what stays. None when there is
     no such project. `refused` says in words why it cannot be deleted (the home project)."""
+    from . import portability
+
     row = _project(connection, project_id)
     if row is None:
         return None
@@ -376,10 +460,12 @@ def preview(connection: Any, settings: Any, project_id: str) -> Optional[dict[st
     refused = None
     if project_id == _home(settings):
         refused = _home_sentence(row["name"])
+    local_only = _is_local_first(connection, cat, project_id)
     return {
         "id": row["id"], "name": row["name"], "slug": row["slug"], "org_id": row["org_id"],
         "archived": row["archived_at"] is not None,
         "home": project_id == _home(settings), "refused": refused,
+        "local_only": local_only,
         "counts": kinds, "total": sum(per_table.values()),
         "tables": len(per_table), "staging_apps": staging, "production_apps": production,
         "previews_running": int(connection.execute(text(
@@ -387,10 +473,15 @@ def preview(connection: Any, settings: Any, project_id: str) -> Optional[dict[st
             "('stopped', 'failed', 'expired')"), {"p": project_id}).scalar() or 0)
         if cat.has("app_previews", "status") else 0,
         "graph": kg,
-        "keeps": KEEPS,
-        # No project export exists yet (there is no GET /v1/projects/{id}/export): said, not linked.
-        "export": {"available": False,
-                   "note": "There is no project export yet, so there is nothing to download first."},
+        "keeps": list(LOCAL_KEEPS if local_only else KEEPS),
+        # Project export via services/portability.py (BOSSAPP-837 / BOSSAPP-1470).
+        "export": {
+            "available": True,
+            "href": f"/v1/projects/{project_id}/export",
+            "format": portability.FORMAT,
+            "note": "Download a portable JSON bundle of this project's configuration before "
+                    "deleting (secrets are exported as empty placeholders).",
+        },
     }
 
 
@@ -530,7 +621,7 @@ def _keep_others(connection: Any, cat: Catalog, preds: _Preds, project_id: str,
                 continue
             child_pred = preds.of(fk.child) if fk.child in deleted else "FALSE"
             outside = (f"({child_pred}) IS NOT TRUE AND {_cols(fk.cols, 'x')} IN "
-                       f"(SELECT {_cols(fk.pcols)} FROM {_q(fk.parent)} WHERE {parent_pred})")
+                       f"(SELECT {_select_cols(fk.pcols)} FROM {_q(fk.parent)} WHERE {parent_pred})")
             count = f"SELECT count(*) FROM {_q(fk.child)} x WHERE {outside}"
             n = connection.execute(text(count), {"p": project_id}).scalar()
             if not n:
@@ -559,7 +650,7 @@ def _keep_others(connection: Any, cat: Catalog, preds: _Preds, project_id: str,
                 kept.append({"table": fk.child, "cleared": list(fk.cols), "rows": int(n)})
             elif movable and fallback:
                 _move(connection, fk.parent,
-                      f"{_cols(fk.pcols)} IN (SELECT {_cols(fk.cols, 'x')} FROM {_q(fk.child)} x "
+                      f"{_cols(fk.pcols)} IN (SELECT {_select_cols(fk.cols, 'x')} FROM {_q(fk.child)} x "
                       f"WHERE {outside})", {"to": fallback, "p": project_id})
                 kept.append({"table": fk.parent, "to": fallback, "used_by": fk.child})
             else:
@@ -632,11 +723,12 @@ def purge(connection: Any, settings: Any, project_id: str, *, actor: str,
     # Nothing else writes this project while it goes.
     connection.execute(text("SELECT id FROM projects WHERE id = :p FOR UPDATE"), {"p": project_id})
     connection.execute(text("SET LOCAL boss.ledger_purge = 'on'"))
-    # Subscription pools (BOSSAPP-1343): the org's pool anchored here moves to another project
-    # of the org; a pool that goes deletes its seats' stored logins (no orphaned credentials).
+    # Subscription pools (BOSSAPP-1343, BOSSAPP-1483): the org's pool anchored here moves to the
+    # org's model home (or another project of the org); stored logins for deleted project pools
+    # are returned in pending_pool_logins and deleted ONLY after the purge commits.
     from .subscription_pools import before_project_purge
 
-    before_project_purge(connection, settings, project_id)
+    pool_cleanup = before_project_purge(connection, settings, project_id, delete_now=False)
     cat = catalog(connection)
     preds = _Preds(cat)
     kept = _keep_others(connection, cat, preds, project_id, _rehome_target(connection, settings, project))
@@ -674,7 +766,8 @@ def purge(connection: Any, settings: Any, project_id: str, *, actor: str,
     _audit(connection, auth, project, summary)
     return {"id": project_id, "name": project["name"], "org_id": project["org_id"],
             "counts": counts, "per_table": per_table, "rows": summary["rows"],
-            "graph_dropped": graph_dropped, "identity": scopes, "kept_for_others": kept}
+            "graph_dropped": graph_dropped, "identity": scopes, "kept_for_others": kept,
+            "pending_pool_logins": list(pool_cleanup.get("pending_login_deletes") or [])}
 
 
 def _audit(connection: Any, auth: Any, project: dict, details: dict[str, Any]) -> None:
@@ -855,8 +948,12 @@ def delete_project(engine: Any, settings: Any, project_id: str, *, actor: str,
                      extra={"apps_removed": [f"{a['app_name']} ({a['environment']})" for a in removed
                                              if a["result"] == "removed"],
                             "stopped": stopped})
-    # The rows are gone (committed): now its files — a local project's bare repositories, its
-    # retained workspaces, preview trees and logs, artifacts, and a mirror no one else uses.
+    # The rows are gone (committed): now its stored pool logins (BOSSAPP-1483) and its files —
+    # a local project's bare repositories, retained workspaces, preview trees, and artifacts.
+    from .subscription_pools import delete_purged_pool_logins
+
+    delete_purged_pool_logins(settings, done.get("pending_pool_logins") or [],
+                              project_id=project_id)
     files = project_files.remove(settings, files_plan)
     return {**done, "removed_apps": removed, "stopped": stopped, "deleted": True,
             "files": project_files.describe(files), "files_refused": files["refused"]}

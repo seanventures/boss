@@ -159,7 +159,9 @@ def test_the_dialog_counts_what_goes_by_kind(world, owner, client, engine, hosts
     assert seen["staging_apps"][0]["host"] == "demo-host"
     assert seen["production_apps"] == [] and seen["previews_running"] == 1
     assert any("GitHub" in k for k in seen["keeps"]) and any("audit" in k for k in seen["keeps"])
-    assert seen["export"]["available"] is False and seen["export"]["note"]
+    assert seen["export"]["available"] is True
+    assert seen["export"]["href"] == f"/v1/projects/{a['id']}/export"
+    assert seen["export"]["note"]
     assert hosts["calls"] == [], "reading what goes touches nothing"
 
 
@@ -450,3 +452,50 @@ def test_a_mirror_another_project_uses_is_kept(world, owner, client, engine, hos
     done = _delete(world, owner, client, a["id"], confirm_name=a["name"])
     assert done.status_code == 200, done.text
     assert (mirror / "HEAD").is_file()
+
+
+def test_purge_handles_two_column_foreign_keys(world, owner, client, engine):
+    """Composite 2-column FKs (field_acl_grants -> field_acl_fields) delete cleanly for one
+    project while leaving another project's rows untouched (BOSSAPP-1337)."""
+    projects = []
+    for tag in ("a", "b"):
+        slug = f"fk2-{tag}-{uuid.uuid4().hex[:6]}"
+        with world.acting_as(world.ctx(owner)):
+            resp = client.post("/v1/projects", json={"name": f"FK2 {slug}", "slug": slug})
+        assert resp.status_code == 201, resp.text
+        projects.append(slug)
+    proj_a, proj_b = projects
+
+    with engine.begin() as db:
+        for pid, app_id in ((proj_a, f"fapp_a_{uuid.uuid4().hex[:8]}"), (proj_b, f"fapp_b_{uuid.uuid4().hex[:8]}")):
+            db.execute(text(
+                "INSERT INTO field_acl_apps (id, project_id, name, created_by) "
+                "VALUES (:i, :p, 'acl-app', :u)"), {"i": app_id, "p": pid, "u": owner.id})
+            db.execute(text(
+                "INSERT INTO field_acl_fields (id, app_id, field_key, label, position) "
+                "VALUES (:i, :a, 'secret_note', 'Secret Note', 1)"),
+                {"i": f"ffld_{uuid.uuid4().hex[:8]}", "a": app_id})
+            db.execute(text(
+                "INSERT INTO field_acl_grants (id, app_id, field_key, subject_kind, subject_id, can_read) "
+                "VALUES (:i, :a, 'secret_note', 'user', :u, true)"),
+                {"i": f"fgrt_{uuid.uuid4().hex[:8]}", "a": app_id, "u": owner.id})
+
+    with engine.begin() as db:
+        cat = pd.catalog(db)
+        pred = pd._Preds(cat).of("field_acl_grants")
+        assert 'IN (SELECT ("app_id", "field_key")' not in pred
+        assert 'IN (SELECT "app_id", "field_key"' in pred
+        pd.purge(db, get_settings(), proj_a, actor=owner.id)
+
+    with engine.connect() as db:
+        assert db.execute(text("SELECT count(*) FROM field_acl_apps WHERE project_id = :p"), {"p": proj_a}).scalar() == 0
+        assert db.execute(text(
+            "SELECT count(*) FROM field_acl_grants g JOIN field_acl_apps a ON a.id = g.app_id "
+            "WHERE a.project_id = :p"), {"p": proj_a}).scalar() == 0
+        assert db.execute(text("SELECT count(*) FROM field_acl_apps WHERE project_id = :p"), {"p": proj_b}).scalar() == 1
+        assert db.execute(text(
+            "SELECT count(*) FROM field_acl_fields f JOIN field_acl_apps a ON a.id = f.app_id "
+            "WHERE a.project_id = :p"), {"p": proj_b}).scalar() == 1
+        assert db.execute(text(
+            "SELECT count(*) FROM field_acl_grants g JOIN field_acl_apps a ON a.id = g.app_id "
+            "WHERE a.project_id = :p"), {"p": proj_b}).scalar() == 1

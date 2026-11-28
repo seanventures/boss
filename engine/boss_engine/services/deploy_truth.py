@@ -400,6 +400,23 @@ def _reason(attempt: Mapping[str, Any]) -> Optional[str]:
     return said or None
 
 
+def _prefer_target_address(live_url: Optional[str], address: Optional[str]) -> Optional[str]:
+    """Keep the live URL's path unless the target's host/port moved since that healthy row."""
+    if not live_url:
+        return address
+    if not address:
+        return live_url
+    from urllib.parse import urlsplit, urlunsplit
+
+    lp = urlsplit(live_url)
+    ap = urlsplit(address)
+    if ap.hostname and lp.hostname and (ap.hostname != lp.hostname or ap.port != lp.port):
+        if not lp.path or lp.path == "/":
+            return address
+        return urlunsplit((ap.scheme or lp.scheme, ap.netloc, lp.path, lp.query, ""))
+    return live_url
+
+
 def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
           now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
     """Per target id: {state, word, live, live_url, address, attempt, reason, progress}.
@@ -461,7 +478,7 @@ def truth(connection: Connection, targets: list[Mapping[str, Any]], *,
             state, word = LIVE, "Live"
         else:
             state, word = NOT_DEPLOYED, "Not deployed yet"
-        live_url = web_url(stack_live.get(tid) or address) if was_live else None
+        live_url = web_url(_prefer_target_address(stack_live.get(tid), address)) if was_live else None
         out[tid] = {
             "state": state, "word": word, "live": was_live, "live_url": live_url,
             "address": address,

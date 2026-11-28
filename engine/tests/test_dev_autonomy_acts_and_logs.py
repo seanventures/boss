@@ -276,3 +276,334 @@ def test_an_approval_gate_its_author_set_to_ask_waits_for_a_person(eng, project)
             "action": "resume_workflow"}})
     assert not manual.acts and manual.cls == autonomy_gate.EXPLICIT_STOP
     assert plain.acts
+
+
+# ── BOSSAPP-1461: BOSS-side actions act autonomously with real Undo; customer/prod/cap ask ───
+
+def test_boss_side_actions_act_autonomously_and_undo_works(eng, project, monkeypatch):
+    from boss_engine.services import (
+        agent_requests,
+        reflection,
+        skill_definitions,
+    )
+
+    monkeypatch.setenv("BOSS_INSTALL_TIER", "dev")
+    settings = get_settings()
+
+    with eng.begin() as c:
+        # Clean project artifacts we create at end via try/finally or cleanup.
+        # 1. role.hire + undo (retire_hire)
+        hire = agent_requests.propose_hire(
+            c, project_id=project, proposer="agent:engineering_captain",
+            name="Latency Watcher", purpose="Watches p95 latency regressions.",
+            reason="Need a dedicated latency watcher.")
+        assert hire["status"] == "asked"
+        dec_hire = hire["decision_id"]
+        res_hire = autonomy_gate.decide(c, settings, dec_hire)
+        assert res_hire["decided"] is True and res_hire["undo"] == "retire_hire"
+        assert c.execute(text(
+            "SELECT 1 FROM roles WHERE project_id = :p AND role_key = 'latency_watcher'"),
+            {"p": project}).first() is not None
+        undo_hire = autonomy_gate.undo(c, settings, dec_hire, project_id=project, actor="ceo")
+        assert undo_hire["undo"] == "retire_hire"
+        assert c.execute(text(
+            "SELECT 1 FROM roles WHERE project_id = :p AND role_key = 'latency_watcher'"),
+            {"p": project}).first() is None
+
+        # 2. role.autonomy_change + undo (revert_autonomy)
+        role_id = f"role_{uuid.uuid4().hex[:8]}"
+        c.execute(text(
+            "INSERT INTO roles (id, project_id, role_key, display_name, autonomy_level, spec) "
+            "VALUES (:i, :p, 'qa_bot', 'QA Bot', 1, '{}'::jsonb)"),
+            {"i": role_id, "p": project})
+        chg_id = f"ac_{uuid.uuid4().hex[:8]}"
+        c.execute(text(
+            "INSERT INTO autonomy_changes (id, project_id, role_id, role_key, change_type, "
+            "trigger, from_level, to_level, status, reason, created_by) VALUES "
+            "(:i, :p, :r, 'qa_bot', 'upgrade', 'scorecard', 1, 2, 'pending_decision', "
+            "'Strong scorecard', 'agent:vp_agents')"),
+            {"i": chg_id, "p": project, "r": role_id})
+        dec_auto = _card(c, project, {
+            "action": "role.autonomy_change", "autonomy_change_id": chg_id, "role_key": "qa_bot"
+        }, risk_tier=2)
+        res_auto = autonomy_gate.decide(c, settings, dec_auto)
+        assert res_auto["decided"] is True and res_auto["undo"] == "revert_autonomy"
+        assert c.execute(text("SELECT autonomy_level FROM roles WHERE id = :r"), {"r": role_id}).scalar() == 2
+        undo_auto = autonomy_gate.undo(c, settings, dec_auto, project_id=project, actor="ceo")
+        assert undo_auto["undo"] == "revert_autonomy"
+        assert c.execute(text("SELECT autonomy_level FROM roles WHERE id = :r"), {"r": role_id}).scalar() == 1
+
+        # 3. apply_agent_prompt_diff + undo (remove_instruction)
+        c.execute(text(
+            "INSERT INTO roles (id, project_id, role_key, display_name) "
+            "VALUES (:i, :p, 'qa_bot', 'QA Bot') ON CONFLICT DO NOTHING"),
+            {"i": f"role_{uuid.uuid4().hex[:8]}", "p": project})
+        pdiff = reflection._propose_prompt_diff(
+            c, project, "qa_bot",
+            [{"kind": "feedback", "id": "fb_1", "target_kind": "agent",
+              "target": "qa_bot", "said": "Check edge cases."}],
+            "rfl_1",
+        )
+        # Ensure we use change_consent + recommendation directly if _propose_prompt_diff skipped threshold
+        if pdiff is None:
+            from boss_engine.services import change_consent
+            proposed = {"name": "Edge-case checklist", "body": "Always test boundary values.",
+                        "source": "pasted", "modes": ["work"]}
+            opened = change_consent.request(
+                c, project_id=project, subject_kind="prompt", subject_key="qa_bot",
+                base_hash="", proposed=proposed, diff="+ Always test boundary values.",
+                requested_by="agent:reflection", question="Add Edge-case checklist to qa_bot?",
+                action="apply_agent_prompt_diff",
+                recommendation={"role_key": "qa_bot", "proposed": proposed},
+                reason="reflection_prompt_diff", risk_tier=1,
+            )
+            dec_pdiff = opened["decision_id"]
+        else:
+            dec_pdiff = pdiff["decision_id"]
+        res_pdiff = autonomy_gate.decide(c, settings, dec_pdiff)
+        assert res_pdiff["decided"] is True and res_pdiff["undo"] == "remove_instruction"
+        assert c.execute(text(
+            "SELECT count(*) FROM agent_instructions WHERE project_id = :p AND role_key = 'qa_bot'"),
+            {"p": project}).scalar() == 1
+        undo_pdiff = autonomy_gate.undo(c, settings, dec_pdiff, project_id=project, actor="ceo")
+        assert undo_pdiff["undo"] == "remove_instruction"
+        assert c.execute(text(
+            "SELECT count(*) FROM agent_instructions WHERE project_id = :p AND role_key = 'qa_bot'"),
+            {"p": project}).scalar() == 0
+
+        # 4. activate_authored_skill + undo (disable_skill)
+        drafted = skill_definitions.draft_for_approval(
+            c, project_id=project, actor="agent:engineering_manager",
+            skill_key="auto_skill_check", label="Auto Skill Check",
+            behaviour_kind="guide", summary="Checks stuff", knowledge="Do X.", risk_tier=1,
+        )
+        dec_skill = drafted["decision_id"]
+        res_skill = autonomy_gate.decide(c, settings, dec_skill)
+        assert res_skill["decided"] is True and res_skill["undo"] == "disable_skill"
+        assert c.execute(text(
+            "SELECT enabled FROM skill_definitions WHERE project_id = :p AND skill_key = 'auto_skill_check'"),
+            {"p": project}).scalar() is True
+        undo_skill = autonomy_gate.undo(c, settings, dec_skill, project_id=project, actor="ceo")
+        assert undo_skill["undo"] == "disable_skill"
+        assert c.execute(text(
+            "SELECT enabled FROM skill_definitions WHERE project_id = :p AND skill_key = 'auto_skill_check'"),
+            {"p": project}).scalar() is False
+
+        # 5. review_tool_change (tier 2, reviewed server) + undo (quarantine_tool)
+        srv_id = f"mcp_{uuid.uuid4().hex[:8]}"
+        tools_json = [{
+            "name": "list_tickets", "risk_tier": 2, "quarantine": "ask",
+            "schema_sha256": "s1", "description_sha256": "d1",
+        }]
+        c.execute(text(
+            "INSERT INTO mcp_servers (id, project_id, name, url, risk_tier, enabled, "
+            "provenance, tools, reachable) VALUES (:i, :p, 'tracker', 'http://127.0.0.1:9/mcp', "
+            "2, true, '{\"trusted\": true}'::jsonb, CAST(:t AS JSONB), true)"),
+            {"i": srv_id, "p": project, "t": json.dumps(tools_json)})
+        dec_tool = _card(c, project, {
+            "action": "review_tool_change", "server_id": srv_id, "tool": "list_tickets",
+            "schema_sha256": "s1", "description_sha256": "d1",
+        }, risk_tier=2)
+        res_tool = autonomy_gate.decide(c, settings, dec_tool)
+        assert res_tool["decided"] is True and res_tool["undo"] == "quarantine_tool"
+        undo_tool = autonomy_gate.undo(c, settings, dec_tool, project_id=project, actor="ceo")
+        assert undo_tool["undo"] == "quarantine_tool"
+        updated_tools = c.execute(text("SELECT tools FROM mcp_servers WHERE id = :i"), {"i": srv_id}).scalar()
+        entry = next(t for t in updated_tools if t["name"] == "list_tickets")
+        assert entry.get("quarantine") == "ask"
+
+        # 6. self_improvement.begin_canary + undo (rollback_self_improvement)
+        task_id = f"tsk_{uuid.uuid4().hex[:8]}"
+        c.execute(text(
+            "INSERT INTO tasks (id, project_id, title, description, dedupe_key) VALUES "
+            "(:i, :p, 'Improve', 'Body', :i)"), {"i": task_id, "p": project})
+        prop_id = f"imp_{uuid.uuid4().hex[:8]}"
+        c.execute(text(
+            "INSERT INTO self_improvement_proposals (id, project_id, task_id, title, summary, "
+            "change_ref, diff_summary, status, risk_tier, created_by) VALUES "
+            "(:i, :p, :t, 'Speedup', 'Faster', 'ref1', 'diff', 'proposed', 2, 'agent:em')"),
+            {"i": prop_id, "p": project, "t": task_id})
+        dec_imp = _card(c, project, {"action": "self_improvement.begin_canary", "proposal_id": prop_id},
+                        risk_tier=2)
+        res_imp = autonomy_gate.decide(c, settings, dec_imp)
+        assert res_imp["decided"] is True and res_imp["undo"] == "rollback_self_improvement"
+        assert c.execute(text("SELECT status FROM self_improvement_proposals WHERE id = :i"),
+                         {"i": prop_id}).scalar() == "canary_approved"
+        undo_imp = autonomy_gate.undo(c, settings, dec_imp, project_id=project, actor="ceo")
+        assert undo_imp["undo"] == "rollback_self_improvement"
+        assert c.execute(text("SELECT status FROM self_improvement_proposals WHERE id = :i"),
+                         {"i": prop_id}).scalar() == "rejected"
+
+        # 7. budget.override with real override.extra_usd_micros <= $1.00 acts & undo (revoke_override)
+        run_id = f"crun_{uuid.uuid4().hex[:8]}"
+        c.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, title, status, phase) "
+            "VALUES (:i, :p, 'Build', 'failed', 'done')"), {"i": run_id, "p": project})
+        ov = agent_requests.request_override(
+            c, project_id=project, asker="agent:backend", run_id=run_id,
+            extra_usd_micros=500_000, reason="Need $0.50 to finish tests")
+        res_ov = autonomy_gate.decide(c, settings, ov["decision_id"])
+        assert res_ov["decided"] is True and res_ov["undo"] == "revoke_override"
+        assert agent_requests.override_headroom(c, project, run_id) == 500_000
+        undo_ov = autonomy_gate.undo(c, settings, ov["decision_id"], project_id=project, actor="ceo")
+        assert undo_ov["undo"] == "revoke_override"
+        assert agent_requests.override_headroom(c, project, run_id) == 0
+
+        # Cleanup FK-dependent rows for project teardown
+        for tbl in ("budget_overrides", "self_improvement_proposals", "artifacts", "code_task_runs",
+                    "tasks", "mcp_servers", "skill_versions", "skill_definitions",
+                    "project_skills", "change_consents", "agent_instructions",
+                    "autonomy_changes", "roles"):
+            c.execute(text(f"DELETE FROM {tbl} WHERE project_id = :p"), {"p": project})
+
+
+def test_boss_side_self_fix_and_negative_asks_under_dev_autonomy(eng, project, monkeypatch):
+    with eng.begin() as c:
+        # self_fix.install acts autonomously in dev (ASK_PROD_ONLY) and asks in prod;
+        # self_fix.remove & self_improvement.* act autonomously even when install_tier == prod.
+        monkeypatch.setenv("BOSS_INSTALL_TIER", "dev")
+        rt_install_dev = autonomy_gate.route(c, {"project_id": project, "risk_tier": 2,
+                                                  "recommendation": {"action": "self_fix.install"}})
+        assert rt_install_dev.acts is True, rt_install_dev
+
+        monkeypatch.setenv("BOSS_INSTALL_TIER", "prod")
+        rt_install_prod = autonomy_gate.route(c, {"project_id": project, "risk_tier": 2,
+                                                   "recommendation": {"action": "self_fix.install"}})
+        assert rt_install_prod.acts is False and rt_install_prod.cls == autonomy_gate.ASK_PROD_RELEASE
+        for action in ("self_fix.remove", "self_improvement.begin_canary", "self_improvement.rollout"):
+            rt = autonomy_gate.route(c, {"project_id": project, "risk_tier": 2,
+                                         "recommendation": {"action": action}})
+            assert rt.acts is True, (action, rt)
+
+        # Negative checks: these MUST keep asking!
+        for rec, tier in (
+            ({"action": "budget.override", "override": {"extra_usd_micros": 2_000_000}}, 2),
+            ({"action": "grant_builder_authority"}, 2),
+            ({"action": "store_proposed_secret"}, 2),
+            ({"action": "promote_agent_deployment"}, 2),
+            ({"action": "review_tool_change", "tool_screen": "untrusted"}, 2),
+            ({"action": "review_tool_change", "unreviewed_server": True}, 2),
+            ({"action": "review_tool_change"}, 3),
+            ({"action": "decide", "explicit_stop": "Person asked to review first"}, 2),
+        ):
+            rt = autonomy_gate.route(c, {"project_id": project, "risk_tier": tier,
+                                         "recommendation": rec})
+            assert rt.acts is False, (rec, tier, rt)
+
+        # Daily per_day cap enforcement for budget.override ($10.00 default).
+        run_id = f"crun_{uuid.uuid4().hex[:8]}"
+        dec_existing = f"dec_{uuid.uuid4().hex[:8]}"
+        c.execute(text(
+            "INSERT INTO decisions (id, project_id, question, recommendation, risk_tier, "
+            "cost_summary, default_action, status) VALUES (:d, :p, 'q', '{}'::jsonb, 2, "
+            "'{}'::jsonb, 'hold', 'approved')"), {"d": dec_existing, "p": project})
+        c.execute(text(
+            "INSERT INTO budget_overrides (id, project_id, root_run_id, run_id, extra_usd_micros, "
+            "decision_id, approved_by, status, expires_at) VALUES "
+            "(:i, :p, :r, :r, 9500000, :d, 'autonomy:dev:finops', 'active', now() + interval '1 day')"),
+            {"i": f"bov_{uuid.uuid4().hex[:8]}", "p": project, "r": run_id, "d": dec_existing})
+        over_day = autonomy_gate.route(c, {"project_id": project, "risk_tier": 2,
+                                           "recommendation": {"action": "budget.override",
+                                                              "override": {"extra_usd_micros": 800_000}}})
+        assert over_day.acts is False and over_day.cls == autonomy_gate.ASK_SPEND
+        c.execute(text("DELETE FROM budget_overrides WHERE project_id = :p"), {"p": project})
+
+
+def test_autonomy_gate_handles_non_finite_override_zero_amount_bad_tier_and_rollback_id(
+    eng, project, monkeypatch
+):
+    from types import SimpleNamespace
+    from boss_engine.services import self_improvement
+
+    with eng.begin() as c:
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            r = autonomy_gate.route(c, {"project_id": project, "risk_tier": 2,
+                                        "recommendation": {"action": "budget.override",
+                                                           "override": {"extra_usd_micros": bad}}})
+            assert r.acts is False and r.cls == autonomy_gate.ASK_SPEND
+        zero_with_override = autonomy_gate.route(
+            c,
+            {
+                "project_id": project,
+                "risk_tier": 2,
+                "recommendation": {
+                    "action": "budget.override",
+                    "amount_usd": 0,
+                    "override": {"extra_usd_micros": 500_000},
+                },
+            },
+        )
+        assert zero_with_override.acts is False and zero_with_override.cls == autonomy_gate.ASK_SPEND
+
+        bad_tier = autonomy_gate.route(
+            c,
+            {
+                "project_id": project,
+                "risk_tier": "bad",
+                "recommendation": {"action": "review_tool_change"},
+            },
+        )
+        assert bad_tier.acts is False and bad_tier.cls == autonomy_gate.ASK_PROD_RELEASE
+
+        max_tier_3 = autonomy_gate.route(
+            c,
+            {
+                "project_id": project,
+                "risk_tier": 2,
+                "recommendation": {"action": "review_tool_change", "max_tier": 3},
+            },
+        )
+        assert max_tier_3.acts is False and max_tier_3.cls == autonomy_gate.ASK_PROD_RELEASE
+
+        tools_tier_3 = autonomy_gate.route(
+            c,
+            {
+                "project_id": project,
+                "risk_tier": 2,
+                "recommendation": {
+                    "action": "review_tool_change",
+                    "tools": [{"name": "deploy_app", "tier": 3}],
+                },
+            },
+        )
+        assert tools_tier_3.acts is False and tools_tier_3.cls == autonomy_gate.ASK_PROD_RELEASE
+
+    class _FakeSelfImprovementService:
+        def __init__(self, _settings):
+            pass
+
+        def get_proposal(self, _conn, proposal_id, for_update=False):
+            return {"id": proposal_id, "project_id": project, "status": "rolled_out"}
+
+        def rollback(self, *_a, **_k):
+            return {"id": "sip_1", "status": "rolled_back", "rollback_artifact_id": "art_rb_42"}
+
+    monkeypatch.setattr(self_improvement, "SelfImprovementService", _FakeSelfImprovementService)
+    msg = autonomy_gate._undo_rollback_self_improvement(
+        SimpleNamespace(), get_settings(), "dec_1", project, {"proposal_id": "sip_1"}, "ceo"
+    )
+    assert msg == "rolled back sip_1 (art_rb_42)"
+
+
+@pytest.mark.parametrize("decision", [
+    {"risk_tier": 2, "recommendation": {"action": "grant_tool_access", "tools": [{"tier": "bad"}]}},
+    {"risk_tier": 2, "recommendation": {"action": "grant_tool_access", "tools": 123}},
+    {"risk_tier": 2, "recommendation": {"action": "grant_tool_access",
+                                        "tools": [{"tier": float("inf")}]}},
+    {"risk_tier": 2, "recommendation": {"action": "review_tool_change", "tools": 123}},
+    {"risk_tier": 2, "recommendation": {"action": "review_tool_change",
+                                        "tools": [{"tier": float("inf")}]}},
+    {"risk_tier": float("inf"), "recommendation": {"action": "review_tool_change"}},
+    {"risk_tier": "bad", "recommendation": {"action": "execute_agent_tool", "tool": "read_file"}},
+    {"risk_tier": float("nan"), "recommendation": {"action": "execute_agent_tool",
+                                                  "tool": "read_file"}},
+    {"risk_tier": "bad", "recommendation": {"capability": "custom_cap"}},
+    {"risk_tier": float("inf"), "recommendation": {"capability": "custom_cap"}},
+])
+def test_malformed_tools_or_risk_tier_asks_instead_of_crashing(decision):
+    """BOSSAPP-1461: malformed card JSON (a non-list tools, a non-integer or non-finite tier)
+    asks a person; route() never raises on it."""
+    r = autonomy_gate.route(None, {"project_id": "p1", **decision},
+                            policy=autonomy_policy.Policy())
+    assert r.acts is False
+    assert r.cls in (autonomy_gate.ASK_PROD_RELEASE, "unclassified")

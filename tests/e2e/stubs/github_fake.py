@@ -50,6 +50,24 @@ class GitHubFake:
         self.world = world              # fakes.World (prs live in world.prs)
 
     # ------------------------------------------------------------------ helpers
+    def _workflows(self, bare: Path, full: str) -> list[dict[str, Any]]:
+        try:
+            raw = _git(bare, "ls-tree", "-r", "--name-only", "HEAD", "--", ".github/workflows")
+        except GitError:
+            return []
+        workflows: list[dict[str, Any]] = []
+        for idx, path in enumerate(ln.strip() for ln in raw.splitlines() if ln.strip()):
+            if not path.endswith((".yml", ".yaml")):
+                continue
+            workflows.append({
+                "id": 100 + idx,
+                "name": Path(path).stem,
+                "path": path,
+                "state": "active",
+                "html_url": f"https://github.com/{full}/blob/main/{path}",
+            })
+        return workflows
+
     def _check_runs(self, bare: Path, full: str, ref: str) -> list[dict[str, Any]]:
         """The check runs the test told the fakes this commit reports (POST /github/_checks),
         by sha, then by any branch whose head is that sha, then "*". None set: no CI."""
@@ -381,6 +399,11 @@ class GitHubFake:
             return (201, {"id": len(self.world.deploys) + 1}) if method == "POST" else (200, [])
         if re.match(r"^/deployments/\d+/statuses$", rest):
             return (201, {"id": 1, "state": body.get("state")}) if method == "POST" else (200, [])
+        if rest == "/actions/workflows" and method == "GET":
+            workflows = self._workflows(bare, full)
+            return 200, {"total_count": len(workflows), "workflows": workflows}
+        if rest == "/actions/runs" and method == "GET":
+            return 200, {"total_count": 0, "workflow_runs": []}
         if rest.startswith(("/hooks", "/keys", "/actions", "/collaborators", "/labels")):
             return (201, {"id": 1}) if method == "POST" else (200, [])
         return 404, {"message": f"boss-e2e GitHub fake: no route for {method} {rest}"}

@@ -1504,10 +1504,15 @@ def is_multi_service(services: list[Service]) -> bool:
 
 
 def find_stack_root(root: Path | str, changed: Optional[list[str]] = None,
-                    app_id: Optional[str] = None) -> Optional[Path]:
-    """The multi-service app directory this run builds, or None. The DEEPEST directory on a
-    changed path that is multi-service (a monorepo directory of many apps never is: more than
+                    app_id: Optional[str] = None, *, app_map: Any = None) -> Optional[Path]:
+    """The multi-service app directory this run builds, or None.
+
+    When `app_map` is supplied (BOSSAPP-555), ONLY the App Map's `root_path` is checked — never
+    falling back to the repository root for a subfolder app. Otherwise: the DEEPEST directory on
+    a changed path that is multi-service (a monorepo directory of many apps never is: more than
     MAX_SERVICES), then the named app, then the repository root."""
+    from . import app_map as _app_map
+
     base = Path(root)
     tried: set[Path] = set()
 
@@ -1516,6 +1521,11 @@ def find_stack_root(root: Path | str, changed: Optional[list[str]] = None,
             return False
         tried.add(d)
         return is_multi_service(detect_services(d))
+
+    entry = _app_map.coerce_entry(app_map)
+    if entry is not None:
+        target = entry.resolved_dir(base)
+        return target if ok(target) else None
 
     for rel in changed or []:
         parts = PurePosixPath(str(rel)).parts

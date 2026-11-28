@@ -946,7 +946,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const ccVerifiedToday = receipts.items.filter(
     (receipt) => Date.now() - Date.parse(receipt.createdAt) < 86_400_000,
   ).length;
-  const editionId = "community" as const;
+  const editionId = process.env.BOSS_EDITION ?? "community";
   return (
     <ConsoleShell
       status={{
@@ -1135,7 +1135,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialApps={commandCenterApps}
             composer={
               <AskBossHero projectId={activeProjectId} actor={activeActorId}
-                orgId={activeOrgId} deploymentAvailable={false} layout="hero" />
+                orgId={activeOrgId} deploymentAvailable={true} layout="hero" />
             }
             help={<OnboardingHelpCard />} startCard={showsStartCard} />
         </section>

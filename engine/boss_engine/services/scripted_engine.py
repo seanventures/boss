@@ -540,6 +540,41 @@ def enabled() -> bool:
     return (os.environ.get(ENABLE_ENV) or "").strip().lower() in ("1", "true", "yes")
 
 
+class ScriptedChatAdapter:
+    """Deterministic zero-provider chat adapter for the scripted engine (BOSSAPP-1484).
+
+    Routes summary/review-packet/chat helper calls through the run's engine with zero
+    external model calls and zero cost.
+    """
+
+    engine = ENGINE
+    model = MODEL
+
+    def create_text_response(self, prompt: str, system: str = "",
+                             model: Optional[str] = None) -> tuple[str, str, dict[str, Any]]:
+        del system, model
+        first_line = next((ln.strip() for ln in (prompt or "").splitlines() if ln.strip()), "")
+        body = (
+            "## Implementation summary\n"
+            f"- Scripted engine review packet ({first_line[:120]}).\n\n"
+            "## Recommendation\n"
+            "- Proceed with automated verification gates (scripted engine, 0 provider calls)."
+        )
+        return (
+            f"scripted-{uuid.uuid4().hex[:12]}",
+            body,
+            {"model": MODEL, "input_tokens": 0, "output_tokens": 0, "cost_usd_micros": 0},
+        )
+
+    def create_chat_completion(self, messages: Any, **_kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+        prompt = ""
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            prompt = str(last.get("content") if isinstance(last, dict) else last or "")
+        _ref, text, usage = self.create_text_response(prompt)
+        return {"role": "assistant", "content": text}, usage
+
+
 def build(settings: Any) -> ScriptedEngine:
     """The harness registry's builder (code_agent._register_builtin_harnesses)."""
     if not enabled():

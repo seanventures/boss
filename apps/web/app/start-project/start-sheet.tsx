@@ -63,6 +63,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
   const titleId = useId();
   const guarded = useGuardedCall();
   const canCreate = useGate("project:create");
+  const canStart = useGate("workflow_run:start");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [all, setAll] = useState(false);
@@ -111,6 +112,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
   const runIdea = async () => {
     if (!idea.trim() || !shownName.trim() || busy) return;
     if (!canCreate.allowed) { setError(canCreate.reason); return; }
+    if (!canStart.allowed) { setError(canStart.reason); return; }
     setBusy("idea"); setError(null);
     try {
       let pid = ideaProject;

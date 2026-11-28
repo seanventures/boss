@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from . import review_comments
 
@@ -106,8 +106,11 @@ def build(live_files: Optional[dict] = None, changed_paths: Iterable[str] = (), 
 
 
 def render(change: ChangeUnderReview, *, max_total: int = MAX_TOTAL,
-           max_per_file: int = MAX_PER_FILE) -> str:
-    """The change as the reviewer reads it: the full list of changed paths, then their text."""
+           max_per_file: int = MAX_PER_FILE,
+           diffs: Optional[dict[str, str]] = None) -> str:
+    """The change as the reviewer reads it: diff hunks with context FIRST (never truncating
+    changed lines even past 12k chars in a large file; PE-C / BOSSAPP-786), then whole-file
+    context within the remaining budget."""
     if change.empty:
         return "(no file changes detected)"
     head = [f"{len(change.paths)} file(s) changed, measured against {change.measured}. "
@@ -115,26 +118,137 @@ def render(change: ChangeUnderReview, *, max_total: int = MAX_TOTAL,
             "already be committed or carried over from an earlier attempt, so an empty "
             "`git diff` does NOT mean there is nothing to review.",
             "CHANGED FILES:"]
-    head += [f"  - {p}" + ("" if p in change.files else
+    head += [f"  - {p}" + ("" if p in change.files or (diffs and p in diffs) else
                           "  (generated lockfile: not inlined)" if is_lockfile(p) else
                           "  (not inlined: open it in the tree)")
              for p in change.paths]
     parts, total = ["\n".join(head)], 0
+    diff_map = diffs or {}
+    # PE-C (BOSSAPP-786): render diff hunks FIRST, uncut, so a change past 12k chars in a large
+    # file is 100% visible to the reviewer.
+    for path in change.paths:
+        if path not in diff_map or is_lockfile(path):
+            continue
+        hunk_text = str(diff_map[path] or "")
+        if not hunk_text.strip():
+            continue
+        block = f"\n=== DIFF HUNKS: {path} ===\n{hunk_text}\n"
+        parts.append(block)
+        total += len(block)
     for path in change.paths:
         if path not in change.files or is_lockfile(path):
             continue
         content = change.files[path] or ""
         body = content
-        if len(body) > max_per_file:
+        if path not in diff_map and len(body) > max_per_file:
             body = body[:max_per_file] + f"\n… [truncated {len(content) - max_per_file} chars]"
+        elif path in diff_map and len(body) > max_per_file:
+            # Diff hunks above already showed every changed line uncut; keep surrounding file context budgeted.
+            body = body[:max_per_file] + f"\n… [file context trimmed after {max_per_file} chars; full diff hunks shown above]"
         block = f"\n=== FILE: {path} ===\n{body}\n"
         if total + len(block) > max_total:
-            parts.append(f"\n… [further file text omitted to fit context, starting at {path}; "
-                         "every changed file is listed above — open the rest in the tree]")
+            if not diff_map:
+                parts.append(f"\n… [further file text omitted to fit context, starting at {path}; "
+                             "every changed file is listed above — open the rest in the tree]")
             break
         parts.append(block)
         total += len(block)
     return "".join(parts).strip()
+
+
+def split_for_seats(
+    change: ChangeUnderReview,
+    *,
+    diffs: Optional[dict[str, str]] = None,
+    max_total: int = MAX_TOTAL,
+) -> list[str]:
+    """PE-C (BOSSAPP-786): split large changes across review seats instead of truncating hunks.
+
+    Every changed file's full diff hunks appear uncut in at least one seat chunk.
+    """
+    if change.empty:
+        return [render(change)]
+    diff_map = diffs or {}
+    if not diff_map:
+        full = render(change, max_total=max_total)
+        return [full]
+
+    batches: list[list[str]] = []
+    current: list[str] = []
+    cur_size = 0
+    for path in change.paths:
+        sz = len(str(diff_map.get(path) or change.files.get(path) or ""))
+        if current and cur_size + sz > max_total:
+            batches.append(current)
+            current = [path]
+            cur_size = sz
+        else:
+            current.append(path)
+            cur_size += sz
+    if current:
+        batches.append(current)
+
+    chunks: list[str] = []
+    for idx, batch_paths in enumerate(batches, start=1):
+        sub_change = ChangeUnderReview(
+            paths=batch_paths,
+            files={p: change.files[p] for p in batch_paths if p in change.files},
+            measured=change.measured,
+        )
+        sub_diffs = {p: diff_map[p] for p in batch_paths if p in diff_map}
+        header = f"[REVIEW SEAT SHARD {idx}/{len(batches)}]\n" if len(batches) > 1 else ""
+        chunks.append(header + render(sub_change, max_total=max_total, diffs=sub_diffs))
+    return chunks
+
+
+#: PE-C (BOSSAPP-786): Outcome-relabel guard patterns. Catches diffs that turn a failure/error
+#: into success, passed, ok, skipped, or not_applicable (e.g. the 2026-10-31 preview-failure
+#: relabel heuristic).
+_RELABEL_ADDED_STATUS = re.compile(
+    r"""(?ix)
+    (?:status|verdict|outcome|result|state)\s*[:=]\s*['"](?:not_applicable|skipped|passed|success|ok)['"]
+    | return\s+['"](?:not_applicable|skipped|passed|success|ok)['"]
+    | ['"]not_applicable['"]
+    """
+)
+_RELABEL_FAILURE_CONTEXT = re.compile(
+    r"(?i)\b(?:fail|failed|failure|error|exception|crash|timeout|exit_code|stderr|preview)\b"
+)
+
+
+def detect_outcome_relabel(
+    diff_text: str,
+    changed_paths: Iterable[str] = (),
+) -> dict[str, Any]:
+    """PE-C (BOSSAPP-786): flag any diff that turns a failure into success or not_applicable.
+
+    A flagged diff requires a blast-radius run and an explicit Study record justification.
+    """
+    lines = str(diff_text or "").splitlines()
+    matches: list[dict[str, Any]] = []
+    for idx, line in enumerate(lines):
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        added = line[1:]
+        if not _RELABEL_ADDED_STATUS.search(added):
+            continue
+        window = "\n".join(lines[max(0, idx - 6) : min(len(lines), idx + 4)])
+        if _RELABEL_FAILURE_CONTEXT.search(window):
+            matches.append({"line_index": idx + 1, "added": added.strip()[:240]})
+    flagged = bool(matches)
+    return {
+        "flagged": flagged,
+        "matches": matches,
+        "changed_paths": sorted({str(p) for p in changed_paths if p}),
+        "requires_blast_radius": flagged,
+        "requires_study_justification": flagged,
+        "reason": (
+            "Diff turns a failure/error path into success/skipped/not_applicable; "
+            "requires blast-radius verification and Study record justification."
+            if flagged
+            else ""
+        ),
+    }
 
 
 def reviewed_clause() -> str:

@@ -45,7 +45,11 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
            additions: Optional[int] = None, deletions: Optional[int] = None,
            rounds: Iterable[dict] = (), comments: Iterable[dict] = (),
            deferred: Iterable[dict] = (), build_url: str = "", run_id: str = "",
-           quality_gate_id: str = "", baseline: Optional[dict] = None) -> str:
+           quality_gate_id: str = "", baseline: Optional[dict] = None,
+           assumptions: Optional[Iterable[str]] = None,
+           host_kind: str = "local", head_sha: str = "",
+           test_report_artifact_id: str = "", download_url: str = "",
+           check_run_url: str = "", test_evidence_record: Optional[dict] = None) -> str:
     """The description. Every line comes from a record; nothing is written by a model."""
     paths = sorted({str(p) for p in paths if p})
     rounds = [r for r in rounds if isinstance(r, dict)]
@@ -160,6 +164,49 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         section = baseline_verify.pr_section(baseline_verify.BaselineRecord.from_dict(baseline))
         if section:
             out += ["", section.rstrip()]
+    # Assumptions (BOSSAPP-1438): non-blocking engineering readings picked during design.
+    raw_assumptions = evidence.get("assumptions") or () if assumptions is None else assumptions
+    assumption_items = [
+        str(a).strip() for a in raw_assumptions if str(a).strip()
+    ]
+    if assumption_items:
+        out += ["", "### Assumptions"]
+        for item in assumption_items[:20]:
+            out.append(f"- {item[:300]}")
+    # PE-A (BOSSAPP-784): Study record + PR claim verification links.
+    if evidence.get("study_record"):
+        from . import study_record as _study_record
+
+        study_md = _study_record.render_study_section(
+            evidence.get("study_record"),
+            claims=evidence.get("claims") or (),
+        )
+        if study_md:
+            out += ["", study_md]
+    # PE-D (BOSSAPP-787): Replay outcomes for fixes replayed against previously failing runs.
+    replays = [r for r in (evidence.get("replay_outcomes") or []) if isinstance(r, dict)]
+    if replays:
+        out += ["", "### Replay outcomes"]
+        for r in replays:
+            mark = "✅" if r.get("after_ok") else "❌"
+            rid = str(r.get("run_id") or r.get("id") or "replay")
+            before = str(r.get("before_status") or "failed")
+            after = str(r.get("after_status") or ("passed" if r.get("after_ok") else "failed"))
+            note = f" — {r['note']}" if r.get("note") else ""
+            out.append(f"- {mark} `{rid}`: `{before}` → `{after}`{note}")
+    # PE-Phase 2 (BOSSAPP-790): acceptance evidence per criterion + PR risk rating.
+    if evidence.get("criteria_evidence"):
+        from . import clean_pr as _clean_pr
+
+        crit_md = _clean_pr.render_criterion_evidence(evidence.get("criteria_evidence") or ())
+        if crit_md:
+            out += ["", crit_md]
+    if evidence.get("risk_rating"):
+        from . import clean_pr as _clean_pr
+
+        risk_md = _clean_pr.render_risk_section(evidence.get("risk_rating"))
+        if risk_md:
+            out += ["", risk_md]
     # Links.
     out += ["", "### In BOSS"]
     if build_url:
@@ -168,6 +215,19 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         out.append(f"- Run: `{run_id}`")
     if quality_gate_id:
         out.append(f"- Quality gate: `{quality_gate_id}`")
+    # Every BOSS-opened PR body ends with a brief Test evidence section (BOSSAPP-1011).
+    from . import test_evidence as _test_evidence
+
+    te_record = test_evidence_record or _test_evidence.build_evidence_record(
+        evidence=evidence,
+        gates=gates,
+        host_kind=host_kind,
+        head_sha=head_sha or str(evidence.get("verified_commit_sha") or evidence.get("head_sha") or ""),
+        artifact_id=test_report_artifact_id or None,
+        download_url=download_url or None,
+        check_run_url=check_run_url or None,
+    )
+    out += ["", _test_evidence.render_pr_section(te_record).rstrip()]
     return "\n".join(out).strip() + "\n"
 
 

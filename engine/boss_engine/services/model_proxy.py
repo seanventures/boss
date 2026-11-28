@@ -155,6 +155,36 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+#: Default per-grant request/token caps for subscription run tokens (BOSSAPP-1485) so a
+#: sandboxed agent cannot use a subscription without bound until TTL expiry. Overridable via
+#: env or derived from the run's budget.
+DEFAULT_SUBSCRIPTION_MAX_REQUESTS = int(
+    __import__("os").environ.get("BOSS_SUBSCRIPTION_RUN_MAX_REQUESTS", "200") or 200
+)
+DEFAULT_SUBSCRIPTION_MAX_TOKENS = int(
+    __import__("os").environ.get("BOSS_SUBSCRIPTION_RUN_MAX_TOKENS", "2000000") or 2_000_000
+)
+
+
+def subscription_budget_limits(settings: Any = None, *,
+                               budget_usd_micros: Optional[int] = None) -> dict[str, int]:
+    """Per-grant request and token cap for a subscription run token (BOSSAPP-1485).
+
+    Scales conservatively from the run's budget when provided; otherwise uses the install
+    defaults. Always positive integers so a subscription run token is never unbounded.
+    """
+    max_req = int(getattr(settings, "subscription_run_max_requests", 0) or 0) \
+        or DEFAULT_SUBSCRIPTION_MAX_REQUESTS
+    max_tok = int(getattr(settings, "subscription_run_max_tokens", 0) or 0) \
+        or DEFAULT_SUBSCRIPTION_MAX_TOKENS
+    if budget_usd_micros is not None and int(budget_usd_micros) > 0:
+        usd = max(0.05, int(budget_usd_micros) / 1_000_000.0)
+        # Roughly ~$0.05/request and ~100k tokens/$1 conservative equivalent envelope.
+        max_req = max(1, min(max_req, int(round(usd * 20))))
+        max_tok = max(1_000, min(max_tok, int(round(usd * 100_000))))
+    return {"max_requests": max_req, "max_tokens": max_tok}
+
+
 @dataclass
 class Grant:
     """What one token may do. The token itself is never stored, only its hash; the credential is
@@ -170,6 +200,10 @@ class Grant:
     #: A login the control plane refreshes: read on every request instead of `credential`.
     source: Optional[Callable[[], str]] = field(default=None, repr=False)
     revoked: bool = False
+    #: Per-grant request/token caps enforced at the proxy (BOSSAPP-1485).
+    max_requests: Optional[int] = None
+    max_tokens: Optional[int] = None
+    in_flight: int = 0
     usage: dict = field(default_factory=lambda: {
         "requests": 0, "refused": 0, "input_tokens": 0, "output_tokens": 0,
         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})
@@ -272,10 +306,16 @@ class ModelProxy:
     def issue(self, provider: str, credential: str, *, ttl: float,
               run_id: Optional[str] = None, project_id: Optional[str] = None,
               upstream: Optional[str] = None,
-              source: Optional[Callable[[], str]] = None) -> Issued:
+              source: Optional[Callable[[], str]] = None,
+              max_requests: Optional[int] = None,
+              max_tokens: Optional[int] = None) -> Issued:
         adapter = _ADAPTERS[provider]
         if not credential and source is None:
             raise ValueError("no credential to proxy")
+        if provider in SUBSCRIPTION_ADAPTERS and max_requests is None and max_tokens is None:
+            limits = subscription_budget_limits()
+            max_requests = limits["max_requests"]
+            max_tokens = limits["max_tokens"]
         token = TOKEN_PREFIX + secrets.token_hex(32)
         _register_redaction(token)
         if credential:
@@ -283,7 +323,8 @@ class ModelProxy:
         grant = Grant(token_hash=_hash(token), provider=provider,
                       upstream=adapter.resolve_upstream(upstream),
                       expires_at=time.time() + max(1.0, float(ttl)), run_id=run_id,
-                      project_id=project_id, credential=credential, source=source)
+                      project_id=project_id, credential=credential, source=source,
+                      max_requests=max_requests, max_tokens=max_tokens)
         base = self.base_url(provider)
         with self._lock:
             self._sweep()
@@ -357,7 +398,23 @@ class ModelProxy:
             if not adapter.allows(method, path):
                 grant.usage["refused"] += 1
                 return 403, "not_a_model_path", None
+            # BOSSAPP-1485: enforce per-grant request and token caps at the proxy with a
+            # plain refusal when exhausted (never ask a person mid-build).
+            if grant.max_requests is not None and (
+                grant.usage["requests"] + grant.in_flight >= grant.max_requests
+            ):
+                grant.usage["refused"] += 1
+                return 429, "run_budget_exhausted", None
+            used_tokens = int(grant.usage["input_tokens"]) + int(grant.usage["output_tokens"])
+            if grant.max_tokens is not None and used_tokens >= grant.max_tokens:
+                grant.usage["refused"] += 1
+                return 429, "run_budget_exhausted", None
+            grant.in_flight += 1
         return 200, "", grant
+
+    def finish_request(self, grant: Grant) -> None:
+        with self._lock:
+            grant.in_flight = max(0, grant.in_flight - 1)
 
     def forward_headers(self, grant: Grant, headers: Mapping[str, str], *, method: str = "POST",
                         url: str = "", body: bytes = b"") -> dict[str, str]:
@@ -384,6 +441,15 @@ def _presented(headers: Mapping[str, str]) -> str:
 
 
 def _refusal(provider: str, status: int, reason: str) -> bytes:
+    if reason == "run_budget_exhausted":
+        return json.dumps({"type": "error", "error": {
+            "type": "budget_exhausted",
+            "code": "run_budget_exhausted",
+            "message": (
+                "boss model proxy: this run's subscription request/token budget is exhausted; "
+                "stopping this step with a plain refusal (no human prompt mid-build)."
+            ),
+        }}).encode()
     kind = "authentication_error" if status == 401 else (
         "permission_error" if status == 403 else "not_found_error")
     return json.dumps({"type": "error", "error": {
@@ -455,54 +521,59 @@ def _handler_for(proxy: ModelProxy):
                 log.info("model proxy refused %s /%s%s: %s", self.command, provider,
                          rest if status != 404 else "", reason)
                 return self._send(status, _refusal(provider, status, reason))
-            body = self._body()
-            if body is None:
-                return self._send(413, _refusal(provider, 413, "body_too_large"))
-            url = grant.upstream + rest + (f"?{query}" if query else "")
             try:
-                out_headers = proxy.forward_headers(grant, headers, method=self.command,
-                                                    url=url, body=body)
-            except PlaceholderRefused:
-                return self._send(503, _refusal(provider, 503, "key_unavailable"))
-            try:
-                with proxy.upstream(self.command, url, out_headers, body) as (code, resp_headers,
-                                                                               chunks):
-                    if int(code) == 401 and grant.provider in SUBSCRIPTION_ADAPTERS:
-                        # The LOGIN was refused, not the run token. Say so in BOSS's words: the
-                        # CLI's own reaction (Codex tries its dummy refresh token) would
-                        # otherwise be the error a person reads.
-                        log.warning("model proxy: the %s login was refused upstream (401)",
-                                    grant.provider)
-                        return self._send(401, _subscription_refused(grant.provider))
-                    reader = _UsageReader(str({k.lower(): v for k, v in resp_headers.items()}
-                                              .get("content-type", "")))
-                    self.send_response(int(code))
-                    for k, v in resp_headers.items():
-                        if k.lower() not in _HOP:
-                            self.send_header(k, v)
-                    self.send_header("transfer-encoding", "chunked")
-                    self.send_header("connection", "close")
-                    self.end_headers()
-                    for chunk in chunks:
-                        if not chunk:
-                            continue
-                        reader.feed(chunk)
-                        self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                        self.wfile.flush()
-                    # Tally BEFORE the last chunk: the client (and whoever reads the session's
-                    # usage once it exits) may act the moment the answer ends, and an answer
-                    # whose usage is recorded after that reads as zero tokens.
-                    proxy.tally(grant, reader.finish())
-                    self.wfile.write(b"0\r\n\r\n")
-                    self.close_connection = True
-            except (BrokenPipeError, ConnectionResetError):
-                self.close_connection = True
-            except Exception as exc:  # noqa: BLE001 — the client gets a 502, never a credential
-                log.warning("model proxy upstream failed for %s: %s", provider, type(exc).__name__)
+                body = self._body()
+                if body is None:
+                    return self._send(413, _refusal(provider, 413, "body_too_large"))
+                url = grant.upstream + rest + (f"?{query}" if query else "")
                 try:
-                    self._send(502, _refusal(provider, 502, "upstream_unreachable"))
-                except Exception:  # noqa: BLE001 — headers already sent
+                    out_headers = proxy.forward_headers(grant, headers, method=self.command,
+                                                        url=url, body=body)
+                except PlaceholderRefused:
+                    return self._send(503, _refusal(provider, 503, "key_unavailable"))
+                try:
+                    with proxy.upstream(self.command, url, out_headers, body) as (
+                        code, resp_headers, chunks
+                    ):
+                        if int(code) == 401 and grant.provider in SUBSCRIPTION_ADAPTERS:
+                            # The LOGIN was refused, not the run token. Say so in BOSS's words: the
+                            # CLI's own reaction (Codex tries its dummy refresh token) would
+                            # otherwise be the error a person reads.
+                            log.warning("model proxy: the %s login was refused upstream (401)",
+                                        grant.provider)
+                            return self._send(401, _subscription_refused(grant.provider))
+                        reader = _UsageReader(str({k.lower(): v for k, v in resp_headers.items()}
+                                                  .get("content-type", "")))
+                        self.send_response(int(code))
+                        for k, v in resp_headers.items():
+                            if k.lower() not in _HOP:
+                                self.send_header(k, v)
+                        self.send_header("transfer-encoding", "chunked")
+                        self.send_header("connection", "close")
+                        self.end_headers()
+                        for chunk in chunks:
+                            if not chunk:
+                                continue
+                            reader.feed(chunk)
+                            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                            self.wfile.flush()
+                        # Tally BEFORE the last chunk: the client (and whoever reads the session's
+                        # usage once it exits) may act the moment the answer ends, and an answer
+                        # whose usage is recorded after that reads as zero tokens.
+                        proxy.tally(grant, reader.finish())
+                        self.wfile.write(b"0\r\n\r\n")
+                        self.close_connection = True
+                except (BrokenPipeError, ConnectionResetError):
                     self.close_connection = True
+                except Exception as exc:  # noqa: BLE001 — the client gets a 502, never a credential
+                    log.warning("model proxy upstream failed for %s: %s", provider,
+                                type(exc).__name__)
+                    try:
+                        self._send(502, _refusal(provider, 502, "upstream_unreachable"))
+                    except Exception:  # noqa: BLE001 — headers already sent
+                        self.close_connection = True
+            finally:
+                proxy.finish_request(grant)
 
         do_GET = do_POST = _handle
 

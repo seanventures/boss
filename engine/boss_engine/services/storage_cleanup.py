@@ -628,9 +628,12 @@ def _ask(c: Any, inc: dict, plan: list, step: dict, items: Sequence[str]) -> dic
            "never_automatic": ["unlabelled", "data volumes", "non-scratch databases"],
            "left_alone": list(LEFT_ALONE),
            "ui": "StorageDeleteDecision"}
+    from . import production
+
+    risk_tier = 3 if production.resolve_install().prod else 2
     decision_id = create_blocking_decision(c, inc.get("project_id") or storage_incidents.default_project(c),
                                            None, question, rec, {"estimated_cost_usd": 0.0}, reason,
-                                           risk_tier=3, default_action="hold")
+                                           risk_tier=risk_tier, default_action="hold")
     from .typed_forms import normalize_form
 
     c.execute(text("UPDATE decisions SET form_schema = CAST(:f AS JSONB) WHERE id = :id"),

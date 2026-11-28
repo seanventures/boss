@@ -149,7 +149,8 @@ _DECIDED_MEANS = {
                     "run history), report the cause and what fixes it; change nothing. Offer "
                     "each fix as a button (propose_action)."),
     "operate": ("an instruction about work that ALREADY EXISTS. Read it, then carry it out ON "
-                "THAT WORK with the tool that acts on it — retry_workflow_step for a workflow run's "
+                "THAT WORK with the tool that acts on it — decide (approve, reject, or revise an "
+                "open decision), retry_workflow_step for a workflow run's "
                 "step (also when the build in question IS that step: retry the step, not the "
                 "build), retry_code_task (with a fix_note) for a build that is not a workflow "
                 "step, redeploy for a deployment, skip/recheck for a stopped run. Never start new work for it. If "
@@ -184,13 +185,15 @@ _DECIDED_MEANS = {
                         "which capability. If something truly has no capability, say 'BOSS "
                         "has no step that does X; closest: …' and offer the custom step."),
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
-                        "change, start_workflow for a whole delivery — both come back as a "
-                        "button the person presses; say it is offered, not started. Do not "
-                        "retry or redeploy existing work in its place. When they ask to run a "
-                        "workflow BY NAME (one this project has — describe_workflow lists them), "
-                        "offer start_workflow with THAT workflow_key and its declared inputs as "
-                        "`inputs` values; never substitute the default Build path for it, and "
-                        "if an input is missing say which."),
+                        "change (with lane='quick' when the ask is a small, well-specified bug "
+                        "or fix with reproduction/evidence inside this project — no new workflow "
+                        "needed, same quality-bar gates), start_workflow for a whole delivery or "
+                        "larger feature — both come back as a button the person presses; say it is "
+                        "offered, not started. Do not retry or redeploy existing work in its place. "
+                        "When they ask to run a workflow BY NAME (one this project has — "
+                        "describe_workflow lists them), offer start_workflow with THAT workflow_key "
+                        "and its declared inputs as `inputs` values; never substitute the default "
+                        "Build path for it, and if an input is missing say which."),
 }
 
 
@@ -2019,7 +2022,8 @@ class IntentRouter:
             C("investigate", "look into it live (logs, hosts, containers, code, run history) and "
                              "report the cause; change nothing — any fix is offered as a button",
               acts=False),
-            C("operate", "carry out what they asked on work that ALREADY EXISTS: retry, resume "
+            C("operate", "carry out what they asked on work that ALREADY EXISTS: approve, reject, "
+                         "or revise a pending decision (decide), retry, resume "
                          "or skip a step, retry a build's delivery, redeploy, roll back, retarget, "
                          "change a setting, cancel, prioritise (expensive or destructive tools "
                          "still come back as buttons for them to press)"),
@@ -2052,8 +2056,10 @@ class IntentRouter:
     def _decision_context(self, connection, project_id: str, latest: str,
                           external_ref: Optional[str], objective: Optional[str]) -> dict:
         """What the decision model sees besides the words: the record the turn is about (the
-        dock's subject, or the one id the request names) and any pending plan."""
+        dock's subject, or the one id the request names), open decisions, and any pending plan."""
         context: dict[str, Any] = {}
+        ref = None
+        evidence = None
         try:
             ref = parse_subject(external_ref) if external_ref else None
             if ref is None:
@@ -2070,12 +2076,66 @@ class IntentRouter:
                 }
         except Exception as exc:  # noqa: BLE001 — context is evidence; missing it is not a failure
             _log.info("decision context unavailable: %s", exc)
+        open_decisions = self._open_decisions_for_context(connection, project_id, ref, evidence)
+        if open_decisions:
+            context["open decisions"] = open_decisions
         if objective is not None:
             context["pending plan"] = objective[:1500]
         glance = self._project_glance(connection, project_id)
         if glance:
             context["this project"] = glance
         return context
+
+    @staticmethod
+    def _open_decisions_for_context(connection, project_id: str, ref: Any,
+                                    evidence: Any) -> list[dict[str, Any]]:
+        """Open decisions for the subject in view or project so follow-ups act on them instead of
+        creating New work."""
+        rows: list[Any] = []
+        for query in (
+            "SELECT id, status, question, recommendation, external_ref "
+            "FROM decisions WHERE project_id = :p AND status IN ('pending', 'revision_requested') "
+            "ORDER BY created_at DESC LIMIT 12",
+            "SELECT id, status, question, recommendation, external_ref "
+            "FROM decisions WHERE project_id = :p AND status IN ('pending', 'revision_requested') "
+            "LIMIT 12",
+        ):
+            try:
+                with connection.begin_nested():
+                    rows = connection.execute(text(query), {"p": project_id}).mappings().all()
+                break
+            except Exception:  # noqa: BLE001
+                rows = []
+        if not rows:
+            return []
+        needles = set()
+        if ref is not None and getattr(ref, "id", None):
+            needles.add(str(ref.id))
+        if evidence is not None:
+            for item in getattr(evidence, "linked", None) or []:
+                needles.add(str(item))
+        prioritized: list[dict[str, Any]] = []
+        others: list[dict[str, Any]] = []
+        for row in rows:
+            rec = row.get("recommendation")
+            if isinstance(rec, str):
+                try:
+                    rec = json.loads(rec)
+                except ValueError:
+                    rec = {}
+            rec = rec if isinstance(rec, dict) else {}
+            entry = {
+                "id": str(row.get("id") or ""),
+                "status": str(row.get("status") or ""),
+                "question": str(row.get("question") or "")[:160],
+                "action": str(rec.get("action") or ""),
+            }
+            blob = f"{row.get('id') or ''} {row.get('external_ref') or ''} {json.dumps(rec, default=str)}"
+            if needles and any(n and n in blob for n in needles):
+                prioritized.append(entry)
+            else:
+                others.append(entry)
+        return (prioritized + others)[:6]
 
     @staticmethod
     def _project_glance(connection, project_id: str) -> dict:
@@ -2092,6 +2152,10 @@ class IntentRouter:
             "apps' deployment targets": (
                 "SELECT id, app_name, environment, status FROM deployment_targets "
                 "WHERE project_id = :p ORDER BY updated_at DESC LIMIT 6"),
+            "open decisions": (
+                "SELECT id, status, question, recommendation->>'action' AS action "
+                "FROM decisions WHERE project_id = :p AND status IN ('pending', 'revision_requested') "
+                "ORDER BY created_at DESC LIMIT 6"),
         }
         for label, sql in queries.items():
             try:
@@ -2118,14 +2182,20 @@ class IntentRouter:
                                                 else "an instruction or a report"))
         if depth == "investigate":
             hints.append("the person pressed 'Investigate further' or 'Do the fix' on an answer")
+        decision_ctx = self._decision_context(connection, project_id, latest, external_ref,
+                                              objective)
+        if decision_ctx.get("open decisions"):
+            hints.append(
+                "open decision(s) exist in context; approving, rejecting, or revising an existing "
+                "decision routes to 'operate' (using 'decide'), not 'new_code_change'"
+            )
         return agent_decision.decide(
             connection, self.settings, project_id,
             situation=("A person typed this in BOSS's console"
                        + (f", to the {role} agent" if role else "")
                        + ". Decide what BOSS does with it."),
             message=latest, history=messages[:-1],
-            context=self._decision_context(connection, project_id, latest, external_ref,
-                                           objective),
+            context=decision_ctx,
             candidates=self._turn_candidates(manifest, pending_plan=objective is not None),
             hints=hints, agent=(role or "BOSS"), ref=f"turn:{project_id}",
             # The model this turn's agent answers on (`_use_project_chat_model`), so the

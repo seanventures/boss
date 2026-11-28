@@ -32,12 +32,14 @@ import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readi
 type Finding = { severity: string; area: string; finding: string; action: string };
 type Step = {
   step_id: string; label: string; status: string; attempt: number;
-  usd: number; seconds: number | null; work_status?: string | null;
+  usd: number; included_usd?: number; list_usd?: number;
+  seconds: number | null; work_status?: string | null;
   pull_request_number?: number | null;
   approved_by?: string | null; approved_automatically?: boolean;
 };
 type Contributor = {
-  role: string; calls: number; turns: number; usd: number; models: string[];
+  role: string; calls: number; turns: number; usd: number;
+  included_usd?: number; list_usd?: number; models: string[];
 };
 type Screen = { name: string; does: string };
 export type RunFollowups = {
@@ -70,6 +72,7 @@ export type RunReport = {
   elapsed_minutes?: number;
   working_minutes?: number;
   waiting_minutes?: number;
+  included_usd?: number;
   list_usd?: number;
   total_usd?: number;
   steps?: Step[];
@@ -386,16 +389,21 @@ export function RunReportPanel(
 
   // WORKING, WAITING AND WHAT IT COST, SAID APART. A run that waited three hours at its approval
   // read "192.2min, $0.00" for three minutes of work and four model calls on a subscription.
+  // Billed and included share one split with the act chain and build ribbon (BOSSAPP-1020).
   const waited = report.waiting_minutes ?? 0;
-  const listed = report.list_usd ?? 0;
   const billed = report.total_usd ?? 0;
+  const listed = report.list_usd ?? billed;
+  const included = report.included_usd ?? Math.max(0, listed - billed);
+  const spendText = included > 0
+    ? `${usd(billed)} (${usd(included)} included)`
+    : usd(billed);
   // In the dialog nothing is folded: the root is a plain block and every section starts open.
   const Root = expanded ? "div" : "details";
   const Summary = expanded ? "div" : "summary";
   const open = expanded ? true : undefined;
   const money = `${done}/${steps.length}, ${report.working_minutes}min working`
     + (waited >= 1 ? `, waited ${humanDuration(waited * 60)} for a person` : "")
-    + `, ${usd(billed)}${listed > billed ? ` (${usd(listed)} at list price, on the subscription)` : ""}`;
+    + `, ${spendText}`;
 
   return (
     /* THE WHOLE REPORT IS COLLAPSED, and the summary line has to earn the click on its own:
@@ -577,7 +585,7 @@ export function RunReportPanel(
         <summary>
           Run facts
           <span className="rr-count">
-            {done}/{steps.length}, {report.working_minutes}min, {usd(report.total_usd ?? 0)}
+            {done}/{steps.length}, {report.working_minutes}min, {spendText}
           </span>
         </summary>
         {lost > 0 ? (
@@ -595,7 +603,9 @@ export function RunReportPanel(
               <tr key={c.role}>
                 <td>{c.role}</td>
                 <td>{c.turns || "—"}</td>
-                <td>{usd(c.usd)}</td>
+                <td>{(c.included_usd ?? 0) > 0
+                  ? `${usd(c.usd)} (${usd(c.included_usd ?? 0)} included)`
+                  : usd(c.usd)}</td>
               </tr>
             ))}
           </tbody>

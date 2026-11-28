@@ -27,6 +27,7 @@ import { SpendTab } from "./spend-tab";
 import { StorageCard } from "../infra/storage-card";
 import { StorageIncidentReport } from "../infra/storage-incident-report";
 import { JourneysCard } from "./journeys-card";
+import { RulesBookTab } from "./rules-book-tab";
 
 export const GOVERN_POLL_MS = 15_000;
 /**
@@ -36,7 +37,7 @@ export const GOVERN_POLL_MS = 15_000;
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
-type Tab = "overview" | "limits" | "subscriptions" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure" | "pilot" | "journeys";
+type Tab = "overview" | "limits" | "subscriptions" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure" | "pilot" | "journeys" | "rules";
 const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
@@ -65,6 +66,8 @@ const MORE: { key: Tab; label: string; tip: string }[] = [
   // THE GOLDEN JOURNEYS (BOSSAPP-1284/1285): today's end-to-end checks and the green days the
   // preview's feature freeze waits for.
   { key: "journeys", label: "Journeys", tip: "The daily end-to-end journeys and the green-day count" },
+  // ONE RULES BOOK (BOSSAPP-572): read-only searchable catalog of every BOSS rule by category.
+  { key: "rules", label: "Rules book", tip: "Every BOSS rule by category, role and where it lives" },
 ];
 const TABS = new Set<Tab>([...MAIN, ...MORE].map((t) => t.key));
 
@@ -166,7 +169,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
           </span>
         </details>
       </header>
-      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" && tab !== "infrastructure" && tab !== "journeys" && tab !== "pilot" ? (
+      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" && tab !== "infrastructure" && tab !== "journeys" && tab !== "pilot" && tab !== "rules" ? (
         <GovernMeter meter={data?.meter ?? null} error={view.error} onRetry={view.reload} />
       ) : null}
       {frozen ? (
@@ -204,6 +207,8 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
         <SelfFixTab projectId={projectId} actor={actor} paused={!live} />
       ) : tab === "journeys" ? (
         <JourneysCard projectId={projectId} paused={!live} />
+      ) : tab === "rules" ? (
+        <RulesBookTab projectId={projectId} />
       ) : tab === "infrastructure" ? (
         incident
           ? <StorageIncidentReport projectId={projectId} incidentId={incident} />

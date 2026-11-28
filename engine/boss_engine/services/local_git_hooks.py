@@ -304,10 +304,13 @@ def post_receive(lines: Iterable[str], env: Mapping[str, str], *, settings: Any 
 def reconcile(c: Any, settings: Any, project_id: str, *, jobs: Any = None) -> list[dict[str, Any]]:
     """Branches that moved without a push through BOSS (or before its hooks ran): an open change
     set follows its branch's head; a person's branch with commits ahead and no change becomes
-    one. boss/* branches a run made get their change set from the run, never from here."""
+    one. Also checks whether the bare repo's default branch was rewound or force-moved to a
+    non-ancestor commit. boss/* branches a run made get their change set from the run, never from
+    here."""
     from sqlalchemy import text
 
     from . import local_repo, local_review
+    from .core import emit_event
     from .local_projects import local_binding
 
     binding = local_binding(c, project_id, include_mirror=False)
@@ -318,7 +321,46 @@ def reconcile(c: Any, settings: Any, project_id: str, *, jobs: Any = None) -> li
         return []
     default = local_repo.default_branch(git_dir)
     tip = local_repo.branch_sha(git_dir, default)
-    out = []
+    out: list[dict[str, Any]] = []
+    recorded = local_repo.recorded_default_sha(git_dir)
+    if recorded is None and tip:
+        local_repo.record_default_sha(git_dir, tip)
+    elif recorded and tip and recorded != tip:
+        if local_repo.is_ancestor(git_dir, recorded, tip):
+            local_repo.record_default_sha(git_dir, tip, clear_anomaly=True)
+        else:
+            if local_repo.is_ancestor(git_dir, tip, recorded):
+                kind = "rewound"
+                message = (f"Default branch '{default}' was rewound from {recorded[:7]} "
+                           f"to older commit {tip[:7]}.")
+            else:
+                kind = "force_moved"
+                message = (f"Default branch '{default}' was force-moved from {recorded[:7]} "
+                           f"to non-ancestor commit {tip[:7]}.")
+            anomaly = {
+                "kind": kind,
+                "branch": default,
+                "previous_sha": recorded,
+                "current_sha": tip,
+                "message": message,
+            }
+            existing_anomaly = local_repo.marker_of(git_dir).get("default_branch_anomaly")
+            if not (isinstance(existing_anomaly, dict)
+                    and existing_anomaly.get("previous_sha") == recorded
+                    and existing_anomaly.get("current_sha") == tip):
+                emit_event(c, project_id, "local_repo.default_branch_moved", "git",
+                           "project", project_id, anomaly)
+                local_repo.update_marker(git_dir, default_branch_anomaly=anomaly)
+            out.append({
+                "branch": default,
+                "default_branch_moved": True,
+                "kind": kind,
+                "previous_sha": recorded,
+                "current_sha": tip,
+                "message": message,
+                "default_branch_anomaly": anomaly,
+                "warnings": [message],
+            })
     open_sets = {r["branch"]: dict(r) for r in c.execute(text(
         "SELECT * FROM local_change_sets WHERE repository = :r AND state = 'open'"),
         {"r": binding["full_name"]}).mappings()}

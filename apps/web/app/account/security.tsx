@@ -18,6 +18,7 @@ import { codesOf, type LinkedIdentity, type RecoveryCodes } from "../../lib/iden
 import { webauthnAvailable } from "../../lib/identity/webauthn";
 import { PASSKEY_NEEDS_DOMAIN_WORDS, passkeyBlockWords, passkeyFailureWords, passkeyPlace } from "../../lib/identity/passkey-support";
 import { useGuardedCall, useIdentity } from "../../components/identity/identity-provider";
+import { readMyChatLinks, revokeMyChatLink, type MyChatLink } from "../../lib/intake";
 import { TicketAccounts } from "./ticket-accounts";
 import { Ago, ErrorLine, Face, Pill, Sheet } from "../../components/identity/kit";
 import type { MyProfile } from "../../lib/identity/types-account";
@@ -300,6 +301,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
         </section>
         {/* BOSSAPP-1047: your own ticket-system sign-ins ("Connect with Atlassian"). */}
         <TicketAccounts />
+        <MyChatLinks />
         <section className="idn-card" aria-labelledby="acc-you-h">
           <div className="idn-card-h">
             <h2 id="acc-you-h">Signed in as</h2>
@@ -383,5 +385,56 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
         </Sheet>
       ) : null}
     </div>
+  );
+}
+
+/** E8 (BOSSAPP-1100): your own linked chat accounts (Slack, Microsoft Teams, Telegram). */
+export function MyChatLinks() {
+  const [links, setLinks] = useState<MyChatLink[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState("");
+  const load = () => {
+    void readMyChatLinks().then((r) => {
+      if (r.ok) { setLinks(r.data); setErr(null); }
+      else if (r.status !== 404) setErr(r.error || "Could not load chat links.");
+    });
+  };
+  useEffect(() => { load(); }, []);
+  const revoke = async (link: MyChatLink) => {
+    setBusy(link.id); setErr(null);
+    const r = await revokeMyChatLink(link.id);
+    setBusy("");
+    if (r.ok) {
+      setLinks((cur) => (cur ? cur.filter((x) => x.id !== link.id) : cur));
+      showToast("success", "Chat link revoked");
+    } else {
+      setErr(r.error || "Could not revoke link.");
+    }
+  };
+  const label = (k: string) => (k === "teams" ? "Microsoft Teams" : k === "slack" ? "Slack" : k === "telegram" ? "Telegram" : k);
+  return (
+    <section className="idn-card" aria-labelledby="acc-chat-links-h" data-testid="my-chat-links">
+      <div className="idn-card-h">
+        <h2 id="acc-chat-links-h">My chat links</h2>
+        <span className="idn-sub">Slack, Teams &amp; Telegram</span>
+      </div>
+      {links === null && !err ? <div className="idn-dim">Loading…</div> : null}
+      {links && !links.length ? <div className="idn-dim" data-testid="my-chat-links-empty">No chat accounts linked.</div> : null}
+      {(links ?? []).map((l) => (
+        <div key={l.id} className="idn-fac" data-testid={`my-chat-link-${l.id}`}>
+          <span className="idn-d" data-kind="sso"><LinkSimple size={16} aria-hidden /></span>
+          <span>
+            <b>{l.external_name ? `@${l.external_name}` : l.external_user_id}</b>
+            <small data-copy="data">{label(l.kind)} · {l.endpoint_name} · linked <Ago iso={l.verified_at} /></small>
+          </span>
+          <button type="button" className="idn-btn sm ghost" disabled={busy === l.id}
+                  data-testid={`my-chat-link-revoke-${l.id}`}
+                  onClick={() => void revoke(l)}>
+            {busy === l.id ? "Revoking…" : "Revoke"}
+          </button>
+        </div>
+      ))}
+      <ErrorLine error={err} />
+    </section>
   );
 }

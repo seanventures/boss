@@ -51,7 +51,12 @@ describe("roster bulk model change", () => {
     document.querySelector<HTMLButtonElement>('[data-testid="rb-apply"]')!.click();
     await new Promise((r) => setTimeout(r, 0));
     expect(onApply).toHaveBeenCalledTimes(1);
-    const body = onApply.mock.calls[0][0];
+    const body = (onApply.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      connectionId: string;
+      defaultModel: string;
+      agents: Array<{ roleKey: string; expected: unknown }>;
+      dedupeKey: string;
+    };
     expect(body.connectionId).toBe("setup-openai");
     expect(body.defaultModel).toBe("gpt-5.4");
     expect(body.agents.map((agent: { roleKey: string }) => agent.roleKey)).toEqual(["ada", "bea"]);

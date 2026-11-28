@@ -10,6 +10,7 @@
 
 import React, { useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 const EMPTY = "Not shown";
 const FACT_KEYS = ["region", "log_retention", "may_train"] as const;
@@ -257,7 +258,8 @@ export function ProviderTermsScreen({ projectId = "" }: { projectId?: string | n
         <button type="button" data-testid="provider-terms-show" disabled={!canShow} title="Read the three facts" onClick={() => void showTerms()}>
           Show terms
         </button>
-        <button
+        <GatedButton
+          permission="model_provider:manage"
           type="button"
           className="pt-run"
           data-testid="provider-terms-run"
@@ -266,7 +268,7 @@ export function ProviderTermsScreen({ projectId = "" }: { projectId?: string | n
           onClick={() => void runPrompt()}
         >
           Run prompt
-        </button>
+        </GatedButton>
       </div>
       <div className="pt-meters" aria-live="polite">
         {METERS.map((meter) => (
@@ -402,6 +404,7 @@ const SCREEN_CSS = `
   border: 1px dashed #8aa0a6;
   cursor: not-allowed;
 }
+.pt-run { font-weight: 700; }
 .pt-meters {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

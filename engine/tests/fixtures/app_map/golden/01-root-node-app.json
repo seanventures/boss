@@ -1,0 +1,32 @@
+{
+  "status": "proposed",
+  "source": "marker",
+  "workspace_root": ".",
+  "selected_root_path": ".",
+  "shared_paths": [],
+  "apps": [
+    {
+      "app_key": "express-starter",
+      "root_path": ".",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "express",
+        "role": "backend",
+        "package_manager": "npm"
+      },
+      "commands": {
+        "install": "npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "test": "npm test"
+      },
+      "run": {
+        "command": "npm start"
+      },
+      "manifests": [
+        "package.json"
+      ],
+      "shared_paths": [],
+      "provenance_source": "marker"
+    }
+  ]
+}

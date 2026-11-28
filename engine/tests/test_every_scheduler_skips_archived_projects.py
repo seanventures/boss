@@ -70,6 +70,9 @@ GUARDED: dict[str, str] = {
     # them with live_sql); process_due is the pass over what claim handed it.
     "services/event_intake.py::claim": "claim",
     "services/event_intake.py::process_due": "claim",
+    # P9c (BOSSAPP-1105/1106): subscription renewer and stream consumer skip archived projects.
+    "services/intake_subscriptions.py::renew_due": "renew_due",
+    "services/intake_streams.py::consume_due": "consume_due",
 }
 
 #: New work refused at its door (ProjectArchived -> 409), checked the same way.
@@ -89,8 +92,9 @@ _RECOVERY = ("recovers work already in flight; any new attempt goes through star
 _TARGETS = "probes only the targets deployment_health.sweep picked, which skips archived projects"
 
 EXEMPT: dict[str, str] = {
-    # P9a: nulls raw bodies and deletes rows past their retention; starts nothing.
+    # P9a/P9c-3: nulls raw bodies, prunes expired rows/dedupe, manages monthly partitions; starts nothing.
     "services/event_intake.py::sweep_retention": _CLEANUP,
+    "services/intake_retention.py::sweep_retention": _CLEANUP,
     # AP-P3: the body of focused_agents.tick_due behind BOSS_BOTS_FOCUSED_AGENTS, called after
     # tick_due skipped an archived project.
     "services/bots.py::tick_focused_agents": "focused_agents.tick_due's body; tick_due skips "

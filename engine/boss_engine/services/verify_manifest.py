@@ -97,6 +97,8 @@ class VerifySuite:
     fallback: str = "skip"
     setup: tuple[str, ...] = ()
     cwd: str = "."
+    #: PE-D (BOSSAPP-787): critical P0 tests always included when this suite runs.
+    p0_tests: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -226,9 +228,10 @@ def parse_verify_manifest(text: str) -> VerifyManifest:
         select = raw.get("select") or {}
         if not isinstance(select, dict):
             raise VerifyManifestError(f"{where}.select must be a mapping")
-        extra = set(select) - {"tests_glob", "by", "fallback"}
+        extra = set(select) - {"tests_glob", "by", "fallback", "p0_tests"}
         if extra:
             raise VerifyManifestError(f"{where}.select: unknown key(s) {sorted(extra)}")
+        p0_tests = _string_list(select.get("p0_tests"), f"{where}.select.p0_tests")
         by = str(select.get("by") or "imports")
         if by not in _SELECT_BY:
             raise VerifyManifestError(f"{where}.select.by must be one of {list(_SELECT_BY)}")
@@ -252,6 +255,7 @@ def parse_verify_manifest(text: str) -> VerifyManifest:
         suites.append(VerifySuite(
             name=name, paths=paths, run=run, tests_glob=tests_glob, by=by,
             fallback=fallback, setup=_commands(raw.get("setup"), f"{where}.setup"), cwd=cwd,
+            p0_tests=p0_tests,
         ))
     from .build_services import parse_services
 
@@ -450,9 +454,106 @@ def _globs(suite: VerifySuite) -> tuple[str, ...]:
     return tuple(g for g in ((raw,) if isinstance(raw, str) else raw) if g)
 
 
+def _code_files_under(base: Path, suite: VerifySuite) -> list[str]:
+    """Non-test source files inside a suite's paths (used for transitive reverse import closure)."""
+    found: list[str] = []
+    seen: set[str] = set()
+    test_globs = _globs(suite)
+    for pattern in suite.paths:
+        top = pattern.split("/", 1)[0]
+        scan_root = base / top if top and "*" not in top and (base / top).is_dir() else base
+        for dirpath, dirnames, filenames in os.walk(scan_root):
+            dirnames[:] = [d for d in dirnames if d not in _PACKAGE_SKIP_DIRS]
+            for fn in filenames:
+                if not fn.endswith((".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
+                    continue
+                full = Path(dirpath) / fn
+                rel = full.relative_to(base).as_posix()
+                if rel in seen:
+                    continue
+                if any(glob_match(rel, g) for g in test_globs):
+                    continue
+                if any(glob_match(rel, p) for p in suite.paths):
+                    seen.add(rel)
+                    found.append(rel)
+    return found
+
+
+def transitive_dependents(
+    root: Path | str,
+    suite: VerifySuite,
+    changed: list[str],
+    packages: dict[str, str] | None = None,
+    *,
+    max_depth: int = 8,
+) -> dict[str, set[str]]:
+    """PE-D (BOSSAPP-787): compute transitive reverse import closure from ``changed``.
+
+    Returns ``{stem: set_of_root_changed_files}`` for every changed file AND every untouched
+    caller module that transitively imports a changed file, so tests of an untouched caller
+    are selected automatically.
+    """
+    base = Path(root)
+    patterns = _globs(suite)
+    by_stem: dict[str, set[str]] = {}
+    for c in changed:
+        if not any(glob_match(c, pattern) for pattern in patterns):
+            by_stem.setdefault(_stem(c), set()).add(c)
+    if not by_stem:
+        return by_stem
+
+    # Build source file reference map once for this suite.
+    src_refs: dict[str, set[str]] = {}
+    for rel in _code_files_under(base, suite):
+        try:
+            content = (base / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        refs = _python_references(content, rel) if rel.endswith(".py") else _js_references(content, rel)
+        if refs:
+            src_refs[rel] = refs
+
+    frontier = set(by_stem)
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        next_frontier: set[str] = set()
+        for rel, refs in src_refs.items():
+            named = _referenced(refs, frontier, packages)
+            if not named:
+                continue
+            caller_stem = _stem(rel)
+            origins: set[str] = set()
+            for hit in named:
+                origins.update(by_stem.get(hit, ()))
+            existing = by_stem.setdefault(caller_stem, set())
+            before = len(existing)
+            existing.update(origins)
+            if caller_stem not in frontier and (before == 0 or len(existing) > before):
+                next_frontier.add(caller_stem)
+        frontier = next_frontier
+    return by_stem
+
+
+def evaluate_replay_gate(replays: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """PE-D (BOSSAPP-787): verify that observed failing runs pass when replayed with the fix."""
+    items = [dict(r) for r in (replays or ()) if isinstance(r, dict)]
+    if not items:
+        return {"ok": True, "total": 0, "passed": 0, "failed": 0, "outcomes": []}
+    passed = sum(1 for r in items if bool(r.get("after_ok")))
+    failed = len(items) - passed
+    return {
+        "ok": failed == 0,
+        "total": len(items),
+        "passed": passed,
+        "failed": failed,
+        "outcomes": items,
+    }
+
+
 def _select(root: Path | str, suite: VerifySuite, changed: list[str],
             packages: dict[str, str] | None) -> tuple[list[str], str, set[str]]:
-    """``select_tests`` plus the changed files the selection covers."""
+    """``select_tests`` plus the changed files the selection covers (transitive + P0)."""
     base = Path(root)
     patterns = _globs(suite)
     all_tests = sorted({
@@ -465,10 +566,12 @@ def _select(root: Path | str, suite: VerifySuite, changed: list[str],
         return all_tests, "all tests", set(changed) if all_tests else set()
     changed_set = {c for c in changed}
     picked = {t for t in all_tests if t in changed_set}
-    by_stem: dict[str, set[str]] = {}
-    for c in changed:
-        if not any(glob_match(c, pattern) for pattern in patterns):
-            by_stem.setdefault(_stem(c), set()).add(c)
+    # Always include declared P0 tests when present in the repo.
+    for p0_pat in suite.p0_tests:
+        for t in all_tests:
+            if glob_match(t, p0_pat):
+                picked.add(t)
+    by_stem = transitive_dependents(base, suite, changed, packages)
     stems = set(by_stem)
     covered = set(picked)
     if stems:
@@ -488,7 +591,7 @@ def _select(root: Path | str, suite: VerifySuite, changed: list[str],
                 for stem in named:
                     covered.update(by_stem[stem])
     if picked:
-        return sorted(picked), "tests that reference the change", covered
+        return sorted(picked), "tests that reach the change (transitive)", covered
     if suite.fallback == "all":
         return (all_tests, "no test references the change; whole suite",
                 set(changed) if all_tests else set())

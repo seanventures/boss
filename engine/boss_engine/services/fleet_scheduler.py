@@ -317,4 +317,138 @@ def _reconcile(c: Any, *, is_frozen: bool, org_id: Optional[str]) -> dict:
     return report
 
 
-__all__ = ["LOCK_KEY", "frozen", "maybe_reconcile", "reconcile"]
+def _register_commit_wake(connection: Any, host_ids: list[str]) -> None:
+    """Wake hosts' /desired watches immediately when `connection`'s current transaction commits."""
+    if not host_ids:
+        return
+    from sqlalchemy import event as sa_event
+    from .run_plane import wake_desired
+
+    pending = connection.info.setdefault("_fleet_wake_desired", set())
+    pending.update(host_ids)
+    if connection.info.get("_fleet_wake_hooked"):
+        return
+    connection.info["_fleet_wake_hooked"] = True
+
+    def _on_commit(conn: Any) -> None:
+        ids = list(conn.info.pop("_fleet_wake_desired", ()))
+        if ids:
+            wake_desired(ids)
+
+    def _on_rollback(conn: Any) -> None:
+        conn.info.pop("_fleet_wake_desired", None)
+
+    sa_event.listen(connection, "commit", _on_commit)
+    sa_event.listen(connection, "rollback", _on_rollback)
+
+
+def wake_from_zero(connection: Any, deployment_id: str) -> dict:
+    """SCALE-FROM-ZERO IN THE ADMISSION TRANSACTION (P9b-2, BOSSAPP-1101; LLD §8.6).
+
+    When a live `runtime: microvm` deployment has zero running replicas and `scale_to_zero` is on
+    (or `replicas == 0` / `min_replicas == 0`), bumps desired replicas to `max(1, min_replicas)`,
+    places one replica onto the least-loaded eligible host, and bumps that host's
+    `desired_generation` in the SAME transaction as `admit_run`. Registers a post-commit hook
+    to wake the host's `/desired` watch immediately so cold start finishes well under 3 s p95."""
+    dep = connection.execute(text("""
+        SELECT d.id, d.project_id, d.agent_key, d.environment, d.version, d.status, d.runtime,
+               d.vm_mode, d.replicas, d.min_replicas, d.max_replicas, d.scale_to_zero,
+               d.placement, d.image_digest, d.resources, w.org_id
+          FROM agent_deployments d
+          JOIN projects p ON p.id = d.project_id
+          JOIN workspaces w ON w.id = p.workspace_id
+         WHERE d.id = :d FOR UPDATE OF d"""), {"d": deployment_id}).mappings().first()
+    if dep is None:
+        return {"woken": False, "reason": "not_found"}
+    dep = dict(dep)
+    if dep["status"] != "live" or dep["runtime"] != "microvm" or (dep.get("vm_mode") or "replica") != "replica":
+        return {"woken": False, "reason": "not_microvm_replica"}
+    if not dep.get("scale_to_zero") and int(dep.get("replicas") or 0) > 0 and int(dep.get("min_replicas") or 0) > 0:
+        return {"woken": False, "reason": "scale_to_zero_off"}
+    live_count = int(connection.execute(text(
+        "SELECT count(*) FROM agent_replicas WHERE deployment_id = :d AND desired_state = 'running'"),
+        {"d": deployment_id}).scalar() or 0)
+    if live_count > 0:
+        return {"woken": False, "reason": "already_warm", "running_replicas": live_count}
+    target_replicas = max(1, int(dep.get("min_replicas") or 0), int(dep.get("replicas") or 0))
+    max_rep = int(dep.get("max_replicas") or 64)
+    target_replicas = min(target_replicas, max(1, max_rep))
+    connection.execute(text(
+        "UPDATE agent_deployments SET replicas = :n, placement_state = 'pending', updated_at = now() "
+        "WHERE id = :d"), {"n": target_replicas, "d": deployment_id})
+    hosts = [dict(r) for r in connection.execute(text(
+        "SELECT id, org_id, pool, labels, backend, status, revoked_at, vm_prefix, kvm_live, "
+        "facts, capacity FROM agent_hosts WHERE org_id = :o"), {"o": dep["org_id"]}).mappings().all()]
+    load: dict[str, int] = {}
+    for r in connection.execute(text(
+            "SELECT host_id, count(*) FROM agent_replicas WHERE desired_state = 'running' "
+            "GROUP BY host_id")).all():
+        load[str(r[0])] = int(r[1])
+    candidates = [h for h in hosts if _eligible(h, dep, load)]
+    if not candidates:
+        return {"woken": True, "placed": False, "desired_replicas": target_replicas,
+                "reason": "no_eligible_host"}
+    host = min(candidates, key=lambda h: (load.get(h["id"], 0), h["id"]))
+    rid = f"rep_{uuid.uuid4().hex[:20]}"
+    connection.execute(text("""
+        INSERT INTO agent_replicas (id, org_id, project_id, deployment_id, host_id, vm_id,
+               vm_mode, vm_ip, image_digest, agent_version, slots)
+        VALUES (:i, :o, :p, :d, :h, :vm, 'replica', CAST(:ip AS INET), :img, :v, :slots)"""),
+        {"i": rid, "o": dep["org_id"], "p": dep["project_id"], "d": dep["id"],
+         "h": host["id"], "vm": f"vm_{uuid.uuid4().hex[:16]}", "ip": _vm_ip(connection, host),
+         "img": dep["image_digest"], "v": dep["version"],
+         "slots": int((_json(dep["resources"], {}) or {}).get("slots") or DEFAULT_SLOTS)})
+    gen = connection.execute(text(
+        "UPDATE agent_hosts SET desired_generation = desired_generation + 1, updated_at = now() "
+        "WHERE id = :h RETURNING desired_generation"), {"h": host["id"]}).scalar()
+    connection.execute(text("UPDATE agent_replicas SET generation = :g WHERE id = :r"),
+                       {"g": gen, "r": rid})
+    connection.execute(text(
+        "UPDATE agent_deployments SET placement_state = 'ok', updated_at = now() WHERE id = :d"),
+        {"d": deployment_id})
+    host_event(connection, org_id=dep["org_id"], host_id=host["id"], kind="scale_from_zero_wake",
+               detail={"deployment_id": deployment_id, "replica_id": rid,
+                       "desired_replicas": target_replicas, "generation": int(gen or 0)},
+               actor="scheduler")
+    _register_commit_wake(connection, [str(host["id"])])
+    return {"woken": True, "placed": True, "replica_id": rid, "host_id": str(host["id"]),
+            "generation": int(gen or 0), "desired_replicas": target_replicas}
+
+
+def scale_down_idle(connection: Any, *, idle_seconds: int = 600,
+                    org_id: Optional[str] = None) -> dict:
+    """Scale idle `scale_to_zero` deployments back down to `min_replicas` (LLD §8.6).
+    Never stops a deployment with queued/leased/running jobs or recent activity."""
+    deps = [dict(r) for r in connection.execute(text("""
+        SELECT d.id, d.min_replicas, d.replicas, w.org_id
+          FROM agent_deployments d
+          JOIN projects p ON p.id = d.project_id
+          JOIN workspaces w ON w.id = p.workspace_id
+         WHERE d.status = 'live' AND d.runtime = 'microvm' AND d.scale_to_zero = true
+           AND d.replicas > GREATEST(0, d.min_replicas)
+           AND (CAST(:o AS TEXT) IS NULL OR w.org_id = :o)"""), {"o": org_id}).mappings().all()]
+    scaled: list[dict] = []
+    for dep in deps:
+        active = int(connection.execute(text("""
+            SELECT count(*) FROM jobs
+             WHERE target = :t AND status IN ('queued', 'failed_retryable', 'leased', 'running')"""),
+            {"t": f"deployment:{dep['id']}"}).scalar() or 0)
+        if active > 0:
+            continue
+        recent = int(connection.execute(text("""
+            SELECT count(*) FROM agent_runs
+             WHERE deployment_id = :d
+               AND updated_at > now() - make_interval(secs => :s)"""),
+            {"d": dep["id"], "s": int(idle_seconds)}).scalar() or 0)
+        if recent > 0:
+            continue
+        floor = max(0, int(dep.get("min_replicas") or 0))
+        connection.execute(text(
+            "UPDATE agent_deployments SET replicas = :n, updated_at = now() WHERE id = :d"),
+            {"n": floor, "d": dep["id"]})
+        scaled.append({"deployment_id": dep["id"], "from": int(dep["replicas"]), "to": floor})
+    return {"scaled_down": scaled}
+
+
+__all__ = ["LOCK_KEY", "frozen", "maybe_reconcile", "reconcile", "scale_down_idle",
+           "wake_from_zero"]

@@ -37,6 +37,8 @@ ROOM=0
 CACHE_ONLY=0
 DRY=0
 THRESHOLD=75
+TARGET_FREE_GB=""
+MIN_CACHE_GB=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd -P)}"
 while [[ $# -gt 0 ]]; do
@@ -46,10 +48,14 @@ while [[ $# -gt 0 ]]; do
     --cache-only) CACHE_ONLY=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --threshold) THRESHOLD="${2:?}"; shift 2 ;;
+    --target-free) TARGET_FREE_GB="${2:?--target-free needs a number of GB}"; shift 2 ;;
+    --min-cache) MIN_CACHE_GB="${2:?--min-cache needs a number of GB}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
     *) printf 'prune: unknown option %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+[[ -z "$TARGET_FREE_GB" || "$TARGET_FREE_GB" =~ ^[0-9]+$ ]] || { printf 'prune: --target-free must be a whole number of GB (got %s)\n' "$TARGET_FREE_GB" >&2; exit 2; }
+[[ "$MIN_CACHE_GB" =~ ^[0-9]+$ ]] || { printf 'prune: --min-cache must be a whole number of GB (got %s)\n' "$MIN_CACHE_GB" >&2; exit 2; }
 # A setting comes from the environment, else from the install's .env, else the default.
 env_or_dotenv() {
   local value="${!1:-}"
@@ -298,6 +304,7 @@ build_cache_gb() {  # whole GB of the cache in BOSS's scope, rounded down; "" wh
 }
 # Only a host that runs BOSS alone (--dedicated), BOSS's own builder, or the installer right
 # after its own build (--room) looks at the floor; only BOSS's scope is trimmed below the cap.
+TARGET_FREE_GB="${TARGET_FREE_GB:-$FLOOR_GB}"
 if [[ "$CACHE_CAP_GB" -gt 0 && ( "$OWNS_CACHE" -eq 1 || "$ROOM" -eq 1 ) ]]; then
   free_gb="$(docker_disk_free_gb)"
   # A Colima or Desktop VM grows a sparse disk on the Mac. It can still report
@@ -323,15 +330,23 @@ if [[ "$CACHE_CAP_GB" -gt 0 && ( "$OWNS_CACHE" -eq 1 || "$ROOM" -eq 1 ) ]]; then
   esac
   if [[ -z "$free_gb" ]]; then
     printf "Docker's disk could not be measured; the build cache is kept at its cap (%s GB)\n" "$CACHE_CAP_GB"
-  elif [[ "$free_gb" -lt "$FLOOR_GB" ]]; then
+  elif [[ "$free_gb" -lt "$TARGET_FREE_GB" ]]; then
     cache_gb="$(build_cache_gb)"; cache_gb="${cache_gb:-0}"
-    keep=$(( free_gb + cache_gb - FLOOR_GB ))
-    [[ "$keep" -gt 0 ]] || keep=0
+    keep=$(( free_gb + cache_gb - TARGET_FREE_GB ))
+    [[ "$keep" -ge "$MIN_CACHE_GB" ]] || keep="$MIN_CACHE_GB"
     [[ "$keep" -le "$CACHE_CAP_GB" ]] || keep="$CACHE_CAP_GB"
+    if [[ "$MIN_CACHE_GB" -gt 0 && $(( free_gb + cache_gb - MIN_CACHE_GB )) -lt "$FLOOR_GB" ]]; then
+      keep=0
+    fi
     keep_args=(); [[ "$keep" -eq 0 ]] || keep_args=(--keep-storage "${keep}gb")
     if [[ "$OWNS_CACHE" -eq 1 ]]; then
-      printf "Docker's disk has %s GB free, under the %s GB floor (BOSS_DISK_FLOOR_GB): keeping %s GB of build cache\n" \
-        "$free_gb" "$FLOOR_GB" "$keep"
+      if [[ "$TARGET_FREE_GB" -eq "$FLOOR_GB" ]]; then
+        printf "Docker's disk has %s GB free, under the %s GB floor (BOSS_DISK_FLOOR_GB): keeping %s GB of build cache\n" \
+          "$free_gb" "$FLOOR_GB" "$keep"
+      else
+        printf "Docker's disk has %s GB free, under the %s GB upgrade target (%s GB floor + build): keeping %s GB of build cache\n" \
+          "$free_gb" "$TARGET_FREE_GB" "$FLOOR_GB" "$keep"
+      fi
       run "${CACHE_PRUNE[@]}" -af ${keep_args[@]+"${keep_args[@]}"}
     else
       printf "Docker's disk has %s GB free, under the %s GB floor (BOSS_DISK_FLOOR_GB)\n" "$free_gb" "$FLOOR_GB"

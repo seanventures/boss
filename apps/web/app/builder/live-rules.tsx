@@ -10,6 +10,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 export type LivePredicate = {
   field?: string;
@@ -234,10 +235,10 @@ export function LiveRules({
                   title="Example: block refund when amount is over 50"
                   aria-describedby="lr-thesis"
                   onChange={(event) => setDescription(event.target.value)} />
-        <button type="button" data-testid="lr-record" disabled={busy}
+        <GatedButton permission="policy:manage" type="button" data-testid="lr-record" disabled={busy}
                 title="Save this sentence as a rule" onClick={() => void onRecord()}>
           Record rule
-        </button>
+        </GatedButton>
       </div>
 
       {error ? <p className="lr-error" data-testid="lr-error" role="alert">{error}</p> : null}

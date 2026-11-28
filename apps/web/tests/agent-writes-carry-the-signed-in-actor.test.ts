@@ -91,6 +91,13 @@ const KNOWN_AGENT_WRITERS = [
   "lib/intake.ts",
   "lib/agents-org-board.ts",
   "lib/agents-activity.ts",
+  // AP-P3 Agent Platform Console (BOSSAPP-1054): files touching /v1/agents
+  // carry the signed-in actor through apiWrite (never a literal actor).
+  "lib/agent-platform.ts",
+  "app/agents/passport-endpoints.tsx",
+  "app/agents/roster-bulk.tsx",
+  "app/govern/scoped-budgets.tsx",
+  "app/skills/tool-rules.tsx",
 ];
 
 /** Builds the bodies the writers above send, so it is held to the same rule. */

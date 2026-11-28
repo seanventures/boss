@@ -1,0 +1,34 @@
+schema: boss.customer_failure_record/v1
+id: northgate_breaker_quoted_db
+recorded_at: "2026-11-16"
+source: incident_note
+title: Circuit-breaker refusal quoting an earlier psycopg error misclassified as BOSS storage failure
+scrubbed: true
+symptom: >
+  A workflow step displayed "BOSS couldn't save this to its database. Try again. If it keeps
+  happening, the details are in the server log.", retried three times in a second, and dead-lettered
+  the step with no database exception in server logs.
+root_cause: >
+  is_storage_failure() matched "(psycopg.errors.IdleInTransactionSessionTimeout)" anywhere inside a
+  quoted circuit-breaker refusal message instead of only at the start of a real DB exception/message.
+raw_evidence: |
+  could not resume the previous build crun_5f8a0293c23847beb7b9: circuit breaker: 2 attempts in
+  this lineage have failed with infrastructure errors (last: '(psycopg.errors.IdleInTransactionSessionTimeout)
+  terminating connection due to idle-in-transaction timeout') and the run is already on the local substrate.
+replay:
+  kind: model_failure_explain
+  target: boss_engine.services.model_failures.explain
+  inputs:
+    error: >
+      could not resume the previous build crun_5f8a0293c23847beb7b9: circuit breaker: 2 attempts
+      in this lineage have failed with infrastructure errors (last: '(psycopg.errors.IdleInTransactionSessionTimeout)
+      terminating connection due to idle-in-transaction timeout\n[SQL: INSERT INTO events (id, project_id) VALUES (:i, :p)]')
+      and the run is already on the local substrate. A blind retry will fail the same way — fix the
+      platform issue (see the error above), then press Retry or retry with a note.
+  expected:
+    equals:
+      is_storage_failure: false
+    not_equals:
+      kind: storage
+    not_contains:
+      action: server log

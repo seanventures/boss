@@ -49,6 +49,9 @@ import { PassportTest } from "./agents/passport-test";
 import { PassportWork } from "./agents/passport-work";
 import { ShareCardDialog } from "./agents/share-card-dialog";
 import { PassportLoadout } from "./agents/passport-loadout";
+import { PassportDeployments } from "./agents/passport-deployments";
+import { PassportTriggers } from "./agents/passport-triggers";
+import { PassportEndpoints } from "./agents/passport-endpoints";
 import { popOpen } from "./agents/loadout-pop";
 import { overlayJustClosed } from "./skills/overlay";
 import { SectionLabel } from "./section-label";
@@ -441,6 +444,10 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
               <SectionLabel level={1} as="h2">Lineage</SectionLabel>
               <PassportLineage projectId={projectId} actor={actor} roleKey={detail.role_key} />
             </section>
+
+            <PassportDeployments projectId={projectId} actor={actor} roleKey={detail.role_key} />
+            <PassportTriggers projectId={projectId} actor={actor} roleKey={detail.role_key} />
+            <PassportEndpoints projectId={projectId} actor={actor} roleKey={detail.role_key} />
 
             {detail.registered ? (
               <div className="ld-settings" id="ag-sec-settings">

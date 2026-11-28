@@ -103,6 +103,58 @@ def canonical_path(raw: str) -> tuple[str, str]:
     return decoded, encoded
 
 
+def canonical_gitlab_api_path(raw: str) -> tuple[str, str]:
+    """Like `canonical_path`, allowing `%2f` only inside the `/api/v4/projects/<group%2Frepo>`
+    project identifier segment."""
+    from urllib.parse import quote, unquote
+
+    if not raw.startswith("/") or len(raw) > 2048:
+        raise PathRefused("bad_path")
+    if re.search(r"%(5c|2e|25|00)", raw, re.IGNORECASE):
+        raise PathRefused("encoded_path_separator")
+    if "\\" in raw or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise PathRefused("bad_path_characters")
+    segments = raw[1:].split("/")
+    for seg in segments:
+        if seg in ("", ".", ".."):
+            raise PathRefused("dot_or_empty_segment")
+    allow_proj_slash = (
+        len(segments) >= 4
+        and segments[0] == "api"
+        and segments[1] == "v4"
+        and segments[2] == "projects"
+    )
+    decoded_segments: list[str] = []
+    encoded_segments: list[str] = []
+    safe = _PCHAR_SAFE.replace("/", "")
+    for idx, seg in enumerate(segments):
+        if re.search(r"%2f", seg, re.IGNORECASE):
+            if not (allow_proj_slash and idx == 3):
+                raise PathRefused("encoded_path_separator")
+            parts = re.split(r"%2f", seg, flags=re.IGNORECASE)
+            if any(p in ("", ".", "..") for p in parts):
+                raise PathRefused("dot_or_empty_segment")
+            try:
+                dec_parts = [unquote(p, errors="strict") for p in parts]
+            except UnicodeDecodeError as exc:
+                raise PathRefused("bad_encoding") from exc
+            for p in dec_parts:
+                if p in ("", ".", "..") or "/" in p or "\\" in p or any(ord(ch) < 0x20 for ch in p):
+                    raise PathRefused("dot_or_empty_segment")
+            decoded_segments.append("/".join(dec_parts))
+            encoded_segments.append("%2F".join(quote(p, safe=safe) for p in dec_parts))
+            continue
+        try:
+            dec = unquote(seg, errors="strict")
+        except UnicodeDecodeError as exc:
+            raise PathRefused("bad_encoding") from exc
+        if dec in ("", ".", "..") or "/" in dec or "\\" in dec or any(ord(ch) < 0x20 for ch in dec):
+            raise PathRefused("dot_or_empty_segment")
+        decoded_segments.append(dec)
+        encoded_segments.append(quote(dec, safe=safe))
+    return "/" + "/".join(decoded_segments), "/" + "/".join(encoded_segments)
+
+
 def _level_ok(perms: Mapping[str, str], need: tuple[str, str]) -> bool:
     key, level = need
     if key == "metadata":
@@ -208,6 +260,9 @@ def check_api(method: str, path: str, *, perms: Mapping[str, str], repos: Iterab
 
 
 _GIT_PATH = re.compile(r"^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/(info/refs|git-upload-pack|git-receive-pack)$")
+_GITLAB_GIT_PATH = re.compile(
+    r"^/((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+?)(?:\.git)?/(info/refs|git-upload-pack|git-receive-pack)$"
+)
 
 
 def check_git(method: str, path: str, query: Mapping[str, str], *, perms: Mapping[str, str],
@@ -228,6 +283,86 @@ def check_git(method: str, path: str, query: Mapping[str, str], *, perms: Mappin
     if not _level_ok(perms, need):
         return RuleDecision(False, "/{o}/{r}.git/" + op, "insufficient_permission", need)
     return RuleDecision(True, "/{o}/{r}.git/" + op, need=need)
+
+
+def check_gitlab_git(method: str, path: str, query: Mapping[str, str], *, perms: Mapping[str, str],
+                     repos: Iterable[str]) -> RuleDecision:
+    m = _GITLAB_GIT_PATH.match(path)
+    if not m:
+        return _deny("{git}", "not_a_git_path")
+    repo, op = m.group(1), m.group(2)
+    if not _in_run(repo, repos):
+        return _deny("/{o}/{r}.git", "repo_outside_run")
+    service = query.get("service") if op == "info/refs" else op
+    if service == "git-upload-pack" and method.upper() in ("GET", "POST"):
+        need = ("contents", "read")
+    elif service == "git-receive-pack" and method.upper() in ("GET", "POST"):
+        need = ("contents", "write")
+    else:
+        return _deny("/{o}/{r}.git/" + op, "bad_git_service")
+    if not _level_ok(perms, need):
+        return RuleDecision(False, "/{o}/{r}.git/" + op, "insufficient_permission", need)
+    return RuleDecision(True, "/{o}/{r}.git/" + op, need=need)
+
+
+_GITLAB_REPO_PATH = re.compile(
+    r"^/api/v4/projects/(.+?)(/(?:repository|merge_requests|issues|pipelines|members|hooks|"
+    r"deploy_keys|deployments|environments|protected_branches|transfer|variables|runners|fork)(?:/.*)?|$)$"
+)
+_GITLAB_FORBIDDEN = re.compile(
+    r"^/(members|hooks|deploy_keys|deployments|environments|protected_branches|"
+    r"merge_requests/\d+/merge|transfer|variables|runners|fork)(/|$)"
+)
+_GITLAB_READS: tuple[tuple[str, tuple[str, str]], ...] = (
+    (r"", ("metadata", "read")),
+    (r"/repository/(tree|files/.*|commits.*|branches.*|tags.*|compare.*)", ("contents", "read")),
+    (r"/merge_requests", ("pull_requests", "read")),
+    (r"/merge_requests/\d+", ("pull_requests", "read")),
+    (r"/merge_requests/\d+/(changes|diffs|commits|notes)", ("pull_requests", "read")),
+    (r"/issues", ("issues", "read")),
+    (r"/issues/\d+(/notes)?", ("issues", "read")),
+    (r"/pipelines(/.*)?", ("contents", "read")),
+)
+
+
+def check_gitlab_api(method: str, path: str, *, perms: Mapping[str, str], repos: Iterable[str],
+                     body: Optional[Mapping[str, Any]] = None,
+                     push_pattern: str = "") -> RuleDecision:
+    m = _GITLAB_REPO_PATH.match(path)
+    if not m:
+        return _deny("/api/v4/{other}", "not_in_rule_table")
+    proj, sub = m.group(1), m.group(2) or ""
+    tpl = "/api/v4/projects/{id}" + ("/" + sub.strip("/").split("/")[0] if sub else "")
+    if not _in_run(proj, repos):
+        return _deny(tpl, "repo_outside_run")
+    if _GITLAB_FORBIDDEN.match(sub):
+        return _deny(tpl, "forbidden_endpoint")
+    verb = method.upper()
+    if verb in ("GET", "HEAD"):
+        for pattern, need in _GITLAB_READS:
+            if re.fullmatch(pattern, sub):
+                if not _level_ok(perms, need):
+                    return RuleDecision(False, tpl, "insufficient_permission", need)
+                return RuleDecision(True, tpl, need=need)
+        return _deny(tpl, "not_in_rule_table")
+    if verb == "POST" and sub == "/merge_requests":
+        need = ("pull_requests", "write")
+        if not _level_ok(perms, need):
+            return RuleDecision(False, tpl, "insufficient_permission", need)
+        branch = str((body or {}).get("source_branch") or "")
+        if not branch or not fnmatch.fnmatchcase(f"refs/heads/{branch}",
+                                                 push_pattern or "refs/heads/boss/*"):
+            return _deny(tpl, "pr_not_the_runs")
+        target_id = (body or {}).get("target_project_id")
+        if target_id is not None and str(target_id).lower() != proj.lower():
+            return _deny(tpl, "pr_cross_repo")
+        return RuleDecision(True, tpl, need=need)
+    if verb == "POST" and re.fullmatch(r"/(merge_requests|issues)/\d+/notes", sub):
+        need = ("pull_requests", "write")
+        if not _level_ok(perms, need):
+            return RuleDecision(False, tpl, "insufficient_permission", need)
+        return RuleDecision(True, tpl, need=need)
+    return _deny(tpl, "not_in_rule_table")
 
 
 # ---- Bitbucket Cloud REST (P8b S11, D19) -------------------------------------------------------------------

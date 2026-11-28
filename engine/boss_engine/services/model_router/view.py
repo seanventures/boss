@@ -66,9 +66,11 @@ def _options(engine: str, info: dict[str, Any], policy: RoutingPolicy) -> list[O
 
 
 def _week(connection: Any, project_id: str) -> dict[str, Any]:
+    from ..openai_adapter import CACHE_READ_MULT, CACHE_WRITE_MULT, list_price_cost_usd_micros
+
     since = datetime.now(timezone.utc) - timedelta(days=7)
     out: dict[str, Any] = {"routes": 0, "tiers": {t: 0 for t in TIERS}, "escalations": 0,
-                           "moved": 0, "saved_usd": 0.0, "smart_routes": 0}
+                           "moved": 0, "saved_usd": 0.0, "smart_routes": 0, "shadow_routes": 0}
     try:
         with connection.begin_nested():
             rows = connection.execute(text(
@@ -79,10 +81,15 @@ def _week(connection: Any, project_id: str) -> dict[str, Any]:
                 "AND step <> 'connection_proof' "      # Setup's own checks are not work
                 "GROUP BY tier, mode"), {"p": project_id, "s": since}).mappings().all()
             calls = connection.execute(text(
-                "SELECT r.tier, SUM(c.prompt_tokens) AS pin, SUM(c.completion_tokens) AS pout, "
-                "SUM(c.cost_usd_micros) AS micros FROM llm_calls c JOIN model_routes r "
-                "ON r.id = c.route_id WHERE c.project_id = :p AND c.created_at >= :s "
-                "AND r.mode = 'smart' GROUP BY r.tier"),
+                "SELECT r.tier, c.model, "
+                "COALESCE(c.prompt_tokens, 0) AS pin, "
+                "COALESCE(c.completion_tokens, 0) AS pout, "
+                "COALESCE(c.cache_read_tokens, 0) AS cr, "
+                "COALESCE(c.cache_write_tokens, 0) AS cw, "
+                "COALESCE(c.cost_usd_micros, 0) AS micros "
+                "FROM llm_calls c JOIN model_routes r ON r.id = c.route_id "
+                "WHERE c.project_id = :p AND c.created_at >= :s "
+                "AND r.mode = 'smart'"),
                 {"p": project_id, "s": since}).mappings().all()
     except Exception:  # noqa: BLE001
         return out
@@ -95,14 +102,25 @@ def _week(connection: Any, project_id: str) -> dict[str, Any]:
         out["moved"] += int(r["moved"] or 0)
         if r["mode"] == "smart":
             out["smart_routes"] += n
+        elif r["mode"] == "shadow":
+            out["shadow_routes"] += n
     fin, fout = REFERENCE_PRICE["frontier"]
     for c in calls:
         if c["tier"] == "frontier":
             continue
-        tokens_in, tokens_out = float(c["pin"] or 0), float(c["pout"] or 0)
-        at_frontier = (tokens_in * fin + tokens_out * fout) / 1e6
+        pin, pout = int(c["pin"] or 0), int(c["pout"] or 0)
+        cr, cw = int(c["cr"] or 0), int(c["cw"] or 0)
+        at_frontier = (pin * fin + pout * fout
+                       + cr * fin * CACHE_READ_MULT + cw * fin * CACHE_WRITE_MULT) / 1e6
+        list_micros, known = list_price_cost_usd_micros({
+            "model": c["model"] or "", "prompt_tokens": pin, "completion_tokens": pout,
+            "cache_read_tokens": cr, "cache_write_tokens": cw,
+        })
         tin, tout = REFERENCE_PRICE.get(str(c["tier"]), (fin, fout))
-        actual = float(c["micros"] or 0) / 1e6 or (tokens_in * tin + tokens_out * tout) / 1e6
+        fallback_tier = (pin * tin + pout * tout
+                         + cr * tin * CACHE_READ_MULT + cw * tin * CACHE_WRITE_MULT) / 1e6
+        actual = (list_micros / 1e6 if (known and (pin + pout + cr + cw) > 0)
+                  else (float(c["micros"] or 0) / 1e6 or fallback_tier))
         out["saved_usd"] += max(0.0, at_frontier - actual)
     out["saved_usd"] = round(out["saved_usd"], 2)
     return out
@@ -149,6 +167,9 @@ def routing_view(connection: Any, settings: Any, project_id: str) -> dict[str, A
                 "label": engine_label(t.engine) + (f" · {t.model}" if t.model else ""),
                 "connected": t.engine in connected}
 
+    from .outcomes import outcome_table_report
+    from .savings import shadow_summary
+
     return {
         "mode": policy.mode,
         "version": policy.version,
@@ -175,6 +196,10 @@ def routing_view(connection: Any, settings: Any, project_id: str) -> dict[str, A
         "pins": {job: {"engine": e, "model": m, "label": engine_label(e) + (f" · {m}" if m else "")}
                  for job, (e, m) in snap.job_pins.items()},
         "week": _week(connection, project_id),
+        "shadow": shadow_summary(connection, project_id, days=14),
+        "outcomes": outcome_table_report(connection, project_id, days=30),
         "hard_pins": list(policy.hard_pins),
         "frontier_allows_local": policy.frontier_allows_local,
+        "use_outcome_priors": policy.use_outcome_priors,
+        "fast_stage_shadow": policy.fast_stage_shadow,
     }

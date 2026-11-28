@@ -134,6 +134,23 @@ export function prLinkLabel(url: string | null | undefined): string {
 export type ChangeSetFile = { path: string; status: string; additions: number; deletions: number };
 export type ChangeSetNote = { id: string | number; kind: string; event: string; body: string; author: string;
                               comments: { path?: string; line?: number; body: string }[] };
+export type ChangeSetTestEvidence = {
+  artifact_id: string;
+  title: string;
+  download_url: string;
+  status: string;
+  summary: string;
+  suites: { command: string; ok: boolean | null; exit_code?: number | null }[];
+  counts: {
+    suites_run?: number; suites_passed?: number; suites_failed?: number;
+    cases_passed?: number; cases_failed?: number; cases_skipped?: number; cases_total?: number;
+  };
+  environment: Record<string, string>;
+  not_run: string[];
+  head_sha: string | null;
+  check_run_url: string | null;
+  host_kind: "local" | "github";
+};
 export type ChangeSet = {
   number: number; title: string; state: string; repository: string; branch: string; base_branch: string;
   url: string; body: string; github_pr_url: string | null; merged_by: string | null; merged_sha: string | null;
@@ -142,6 +159,8 @@ export type ChangeSet = {
   review: ChangeSetNote[];
   checks: { where: string; run_status: string | null; tests_passed: string | null; gates?: unknown;
             items?: { name: string; status: string | null; conclusion: string | null; app: string | null }[] } | null;
+  /** BOSSAPP-1011: structured test evidence + downloadable full per-case results (+ GitHub check run). */
+  test_evidence: ChangeSetTestEvidence | null;
   merge: { how: string; decision_id: string; held?: CiHold | null } | null;
   /** The review decision whose approval merges it (pending while it is open). */
   decision: { id: string; status: string; question: string } | null;
@@ -174,8 +193,45 @@ const arr = (v: unknown): Record<string, unknown>[] =>
 export function parseChangeSet(raw: unknown): ChangeSet {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const checks = r.checks && typeof r.checks === "object" ? r.checks as Record<string, unknown> : null;
+  const te = r.test_evidence && typeof r.test_evidence === "object" ? r.test_evidence as Record<string, unknown> : null;
   const merge = r.merge && typeof r.merge === "object" ? r.merge as Record<string, unknown> : null;
   const decision = r.decision && typeof r.decision === "object" ? r.decision as Record<string, unknown> : null;
+  const parseTestEvidence = (rawTe: Record<string, unknown> | null): ChangeSetTestEvidence | null => {
+    if (!rawTe || !str(rawTe.artifact_id)) return null;
+    const rawCounts = rawTe.counts && typeof rawTe.counts === "object" ? rawTe.counts as Record<string, unknown> : {};
+    const rawEnv = rawTe.environment && typeof rawTe.environment === "object" ? rawTe.environment as Record<string, unknown> : {};
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawEnv)) {
+      if (v != null && str(v)) env[k] = str(v);
+    }
+    const hostKind: "local" | "github" = rawTe.host_kind === "github" ? "github" : "local";
+    return {
+      artifact_id: str(rawTe.artifact_id),
+      title: str(rawTe.title, "Test evidence"),
+      download_url: str(rawTe.download_url, `/v1/artifacts/${encodeURIComponent(str(rawTe.artifact_id))}/download`),
+      status: str(rawTe.status, "unknown"),
+      summary: str(rawTe.summary),
+      suites: arr(rawTe.suites).map((s) => ({
+        command: str(s.command),
+        ok: typeof s.ok === "boolean" ? s.ok : null,
+        ...(typeof s.exit_code === "number" ? { exit_code: s.exit_code } : {}),
+      })),
+      counts: {
+        suites_run: num(rawCounts.suites_run),
+        suites_passed: num(rawCounts.suites_passed),
+        suites_failed: num(rawCounts.suites_failed),
+        cases_passed: num(rawCounts.cases_passed),
+        cases_failed: num(rawCounts.cases_failed),
+        cases_skipped: num(rawCounts.cases_skipped),
+        cases_total: num(rawCounts.cases_total),
+      },
+      environment: env,
+      not_run: Array.isArray(rawTe.not_run) ? rawTe.not_run.map((x) => str(x)).filter(Boolean) : [],
+      head_sha: str(rawTe.head_sha) || null,
+      check_run_url: hostKind === "github" ? (str(rawTe.check_run_url) || null) : null,
+      host_kind: hostKind,
+    };
+  };
   return {
     number: num(r.number), title: str(r.title), state: str(r.state, "open"), repository: str(r.repository),
     branch: str(r.branch), base_branch: str(r.base_branch, "main"), url: str(r.url), body: str(r.body),
@@ -194,6 +250,7 @@ export function parseChangeSet(raw: unknown): ChangeSet {
                        ...(checks.gates !== undefined ? { gates: checks.gates } : {}),
                        ...(Array.isArray(checks.items) ? { items: arr(checks.items).map((i) => ({ name: str(i.name),
                          status: str(i.status) || null, conclusion: str(i.conclusion) || null, app: str(i.app) || null })) } : {}) } : null,
+    test_evidence: parseTestEvidence(te),
     merge: merge && str(merge.decision_id) ? { how: str(merge.how), decision_id: str(merge.decision_id), held: parseCiHold(merge.held) } : null,
     decision: decision && str(decision.id) ? { id: str(decision.id), status: str(decision.status, "pending"), question: str(decision.question) } : null,
     draft: r.draft === true, labels: Array.isArray(r.labels) ? r.labels.map((l) => str(l)).filter(Boolean) : [],

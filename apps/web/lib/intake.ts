@@ -83,7 +83,7 @@ export type ConnStatus = "active" | "paused" | "disabled" | "auth_failed" | "rat
 export type Connection = {
   id: string; project_id: string; kind: string; label: string; name: string; mode: string; status: ConnStatus;
   url: string; url_path: string; chat_endpoint_id: string; secret_fields: string[];
-  team_id: string; default_dm_agent: string; attestation: Attestation | null;
+  team_id: string; default_dm_agent: string; channel_names: Record<string, string>; attestation: Attestation | null;
   health: { last_test_at: string; last_test_ok: boolean | null; refusals: number; status_reason: string };
   rules: number; last_hour: number; backlog: number; dead: number; last_event_at: string;
 };
@@ -93,11 +93,15 @@ export function parseConnection(v: unknown): Connection {
   const cfg = o(x.config);
   const h = o(x.health);
   const st = s(x.status) as ConnStatus;
+  const rawNames = o(cfg.channel_names);
+  const channel_names = Object.fromEntries(
+    Object.entries(rawNames).map(([k, val]) => [k, s(val).replace(/^#/, "")]).filter(([k, val]) => k && val),
+  );
   return {
     id: s(x.id), project_id: s(x.project_id), kind: s(x.kind), label: s(x.label) || s(x.kind), name: s(x.name), mode: s(x.mode) || "push",
     status: STATUSES.includes(st) ? st : "active", url: s(x.url), url_path: s(x.url_path),
     chat_endpoint_id: s(x.chat_endpoint_id) || s(cfg.chat_endpoint_id), secret_fields: strs(x.secret_fields),
-    team_id: s(cfg.team_id), default_dm_agent: s(cfg.default_dm_agent), attestation: parseAttestation(cfg.sso_attested),
+    team_id: s(cfg.team_id), default_dm_agent: s(cfg.default_dm_agent), channel_names, attestation: parseAttestation(cfg.sso_attested),
     health: { last_test_at: s(h.last_test_at), last_test_ok: typeof h.last_test_ok === "boolean" ? h.last_test_ok : null,
               refusals: n(h.refusals), status_reason: s(h.status_reason) },
     rules: n(x.rules), last_hour: n(x.last_hour), backlog: n(x.backlog), dead: n(x.dead), last_event_at: s(x.last_event_at),
@@ -292,7 +296,7 @@ export function eventFlow(e: EventDetail, ruleName: (id: string) => string, runD
   const run = main.run_id || e.runs[0] || "";
   nodes.push({ key: "run", label: run ? `Run ${run.slice(-4)}` : "Run", detail: main.fire_outcome === "duplicate" ? "already ran" : rule,
                tip: run ? `Run ${run} · ${main.fire_outcome}` : main.fire_outcome, state: run ? "done" : "waiting" });
-  if (e.kind === "slack") {
+  if (e.kind === "slack" || e.kind === "teams") {
     nodes.push({ key: "reply", label: "Reply", detail: "in thread",
                  tip: runDone ? "The run finished and answered in the thread" : runDone === false ? "The run is still working" : "Sent by the run through the reply outbox",
                  state: runDone ? "done" : runDone === false ? "active" : "waiting" });
@@ -322,7 +326,12 @@ export const envOf = (g: Agent | undefined) => (g?.environments.includes("prod")
 
 export type QuietHours = { start: string; end: string; timezone: string; mode: string };
 export type Triage = { mode: "off" | "model"; daily_usd_cap: number; max_usd_per_event: number; candidates: string[] };
-export type Limits = { per_entity: number | null; per_entity_window_seconds: number | null; storm_per_min: number | null };
+export type Limits = {
+  per_entity: number | null; per_entity_window_seconds: number | null;
+  per_thread: number | null; per_thread_window_seconds: number | null;
+  per_record: number | null; per_record_window_seconds: number | null;
+  storm_per_min: number | null;
+};
 export type Rule = {
   id: string; name: string; agent_key: string; environment: string; connection_id: string; priority: number; on: boolean; status: string;
   paused_reason: string; identity_mode: string; identity_modes: string[]; match: unknown; addressing: string; fanout: string;
@@ -342,7 +351,12 @@ export function parseRule(v: unknown): Rule {
     identity_mode: s(x.identity_mode), identity_modes: strs(x.identity_modes), match: cfg.match ?? null,
     addressing: s(cfg.addressing) || "mention_or_dm", fanout: s(cfg.fanout) || "first_match",
     triage: { mode: tri.mode === "model" ? "model" : "off", daily_usd_cap: n(tri.daily_usd_cap, 5), max_usd_per_event: n(tri.max_usd_per_event, 0.002), candidates: strs(tri.candidates) },
-    limits: { per_entity: num(lim.per_entity), per_entity_window_seconds: num(lim.per_entity_window_seconds), storm_per_min: num(lim.storm_per_min) },
+    limits: {
+      per_entity: num(lim.per_entity), per_entity_window_seconds: num(lim.per_entity_window_seconds),
+      per_thread: num(lim.per_thread), per_thread_window_seconds: num(lim.per_thread_window_seconds),
+      per_record: num(lim.per_record), per_record_window_seconds: num(lim.per_record_window_seconds),
+      storm_per_min: num(lim.storm_per_min),
+    },
     quiet_hours: s(q.start) || s(q.mode) ? { start: s(q.start), end: s(q.end), timezone: s(q.timezone) || "UTC", mode: s(q.mode) } : null,
     digest_mode: x.digest_mode === true, match_ok: x.match_ok !== false, match_error: s(x.match_error), fires: n(x.fires),
     last_fired_at: s(x.last_fired_at), last_outcome: s(x.last_outcome), on_behalf_of: s(o(x.runs_as).on_behalf_of), config: cfg,
@@ -379,34 +393,52 @@ export type Person = {
 export type People = { connection_id: string; kind: string; endpoint_id: string; attestation: Attestation | null; people: Person[];
   /** The caller lacks user:read: who each linked person is was withheld by the API. */
   people_redacted: boolean;
+  limit: number; offset: number; next_offset: number | null; total: number;
   counts: { linked: number; not_linked: number; guests: number; revoked: number } };
 export function parsePeople(v: unknown): People {
   const x = o(v);
   const c = o(x.counts);
   const states: PersonState[] = ["linked", "not_linked", "guest", "revoked"];
+  const list = a(x.people).map((p) => {
+    const y = o(p);
+    const st = s(y.state) as PersonState;
+    const who = y.person && typeof y.person === "object" ? o(y.person) : null;
+    return { external_user_id: s(y.external_user_id), display: s(y.display), state: states.includes(st) ? st : "not_linked", link_id: s(y.link_id),
+      method: s(y.method), person: who ? { principal_id: s(who.principal_id), name: s(who.name), email: s(who.email) } : null,
+      linked_at: s(y.linked_at), revoked_at: s(y.revoked_at), last_seen_at: s(y.last_seen_at), prompted_at: s(y.prompted_at) };
+  }).filter((p) => p.external_user_id);
+  const nextRaw = x.next_offset;
   return {
     connection_id: s(x.connection_id), kind: s(x.kind), endpoint_id: s(x.endpoint_id), attestation: parseAttestation(x.attestation),
     people_redacted: x.people_redacted === true,
-    people: a(x.people).map((p) => {
-      const y = o(p);
-      const st = s(y.state) as PersonState;
-      const who = y.person && typeof y.person === "object" ? o(y.person) : null;
-      return { external_user_id: s(y.external_user_id), display: s(y.display), state: states.includes(st) ? st : "not_linked", link_id: s(y.link_id),
-        method: s(y.method), person: who ? { principal_id: s(who.principal_id), name: s(who.name), email: s(who.email) } : null,
-        linked_at: s(y.linked_at), revoked_at: s(y.revoked_at), last_seen_at: s(y.last_seen_at), prompted_at: s(y.prompted_at) };
-    }).filter((p) => p.external_user_id),
+    limit: n(x.limit, 200), offset: n(x.offset, 0),
+    next_offset: typeof nextRaw === "number" && Number.isFinite(nextRaw) ? nextRaw : null,
+    total: typeof x.total === "number" && Number.isFinite(x.total) ? x.total : list.length,
+    people: list,
     counts: { linked: n(c.linked), not_linked: n(c.not_linked), guests: n(c.guests), revoked: n(c.revoked) },
   };
 }
 
 // ── the chat endpoint Slack rides on, and the org's sign-in providers (E2) ───────────────────
-export type ChatEndpoint = { id: string; kind: string; name: string; status: string; channel: string; secrets_set: string[]; url: string };
+export type ChatEndpoint = { id: string; kind: string; name: string; status: string; channel: string; app_id: string; tenant_id: string; secrets_set: string[]; url: string };
 export const parseEndpoint = (e: unknown): ChatEndpoint => {
   const x = o(e);
   const u = o(x.urls);
-  return { id: s(x.id), kind: s(x.kind), name: s(x.name), status: s(x.status), channel: s(o(x.config).channel), secrets_set: strs(x.secrets_set),
-           url: s(u.event_subscriptions_request_url) || s(u.webhook_url) };
+  const cfg = o(x.config);
+  return { id: s(x.id), kind: s(x.kind), name: s(x.name), status: s(x.status), channel: s(cfg.channel),
+           app_id: s(cfg.app_id), tenant_id: s(cfg.tenant_id), secrets_set: strs(x.secrets_set),
+           url: s(u.event_subscriptions_request_url) || s(u.messaging_endpoint_url) || s(u.webhook_url) };
 };
+export type MyChatLink = {
+  id: string; endpoint_id: string; kind: string; endpoint_name: string; project_id: string;
+  external_user_id: string; external_name: string; verified_at: string;
+};
+export const parseMyChatLinks = (v: unknown): MyChatLink[] => a(o(v).links).map((x) => {
+  const y = o(x);
+  return { id: s(y.id), endpoint_id: s(y.endpoint_id), kind: s(y.kind), endpoint_name: s(y.endpoint_name),
+           project_id: s(y.project_id), external_user_id: s(y.external_user_id),
+           external_name: s(y.external_name), verified_at: s(y.verified_at) };
+}).filter((l) => l.id);
 export const parseEndpoints = (v: unknown): ChatEndpoint[] => a(o(v).endpoints).map(parseEndpoint).filter((e) => e.id);
 export type Idp = { id: string; name: string; domains: string[]; status: string };
 export const parseIdps = (v: unknown): Idp[] => a(o(v).providers).map((p) => {
@@ -437,8 +469,15 @@ export function readRules(projectId: string, filter: RuleFilter = {}): Promise<R
   if (typeof filter.enabled === "boolean") p.set("enabled", filter.enabled ? "true" : "false");
   return evRead(`/v1/intake/rules?${p.toString()}`, (v) => a(o(v).rules).map(parseRule).filter((r) => r.id).sort(byOrder));
 }
-export const readPeople = (connectionId: string) => evRead(`${conn(connectionId)}/people`, parsePeople);
+export function readPeople(connectionId: string, opts: { limit?: number; offset?: number } = {}) {
+  const p = new URLSearchParams();
+  if (typeof opts.limit === "number" && opts.limit > 0) p.set("limit", String(opts.limit));
+  if (typeof opts.offset === "number" && opts.offset > 0) p.set("offset", String(opts.offset));
+  const qs = p.toString();
+  return evRead(`${conn(connectionId)}/people${qs ? `?${qs}` : ""}`, parsePeople);
+}
 export const readChatEndpoints = (projectId: string) => evRead(`/v1/chat/endpoints?project_id=${enc(projectId)}`, parseEndpoints);
+export const readMyChatLinks = () => evRead("/v1/chat/links", parseMyChatLinks);
 export const readIdps = () => evRead("/v1/identity/providers", parseIdps);
 export const readRouteBudgets = (projectId: string) => evRead(`/v1/budget-policies/scoped?project_id=${enc(projectId)}`, parseBudgets);
 export const readRunStatus = (threadId: string, runId: string, projectId: string) =>
@@ -472,6 +511,12 @@ export const clearAttestation = (id: string): Promise<WriteResult> => obsWrite(`
 export const createSlackEndpoint = (projectId: string, input: { name: string; channel: string; signing_secret: string; bot_token: string }): Promise<WriteResult> =>
   obsWrite("/v1/chat/endpoints", { project_id: projectId, kind: "slack", name: input.name, config: { channel: input.channel },
     secrets: { signing_secret: input.signing_secret, bot_token: input.bot_token } }, press("slack", "Save"));
+export const createTeamsEndpoint = (projectId: string, input: { name: string; app_id: string; tenant_id: string; app_password: string; channel?: string }): Promise<WriteResult> =>
+  obsWrite("/v1/chat/endpoints", { project_id: projectId, kind: "teams", name: input.name,
+    config: { app_id: input.app_id, tenant_id: input.tenant_id, ...(input.channel ? { channel: input.channel } : {}) },
+    secrets: { app_password: input.app_password } }, press("teams", "Save"));
+export const revokeMyChatLink = (linkId: string): Promise<WriteResult> =>
+  obsWrite(`/v1/chat/links/${enc(linkId)}/revoke`, {}, press(`my-chat-link:${linkId}`, "Revoke"));
 export const replayEvents = (projectId: string, ids: string[], mode: "reprocess" | "force", reason = ""): Promise<WriteResult> =>
   obsWrite("/v1/intake/events/replay", { project_id: projectId, intake_event_ids: ids, mode, reason }, press(`replay:${mode}`, mode === "force" ? "Force run" : "Reprocess"));
 /** "Would match": a read-only dry run over the connection's last 50 events (integration:read). */

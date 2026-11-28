@@ -27,7 +27,7 @@ import re
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from ..config import Settings
 from ..ports import get_engine_ports, sql
@@ -2258,14 +2258,15 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
         emit_event(c, project_id, "code_task.delivery_retried", "boss", "code_task_run", run_id,
                    {"files": len(files), "automatic": automatic,
                     "why": "the build passed its gates; only the push and the pull request run"})
-        proposal = sf.propose_pull_request(
-            c, project_id, run.get("task_id"), reservation_id=reservation.get("reservation_id"),
-            dedupe_key=f"code:task:{run_id}", title=run["title"],
-            branch_name=held.get("branch") or f"boss/code/{fctx.get('root_run_id') or run_id}",
-            summary=str(held.get("summary") or ""), files=files,
-            created_by_job_id=fctx.get("created_by_job_id"),
-            quality_gate_id=held.get("quality_gate_id"), run_id=run_id,
-            pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
+        pr_base = _build_base.pr_base_for_run(c, run, getattr(sf, "github", None))
+    proposal = sf.propose_pull_request(
+        None, project_id, run.get("task_id"), reservation_id=reservation.get("reservation_id"),
+        dedupe_key=f"code:task:{run_id}", title=run["title"],
+        branch_name=held.get("branch") or f"boss/code/{fctx.get('root_run_id') or run_id}",
+        summary=str(held.get("summary") or ""), files=files,
+        created_by_job_id=fctx.get("created_by_job_id"),
+        quality_gate_id=held.get("quality_gate_id"), run_id=run_id,
+        pr_base=pr_base, db_engine=engine)
     status = proposal.get("status")
     if status not in ("created", "succeeded") and not (
             status == "reused" and proposal.get("pull_request_url")):
@@ -2292,6 +2293,36 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
             "pull_request_url": proposal.get("pull_request_url"),
             "pull_request_number": proposal.get("pull_request_number"),
             "decision_id": proposal.get("decision_id")}
+
+
+LINEAGE_ATTEMPT_CEILING = 3  # matches shepherd_service.SHEPHERD_MAX_LINEAGE_ATTEMPTS
+
+
+def _running_boss_commit() -> str:
+    from . import step_recovery
+
+    return step_recovery.boss_build()
+
+
+def _breaker_bypass_state(fctx_prev: dict, current_commit: str) -> tuple[bool, dict[str, int]]:
+    """Allow one infra-breaker bypass per lineage per BOSS version, or whenever the running
+    BOSS commit differs from the commit that recorded the last infra failure."""
+    raw_bypasses = fctx_prev.get("infra_breaker_bypasses") if isinstance(fctx_prev, Mapping) else None
+    bypasses: dict[str, int] = {}
+    if isinstance(raw_bypasses, Mapping):
+        for k, v in raw_bypasses.items():
+            try:
+                bypasses[str(k)] = 0 if isinstance(v, bool) or v is None else int(v)
+            except (TypeError, ValueError, OverflowError):
+                bypasses[str(k)] = 0
+    last_commit = (
+        str(fctx_prev.get("infra_boss_commit") or "").strip()
+        if isinstance(fctx_prev, Mapping)
+        else ""
+    )
+    version_changed = bool(last_commit) and last_commit != current_commit
+    once_this_version = bypasses.get(current_commit, 0) < 1
+    return (version_changed or once_this_version), bypasses
 
 
 def _within_auto_retry_budget(settings, fctx_prev: dict, automatic: bool) -> bool:
@@ -2418,19 +2449,27 @@ def retry_code_task(
     prev_substrate = (fctx_prev.get("execution_substrate") or "").lower()
     substrate_override = spec.get("substrate")
     substrate_fallback_note = ""
+    current_commit = _running_boss_commit()
+    bypass_allowed, next_bypasses = _breaker_bypass_state(fctx_prev, current_commit)
+    auto_budget_ok = bool(platform_retry and _within_auto_retry_budget(settings, fctx_prev, automatic))
     if prev_infra and prev_substrate == "microvm":
         substrate_override = "local"
         substrate_fallback_note = (
             "NOTE: the previous attempt failed with an infrastructure error on the micro-VM "
             "substrate; this attempt runs on the local substrate (degraded mode).")
-    elif (prev_infra and prev_substrate == "local_subprocess" and attempt >= 3
-          and not fix_note and not (by_person and not automatic)
-          and not (platform_retry and _within_auto_retry_budget(settings, fctx_prev, automatic))):
-        raise ValueError(
-            f"circuit breaker: {attempt - 1} attempts in this lineage have failed with "
-            f"infrastructure errors (last: {str(prev.get('error') or '')[:200]!r}) and the run is "
-            "already on the local substrate. A blind retry will fail the same way — fix the "
-            "platform issue (see the error above), then press Retry or retry with a note.")
+    elif prev_infra and prev_substrate == "local_subprocess" and attempt >= 3 and not auto_budget_ok:
+        wants_bypass = bool(fix_note or (by_person and not automatic))
+        if (not fix_note and not (by_person and not automatic)) or not bypass_allowed:
+            why_refused = (
+                f"already bypassed once on BOSS build {current_commit} without a BOSS update"
+                if wants_bypass and not bypass_allowed
+                else "fix the platform issue (see the error above), then press Retry or retry with a note"
+            )
+            raise ValueError(
+                f"circuit breaker: {attempt - 1} attempts in this lineage have failed with "
+                f"infrastructure errors (last: {str(prev.get('error') or '')[:200]!r}) and the run is "
+                f"already on the local substrate. A blind retry will fail the same way — {why_refused}.")
+        next_bypasses[current_commit] = int(next_bypasses.get(current_commit) or 0) + 1
 
     work_branch = f"boss/code/{root}"
     pr_url = prev.get("pull_request_url")
@@ -2581,6 +2620,7 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or None,
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          **({"infra_breaker_bypasses": next_bypasses} if next_bypasses else {}),
                           # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
                           # after the job is queued (a fast-failing attempt read it as 0).
                           **({"auto_infra_retry": int(auto_retry_attempt)}
@@ -2804,14 +2844,15 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
         # Use the root-run branch so a waived iteration lands on the SAME branch/PR the
         # iteration chain has been accumulating (create_pull_request reuses the open PR).
         root_run = fctx.get("root_run_id") or run_id
-        proposal = sf.propose_pull_request(
-            c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
-            dedupe_key=f"code:task:{run_id}", title=run["title"],
-            branch_name=f"boss/code/{root_run}", settle_run_id=run_id,
-            summary=(f"⚠️ GATE OVERRIDE by {actor}: waived {waive_gates} (QualityGate {qg}).\n"
-                     f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
-            files=files, created_by_job_id=fctx.get("created_by_job_id"),
-            pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
+        pr_base = _build_base.pr_base_for_run(c, run, getattr(sf, "github", None))
+    proposal = sf.propose_pull_request(
+        None, project_id, task_id, reservation_id=reservation.get("reservation_id"),
+        dedupe_key=f"code:task:{run_id}", title=run["title"],
+        branch_name=f"boss/code/{root_run}", settle_run_id=run_id,
+        summary=(f"⚠️ GATE OVERRIDE by {actor}: waived {waive_gates} (QualityGate {qg}).\n"
+                 f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
+        files=files, created_by_job_id=fctx.get("created_by_job_id"),
+        pr_base=pr_base, db_engine=engine)
     status = proposal.get("status")
     # `reused`: this build's PR effect already happened (a prior receipt) — the PR is open.
     if status not in ("created", "succeeded", "reused"):
@@ -2946,14 +2987,14 @@ def open_parked_with_checks_failing(engine, settings: Settings, jobs, run_id: st
                 reason=f"checks-failing PR {run_id[:12]}", expires_in_minutes=15)
             _build_budget.bind(c, run_id, None)
             _set_phase(c, run_id, "opening_pr")
-            proposal = sf.propose_pull_request(
-                c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
-                dedupe_key=f"code:task:{run_id}", title=run["title"], branch_name=branch,
-                summary=cf.pr_section(record) + str(fctx.get("pr_summary") or ""),
-                files=files, created_by_job_id=fctx.get("created_by_job_id"),
-                evidence=evidence, quality_gate_id=fctx.get("quality_gate_id"), run_id=run_id,
-                checks_failing=record,
-                pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
+            pr_base = _build_base.pr_base_for_run(c, run, getattr(sf, "github", None))
+        proposal = sf.propose_pull_request(
+            None, project_id, task_id, reservation_id=reservation.get("reservation_id"),
+            dedupe_key=f"code:task:{run_id}", title=run["title"], branch_name=branch,
+            summary=cf.pr_section(record) + str(fctx.get("pr_summary") or ""),
+            files=files, created_by_job_id=fctx.get("created_by_job_id"),
+            evidence=evidence, quality_gate_id=fctx.get("quality_gate_id"), run_id=run_id,
+            checks_failing=record, pr_base=pr_base, db_engine=engine)
     status = proposal.get("status")
     if status not in ("created", "succeeded", "reused") or not proposal.get("pull_request_url"):
         with _transaction(engine) as c:
@@ -3166,15 +3207,16 @@ def person_side_reason(reason: str) -> Optional[str]:
     return _person_side(str(reason or "").lower())
 
 
-def _is_limit_message(reason: str) -> bool:
-    """STRICT: a pipeline reason can carry the app's own test output ("expected 'Weekly limit
-    reached' to be visible"), so a plan limit counts only with the reset it named."""
+def _is_limit_message(reason: str, *, strict: bool = True) -> bool:
+    """STRICT for mixed pipeline output ("expected 'Weekly limit reached' to be visible");
+    NON-STRICT for a direct provider/CLI error line (BOSSAPP-1488)."""
     from .model_router.headroom import is_limit_message
 
-    return is_limit_message(reason, strict=True)
+    return is_limit_message(reason, strict=strict)
 
 
-def classify_pipeline_exception(reason: str) -> tuple[str, str]:
+def classify_pipeline_exception(reason: str, *,
+                                provider_error: Optional[str] = None) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
     failure: retrying with more turns / on the existing branch is the fix, and it must NOT trigger
@@ -3182,6 +3224,9 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
 
     Model TPM / rate-limit / credits / budget exhaustion is needs_human: escalate to a Decision
     rather than retrying forever into the DLQ (W2.5 / W-REL-03).
+
+    BOSSAPP-1488: when `provider_error` (CLI stderr / provider error line separate from mixed
+    build output) is supplied, classify it non-strictly while keeping mixed `reason` strict.
     """
     r = (reason or "").lower()
     from .harness_failures import parse_sentence
@@ -3200,6 +3245,8 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
         return "needs_human", "build_services_unavailable"
     if "error_max_turns" in r or "max turns" in r or "max_turns" in r:
         return "recoverable", "max_turns_exhausted"
+    if provider_error and _is_limit_message(provider_error, strict=False):
+        return "needs_human", "model_rate_limit"
     # Model capacity / economics — human or capacity change required; not silent requeue.
     if any(
         sig in r
@@ -3300,11 +3347,15 @@ def _fail(
         provider_error, exception, …) for dashboards + auto-recovery routing.
 
     Recorded on the run (finalize_ctx) and the event so the console/API can show WHY + WHAT."""
+    from . import step_recovery as _step_recovery
+
+    infra_commit = _step_recovery.boss_build() if failure_class == "infra" else None
     if hasattr(connection, "save_run"):
         run = connection.get_run(run_id) or {}
         finalize_ctx = dict(run.get("finalize_ctx") or {})
         finalize_ctx.update(
-            {"failure_class": failure_class, "reason_code": reason_code}
+            {"failure_class": failure_class, "reason_code": reason_code,
+             **({"infra_boss_commit": infra_commit} if infra_commit else {})}
         )
         connection.save_run(
             run_id,
@@ -3316,12 +3367,14 @@ def _fail(
             },
         )
     else:
+        extra_fc = (" || jsonb_build_object('infra_boss_commit', CAST(:ibc AS text))"
+                    if infra_commit else "")
         connection.execute(
             sql(
                 "UPDATE code_task_runs SET status=:st, phase='done', error=:e, "
                 "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
                 "|| jsonb_build_object('failure_class', CAST(:fc AS text), "
-                "'reason_code', CAST(:rc AS text)), updated_at=now() WHERE id=:id"
+                "'reason_code', CAST(:rc AS text))" + extra_fc + ", updated_at=now() WHERE id=:id"
             ),
             {
                 "st": status,
@@ -3329,6 +3382,7 @@ def _fail(
                 "fc": failure_class,
                 "rc": reason_code,
                 "id": run_id,
+                **({"ibc": infra_commit} if infra_commit else {}),
             },
         )
     emit_event(connection, project_id, "code_task.failed", "boss", "code_task_run", run_id,
@@ -4059,19 +4113,21 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 return {"status": "cancelled", "done": True,
                         "reason": "stopped before the PR was opened"}
             _set_phase(c, run_id, "opening_pr")
-            proposal = sf.propose_pull_request(
-                c, project_id, task_id,
-                reservation_id=reservation_id,
-                dedupe_key=f"code:task:{run_id}",
-                title=f"{run['title']}",
-                branch_name=work_branch,
-                # Who made it, as git trailers in the PR body (agent_acts; "" when unsigned).
-                summary=result.summary + _pr_trailers(c, run_id),
-                files=result.diff,
-                created_by_job_id=fctx.get("created_by_job_id"),
-                settle_run_id=run_id,
-                pr_base=repo_base_branch,
-            )
+            trailers = _pr_trailers(c, run_id)
+        proposal = sf.propose_pull_request(
+            None, project_id, task_id,
+            reservation_id=reservation_id,
+            dedupe_key=f"code:task:{run_id}",
+            title=f"{run['title']}",
+            branch_name=work_branch,
+            # Who made it, as git trailers in the PR body (agent_acts; "" when unsigned).
+            summary=result.summary + trailers,
+            files=result.diff,
+            created_by_job_id=fctx.get("created_by_job_id"),
+            settle_run_id=run_id,
+            pr_base=repo_base_branch,
+            db_engine=engine,
+        )
 
         status = proposal.get("status")
         if status not in ("created", "succeeded"):

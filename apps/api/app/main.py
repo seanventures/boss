@@ -2291,6 +2291,9 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
                     if conversation["actor"] != who:
                         raise HTTPException(status_code=404, detail="No such conversation.")
                     _conversation_authority(request, project).check_work()
+                elif intent_family == "metatron_turn":
+                    effective_actor = claimed or str(request_actor_or_principal() or "")
+                    require_project_actor(connection, project, effective_actor, "agent_chat")
                 else:
                     require_project_write_actor(connection, project, claimed, "role_review")
         except identity_guard.AccessRefused as error:
@@ -2572,6 +2575,9 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     # @public on an identity router and always enforced. Requiring a legacy key here made sign-in
     # unreachable on a default install (BOSS_REQUIRE_API_AUTH=true).
     is_identity_public = identity_guard.is_identity_public_route(request.scope)
+    is_metatron_policy_keys = (
+        request.method == "GET" and route_path == "/v1/metatron/policy/keys"
+    )
     if not auth_required and any(
         request.headers.get(name) for name in (
             "X-BOSS-MCP-Operation", "X-BOSS-MCP-Confirmation", "X-BOSS-MCP-Project"
@@ -2593,6 +2599,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_investigation_callback
         or is_telemetry_collector
         or is_identity_public
+        or is_metatron_policy_keys
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
@@ -2823,6 +2830,84 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         current_api_principal.reset(principal_token)
         current_transport_authenticated.reset(authenticated_token)
         current_auth_method.reset(auth_method_token)
+
+
+def _parse_metatron_client_semver(raw: str) -> Optional[tuple[int, int, int]]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if "/" in s:
+        _, _, s = s.partition("/")
+    token = s.split()[0].strip().lstrip("v")
+    core = token.split("-", 1)[0].split("+", 1)[0]
+    parts = core.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        major = int(parts[0])
+        minor = int(parts[1])
+        patch = int(parts[2]) if len(parts) > 2 else 0
+        return (major, minor, patch)
+    except ValueError:
+        return None
+
+
+@app.middleware("http")
+async def metatron_contract_versioning(request: Request, call_next):
+    """Emit X-Boss-Version on /v1/ responses; enforce X-Metatron-Client / X-Boss-Contract only when present."""
+    from boss_engine.services.metatron_server import (
+        MIN_BOSS_CONTRACT,
+        MIN_METATRON_CLIENT,
+        MIN_METATRON_CLIENT_STR,
+    )
+
+    route_path = _route_relative_path(request)
+    if route_path.startswith("/v1/"):
+        raw_client = request.headers.get("X-Metatron-Client")
+        if raw_client is not None:
+            parsed = _parse_metatron_client_semver(raw_client)
+            if parsed is None or parsed < MIN_METATRON_CLIENT:
+                return JSONResponse(
+                    status_code=426,
+                    content={
+                        "error": {
+                            "code": "client_too_old",
+                            "message": (
+                                f"Metatron client {raw_client!r} is unsupported; "
+                                f"minimum required is {MIN_METATRON_CLIENT_STR}."
+                            ),
+                            "retryable": False,
+                            "min_client": MIN_METATRON_CLIENT_STR,
+                        }
+                    },
+                    headers={"X-Boss-Version": app.version},
+                )
+        raw_contract = request.headers.get("X-Boss-Contract")
+        if raw_contract is not None:
+            try:
+                contract_num = int(raw_contract.strip())
+            except ValueError:
+                contract_num = -1
+            if contract_num < MIN_BOSS_CONTRACT:
+                return JSONResponse(
+                    status_code=426,
+                    content={
+                        "error": {
+                            "code": "client_too_old",
+                            "message": (
+                                f"BOSS contract {raw_contract!r} is unsupported; "
+                                f"minimum required is {MIN_BOSS_CONTRACT}."
+                            ),
+                            "retryable": False,
+                            "min_client": MIN_METATRON_CLIENT_STR,
+                        }
+                    },
+                    headers={"X-Boss-Version": app.version},
+                )
+    response = await call_next(request)
+    if route_path.startswith("/v1/"):
+        response.headers.setdefault("X-Boss-Version", app.version)
+    return response
 
 
 def project_summary_from_row(row) -> ProjectSummary:
@@ -7077,6 +7162,52 @@ async def receive_bitbucket_webhook(request: Request):
     )
 
 
+@app.post("/v1/webhooks/gitlab", status_code=202)
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
+async def receive_gitlab_webhook(request: Request):
+    """GitLab ingress (BOSSAPP-937): X-Gitlab-Token or HMAC verified, MR/note/pipeline/push
+    normalized to canonical repo-host events."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(connection, "gitlab", raw_body, headers)
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] in {"unrouted", "ignored"}:
+        return Response(status_code=204)
+    return JSONResponse(
+        status_code=202,
+        content=InboundWebhookResponse(**result).model_dump(mode="json"),
+    )
+
+
+@app.post("/v1/webhooks/azure-devops", status_code=202)
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
+async def receive_azure_devops_webhook(request: Request):
+    """Azure DevOps Repos ingress (BOSSAPP-937): HMAC or X-Azure-DevOps-Token verified,
+    git.pullrequest.* and git.push normalized to canonical repo-host events."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(connection, "azure_devops", raw_body, headers)
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] in {"unrouted", "ignored"}:
+        return Response(status_code=204)
+    return JSONResponse(
+        status_code=202,
+        content=InboundWebhookResponse(**result).model_dump(mode="json"),
+    )
+
+
 @app.post("/v1/webhooks/plane", status_code=202)
 @public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.plane_webhook_hmac)
 async def receive_plane_webhook(request: Request):
@@ -8439,7 +8570,7 @@ def list_pipeline_profiles_endpoint(project_id: str):
 @app.post("/v1/pipeline-profiles", status_code=201)
 @permit(P.PIPELINE_MANAGE, scope=Scope.project(body="project_id"))
 def create_pipeline_profile_endpoint(payload: open_bodies.PipelineProfileCreateBody):
-    """Create/update a custom profile (enterprise edition only)."""
+    """Create/update a custom pipeline profile."""
     payload = payload.payload()
     from .services import pipeline_profile_service as pps
 
@@ -10374,14 +10505,7 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
             "stack_deploy_allowed": outward_ssh,
             "host_writes_allowed": host_writes_allowed,
             "host_write_blocker": None if host_writes_allowed else {
-                "message": (
-                    "Direct host changes require BOSS_SSH_HOST_DEPLOY_ALLOWED=true."
-                    if str(getattr(settings, "boss_edition", "community")).strip().lower()
-                    in {"enterprise", "enterprise_cloud", "enterprise_self_hosted", "cloud"}
-                    else ("Direct key installation, Docker provisioning, and host retirement "
-                          "are disabled in this edition until an approved Resource Plane flow "
-                          "is available.")
-                ),
+                "message": "Direct host changes require BOSS_SSH_HOST_DEPLOY_ALLOWED=true.",
             },
             "blocker": None if outward_ssh else {
                 "setting": "BOSS_SSH_OUTWARD_ALLOWED",
@@ -11513,12 +11637,36 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
             connection, run_row["project_id"], actor, "task_create"
         )
         # A PERSON'S RETRY IS THEIR "PROCEED" past the infra circuit breaker, as a note is.
-        from boss_engine.services.agent_identity import is_person
+        # Only a direct human session counts — never an agent turn, OBO run_token, act chain,
+        # API key, or unauthenticated shadow-mode actor string.
+        from boss_engine.identity.enforcement import is_person_session
+        from boss_engine.identity.legacy import is_bridge_principal
+        from boss_engine.identity.lineage import current_context
 
-        by_person = is_person(actor, connection, run_row["project_id"])
+        auth_ctx = identity_guard.REQUEST_IDENTITY.get()
+        if auth_ctx is None and not identity_guard.IDENTITY_MODE.get():
+            auth_ctx = current_context()
+        by_person = bool(
+            auth_ctx is not None
+            and is_person_session(auth_ctx)
+            and getattr(auth_ctx, "run_token", None) is None
+            and not getattr(getattr(auth_ctx, "chain", None), "hops", ())
+            and getattr(auth_ctx, "act", None) is None
+            and not is_bridge_principal(auth_ctx.principal.id)
+        )
     from .services.code_task_service import RetryRefused, retry_code_task
+    from .services.shepherd_service import SHEPHERD_MAX_LINEAGE_ATTEMPTS
     try:
         rr = p.get("repair_retries")
+        raw_ceiling = p.get("attempt_ceiling")
+        if isinstance(raw_ceiling, int) and not isinstance(raw_ceiling, bool) and raw_ceiling >= 1:
+            ceiling = (
+                min(raw_ceiling, 20)
+                if by_person
+                else min(raw_ceiling, SHEPHERD_MAX_LINEAGE_ATTEMPTS)
+            )
+        else:
+            ceiling = 10 if by_person else SHEPHERD_MAX_LINEAGE_ATTEMPTS
         # profile/repair_retries were accepted by retry_code_task() and DROPPED here, so a
         # caller asking to "retry this in lean mode" silently got the project default. The
         # console's Retry button, the MCP tool and this endpoint must all be able to move the
@@ -11529,6 +11677,7 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
             fix_note=p.get("fix_note", ""),
             profile=(p.get("profile") or None),
             repair_retries=(int(rr) if isinstance(rr, int) else None),
+            attempt_ceiling=ceiling,
             by_person=by_person,
         )
     except RetryRefused as exc:
@@ -11691,11 +11840,6 @@ def deploy_code_task_endpoint(run_id: str, request: Request, payload: Optional[d
         return {"plan": plan, "markdown": render_plan_markdown(plan)}
     if mode != "ssh":
         raise HTTPException(status_code=422, detail="mode must be 'dry_run' or 'ssh'")
-    if str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}:
-        from boss_engine.services.governed_host_deploy import ungoverned_refusal
-
-        raise HTTPException(status_code=409,
-                            detail=ungoverned_refusal("Community SSH deployment"))
 
     # mode == 'ssh' — actuate on a real host (Phase 2/3). Requires an explicit host, the SSH key,
     # and the outward gate; otherwise return the plan + the reason it's held (never touch a host).
@@ -14618,16 +14762,30 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         # conversation has moved past.
         offers: list = []
         next_steps: list = []
+        saw_assistant = False
         for message in reversed(history):
-            if message.get("role") != "assistant":
+            role = message.get("role")
+            if role != "assistant":
+                # A new user message ends the prior turn so unclicked offers from earlier turns
+                # never resurrect after an unrelated plain-text exchange.
+                if role == "user":
+                    break
                 continue
-            offers = list(message.get("proposed_actions") or [])
-            # THE OTHER STANDING OFFER. A turn that stopped short ends with ONE resume press
-            # ("Keep waiting", "Continue") instead of buttons -- same restore, same reason: a
-            # fresh process or a reloaded console only has the thread, never the live HTTP
-            # response that first carried it.
-            next_steps = list(message.get("next_steps") or [])
-            break
+            if not saw_assistant:
+                # THE OTHER STANDING OFFER. A turn that stopped short ends with ONE resume press
+                # ("Keep waiting", "Continue") instead of buttons -- same restore, same reason: a
+                # fresh process or a reloaded console only has the thread, never the live HTTP
+                # response that first carried it.
+                next_steps = list(message.get("next_steps") or [])
+                saw_assistant = True
+            msg_offers = list(message.get("proposed_actions") or [])
+            if msg_offers:
+                offers = msg_offers
+                break
+            # Preserve staged offers across trailing non-superseding status/consent/error
+            # assistant messages until acted upon (actions) or superseded (proposal).
+            if message.get("actions") or message.get("proposal"):
+                break
         return {
             "thread_id": thread_id,
             "messages": history,
@@ -15510,6 +15668,7 @@ def get_task(task_id: str) -> TaskSummary:
     "/v1/self-improvement/proposals",
     response_model=SelfImprovementProposalListResponse,
 )
+@permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
 def list_self_improvement_proposals(
     project_id: str, limit: int = 25, offset: int = 0
 ) -> SelfImprovementProposalListResponse:
@@ -15532,6 +15691,7 @@ def list_self_improvement_proposals(
     response_model=SelfImprovementProposalDetail,
     status_code=201,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def create_self_improvement_proposal(
     payload: SelfImprovementProposalCreateRequest,
 ) -> SelfImprovementProposalDetail:
@@ -15567,6 +15727,7 @@ def create_self_improvement_proposal(
     "/v1/self-improvement/proposals/{proposal_id}",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_READ, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def get_self_improvement_proposal(
     proposal_id: str,
 ) -> SelfImprovementProposalDetail:
@@ -15589,6 +15750,7 @@ def get_self_improvement_proposal(
     "/v1/self-improvement/proposals/{proposal_id}/canary",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def record_self_improvement_canary(
     proposal_id: str, payload: SelfImprovementCanaryRequest
 ) -> SelfImprovementProposalDetail:
@@ -15625,6 +15787,7 @@ def record_self_improvement_canary(
     "/v1/self-improvement/proposals/{proposal_id}/rollout",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def record_self_improvement_rollout(
     proposal_id: str, payload: SelfImprovementRolloutRequest
 ) -> SelfImprovementProposalDetail:
@@ -15661,6 +15824,7 @@ def record_self_improvement_rollout(
     "/v1/self-improvement/proposals/{proposal_id}/rollback",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def rollback_self_improvement_proposal(
     proposal_id: str, payload: SelfImprovementRollbackRequest
 ) -> SelfImprovementProposalDetail:
@@ -15697,6 +15861,7 @@ def rollback_self_improvement_proposal(
     "/v1/self-improvement/proposals/{proposal_id}/run-canary",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def run_self_improvement_canary(
     proposal_id: str, payload: SelfImprovementRunCanaryRequest
 ) -> SelfImprovementProposalDetail:
@@ -15729,6 +15894,7 @@ def run_self_improvement_canary(
     "/v1/self-improvement/proposals/{proposal_id}/rollout/start",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def start_self_improvement_rollout(
     proposal_id: str, payload: SelfImprovementStartRolloutRequest
 ) -> SelfImprovementProposalDetail:
@@ -15764,6 +15930,7 @@ def start_self_improvement_rollout(
     "/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def advance_self_improvement_rollout(
     proposal_id: str, payload: SelfImprovementAdvanceRolloutRequest
 ) -> SelfImprovementProposalDetail:
@@ -16633,6 +16800,41 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
             raise HTTPException(status_code=404, detail="Artifact not found")
         require_project_reader(connection, row["project_id"])
         return artifact_detail_from_row(row)
+
+
+@app.get("/v1/artifacts/{artifact_id}/download")
+@permit(P.ARTIFACT_READ, scope=Scope.of("artifact", path="artifact_id"))
+def download_artifact(artifact_id: str, format: str = "text") -> Response:
+    """Download full test evidence or artifact report as a file attachment (BOSSAPP-1011)."""
+    from boss_engine.services import test_evidence as _test_evidence
+
+    with begin(engine) as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, artifact_type, title, content
+                FROM artifacts
+                WHERE id = :artifact_id
+                """
+            ),
+            {"artifact_id": artifact_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        require_project_reader(connection, row["project_id"])
+    content = row["content"] if isinstance(row["content"], dict) else {}
+    payload, media_type, ext = _test_evidence.format_artifact_download(
+        {**content, "title": content.get("title") or row["title"]},
+        fmt=format,
+    )
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", str(row["artifact_type"] or "artifact")).strip("-").lower()
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(row["id"]))[:48]
+    filename = f"{slug}-{safe_id}.{ext}"
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/v1/artifacts/{artifact_id}/rebuild")
@@ -18686,11 +18888,10 @@ def finish_channel_connection(
         # Google's own words. The commonest is access_denied, which simply means the operator
         # pressed Cancel — not a fault, and it should not read like one.
         return page("Not connected", f"Google returned: {error}", False)
-    with begin(engine) as connection:
-        try:
-            result = complete(connection, settings, code=code, state=state)
-        except ChannelOAuthError as failure:
-            return page("Could not connect", str(failure), False)
+    try:
+        result = complete(None, settings, code=code, state=state, db_engine=engine)
+    except ChannelOAuthError as failure:
+        return page("Could not connect", str(failure), False)
     channel = result.get("channel") or {}
     if channel.get("verified"):
         return page("Channel connected",
@@ -18773,11 +18974,12 @@ def disconnect_channel(
 
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "integration_manage")
-        try:
-            result = disconnect(connection, settings, project_id=project_id,
-                                connection_key=connection_key, actor=actor)
-        except ChannelOAuthError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        result = disconnect(None, settings, project_id=project_id,
+                            connection_key=connection_key, actor=actor, db_engine=engine)
+    except ChannelOAuthError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with begin(engine) as connection:
         _record_governed(
             connection,
             project_id=project_id,
@@ -18787,7 +18989,7 @@ def disconnect_channel(
             payload={"provider": provider, "connection_key": connection_key,
                      "status": result.get("status")},
         )
-        return result
+    return result
 
 
 @app.post("/v1/role-skills/sync")
@@ -22028,6 +22230,7 @@ def get_changeset_terraform_export(
     "/v1/projects/{project_id}/terraform-drift-reconcile",
     response_model=TerraformDriftReconcileResponse,
 )
+@permit(P.INFRA_PROVISION, scope=Scope.project(path="project_id"))
 def terraform_drift_reconcile(
     project_id: str,
     payload: TerraformDriftReconcileRequest,
@@ -25034,23 +25237,24 @@ def create_pull_request_proposal(
                 connection, payload.project_id, current_api_principal.get() or "ceo",
                 "github_manage",
             )
-            try:
-                result = software_factory.propose_pull_request(
-                    connection,
-                    payload.project_id,
-                    payload.task_id,
-                    payload.reservation_id,
-                    payload.dedupe_key,
-                    payload.title,
-                    payload.branch_name,
-                    payload.summary,
-                    payload.files,
-                    payload.created_by_job_id,
-                    payload.agent_module_id,
-                )
-            except AgentModuleNotFoundError as error:
-                raise HTTPException(status_code=422, detail=str(error)) from error
-            return PullRequestProposalResponse(**result)
+        try:
+            result = software_factory.propose_pull_request(
+                None,
+                payload.project_id,
+                payload.task_id,
+                payload.reservation_id,
+                payload.dedupe_key,
+                payload.title,
+                payload.branch_name,
+                payload.summary,
+                payload.files,
+                payload.created_by_job_id,
+                payload.agent_module_id,
+                db_engine=engine,
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return PullRequestProposalResponse(**result)
 
 
 @app.post(
@@ -25068,9 +25272,10 @@ def propose_ci_config(
             payload.actor,
             "task_create",
         )
-        try:
-            descriptor = software_factory.pipeline.discover(payload.repo)
-            descriptor_data = descriptor.to_dict()
+    try:
+        descriptor = software_factory.pipeline.discover(payload.repo)
+        descriptor_data = descriptor.to_dict()
+        with begin(engine) as connection:
             emit_event(
                 connection,
                 payload.project_id,
@@ -25080,41 +25285,42 @@ def propose_ci_config(
                 payload.repo,
                 descriptor_data,
             )
-            if descriptor.configured:
-                return CIConfigProposalResponse(
-                    status="existing_pipeline",
-                    pipeline_descriptor=descriptor_data,
-                )
-            generated = ci_config_generator.generate(
-                language=payload.language,
-                framework=payload.framework,
-                target=payload.target,
+        if descriptor.configured:
+            return CIConfigProposalResponse(
+                status="existing_pipeline",
+                pipeline_descriptor=descriptor_data,
             )
-            proposal = software_factory.propose_pull_request(
-                connection,
-                payload.project_id,
-                payload.task_id,
-                payload.reservation_id,
-                payload.dedupe_key,
-                payload.title,
-                payload.branch_name,
-                (
-                    "Add deterministic CI build/test/deploy-evidence configuration. "
-                    "Provider deployment remains governed by BOSS ChangeSets."
-                ),
-                [FileChange(path=generated["path"], content=generated["content"])],
-                payload.created_by_job_id,
-            )
-        except (ValueError, IntegrationConfigurationError) as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return CIConfigProposalResponse(
-            status=proposal["status"],
-            pipeline_descriptor=descriptor_data,
-            generated_config={
-                key: value for key, value in generated.items() if key != "content"
-            },
-            proposal=PullRequestProposalResponse(**proposal),
+        generated = ci_config_generator.generate(
+            language=payload.language,
+            framework=payload.framework,
+            target=payload.target,
         )
+        proposal = software_factory.propose_pull_request(
+            None,
+            payload.project_id,
+            payload.task_id,
+            payload.reservation_id,
+            payload.dedupe_key,
+            payload.title,
+            payload.branch_name,
+            (
+                "Add deterministic CI build/test/deploy-evidence configuration. "
+                "Provider deployment remains governed by BOSS ChangeSets."
+            ),
+            [FileChange(path=generated["path"], content=generated["content"])],
+            payload.created_by_job_id,
+            db_engine=engine,
+        )
+    except (ValueError, IntegrationConfigurationError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return CIConfigProposalResponse(
+        status=proposal["status"],
+        pipeline_descriptor=descriptor_data,
+        generated_config={
+            key: value for key, value in generated.items() if key != "content"
+        },
+        proposal=PullRequestProposalResponse(**proposal),
+    )
 
 
 @app.post("/v1/software-factory/merges", response_model=PullRequestMergeResponse)
@@ -25126,22 +25332,23 @@ def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResp
                 connection, payload.project_id, current_api_principal.get() or "ceo",
                 "github_manage",
             )
-            try:
-                result = software_factory.merge_pull_request(
-                    connection,
-                    payload.project_id,
-                    None,
-                    payload.decision_id,
-                    payload.dedupe_key,
-                    payload.pull_request_number,
-                    payload.pull_request_url,
-                    payload.title,
-                    payload.branch_name,
-                    payload.created_by_job_id,
-                )
-            except ValueError as error:
-                raise HTTPException(status_code=422, detail=str(error)) from error
-            return PullRequestMergeResponse(**result)
+        try:
+            result = software_factory.merge_pull_request(
+                None,
+                payload.project_id,
+                None,
+                payload.decision_id,
+                payload.dedupe_key,
+                payload.pull_request_number,
+                payload.pull_request_url,
+                payload.title,
+                payload.branch_name,
+                payload.created_by_job_id,
+                db_engine=engine,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return PullRequestMergeResponse(**result)
 
 
 @app.post(
@@ -31701,6 +31908,58 @@ def platform_standards_apply(
     )
 
 
+@app.get("/v1/rules-book")
+@permit(P.POLICY_READ, scope=Scope.project_or_org(query="project_id"))
+def get_rules_book(
+    project_id: str = "",
+    category: str = "",
+    role: str = "",
+    enforcement: str = "",
+    q: str = "",
+) -> dict:
+    """Read-only unified BOSS rules book generated from code (BOSSAPP-572)."""
+    from boss_engine.services.rules_book import list_rules
+
+    if project_id:
+        with begin() as connection:
+            return list_rules(
+                connection=connection,
+                project_id=project_id,
+                category=category or None,
+                role=role or None,
+                enforcement_kind=enforcement or None,
+                q=q or None,
+            )
+    return list_rules(
+        category=category or None,
+        role=role or None,
+        enforcement_kind=enforcement or None,
+        q=q or None,
+    )
+
+
+@app.get("/v1/rules-book/for-role/{role_key}")
+@permit(P.POLICY_READ, scope=Scope.project_or_org(query="project_id"))
+def get_rules_book_for_role(
+    role_key: str,
+    project_id: str = "",
+    max_tokens: int = 1200,
+) -> dict:
+    """Role-scoped rules book slice within a token budget (BOSSAPP-572)."""
+    from boss_engine.services.rules_book import rules_for_role
+
+    bounded = max(64, min(int(max_tokens or 1200), 16000))
+    if project_id:
+        with begin() as connection:
+            return rules_for_role(
+                role_key,
+                connection=connection,
+                project_id=project_id,
+                max_tokens=bounded,
+            )
+    return rules_for_role(role_key, max_tokens=bounded)
+
+
 @app.post("/v1/telemetry/mine", response_model=TelemetryMineResponse)
 @permit(P.RELIABILITY_READ, scope=Scope.org(), readonly_post=True)
 def telemetry_mine(payload: TelemetryMineRequest) -> TelemetryMineResponse:
@@ -33041,6 +33300,12 @@ def _ambient_org_actor(connection, claimed_actor: str | None) -> str:
 app.include_router(build_ambient_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor, org_actor=_ambient_org_actor))
+# ZERO-TOKEN JOBS & LEARNED SKILLS (BOSSAPP-939, BOSSAPP-941; Kiro gaps 6 & 8)
+from .routers.zero_token_jobs import build_zero_token_and_learned_skills_router
+
+app.include_router(build_zero_token_and_learned_skills_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # DOCUMENTS (routers/documents.py, services/documents.py; BOSSAPP-874): PRDs, plans, minutes and
 # architectures with append-only revisions, base-revision conflict checks and anchored comments.
 from .routers.documents import build_documents_router
@@ -33451,6 +33716,7 @@ def conversation_close_endpoint(conversation_id: str, payload: open_bodies.Proje
 # IDENTITY API (docs/product/IDENTITY.md §10). Always enforced: router keys starting `identity`.
 from .routers.identity_me import build_identity_me_router  # noqa: E402
 from .routers.identity_auth import build_identity_auth_router  # noqa: E402  (identity S1)
+from .routers.identity_metatron_auth import build_identity_metatron_auth_router  # noqa: E402  (MT-10)
 from .routers.identity_people import build_identity_people_router  # noqa: E402  (identity S1)
 from .routers.identity_sso import build_identity_sso_router  # noqa: E402  (identity S1)
 from .routers.identity_scim import build_identity_scim_router  # noqa: E402  (identity S1)
@@ -33462,6 +33728,7 @@ from boss_engine.identity.request_ids import RequestIdMiddleware  # noqa: E402  
 
 app.include_router(build_identity_me_router())
 app.include_router(build_identity_auth_router())
+app.include_router(build_identity_metatron_auth_router())
 app.include_router(build_identity_people_router())
 app.include_router(build_identity_sso_router())
 app.include_router(build_identity_scim_router())
@@ -33505,8 +33772,10 @@ app.include_router(build_security_router())
 app.include_router(build_links_router())
 app.include_router(build_oidc_router())
 from .routes_multirepo import build_multirepo_router  # noqa: E402  (multi-repo apps)
+from .routes_app_map import build_app_map_router  # noqa: E402  (BOSSAPP-555/556 App Map)
 
 app.include_router(build_multirepo_router())
+app.include_router(build_app_map_router())
 from .routes_infra_platform import build_infra_platform_router  # noqa: E402  (infra plugins)
 
 app.include_router(build_infra_platform_router())
@@ -33531,6 +33800,9 @@ app.include_router(build_subscription_fees_router())
 from .routes_mcp_oauth import build_mcp_oauth_router  # noqa: E402  (BOSSAPP-862)
 
 app.include_router(build_mcp_oauth_router())
+from .routers.quick_lane import router as quick_lane_router  # noqa: E402  (BOSSAPP-795..799)
+
+app.include_router(quick_lane_router)
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

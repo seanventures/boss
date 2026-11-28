@@ -27,11 +27,11 @@ import { ArchiveDialog } from "./project-archive";
 import { deleteProject, readDelete, type DeletePreview } from "./project-delete-actions";
 import styles from "./project-delete.module.css";
 
-const DELETE_TIP = "Delete this project and everything BOSS holds for it. The GitHub repository stays";
+const DELETE_TIP = "Delete this project and everything BOSS holds for it. Connected remote repositories stay untouched";
 
 /** "12 workflow runs" — the label's own word, lower-cased after a number. */
 export function countLine(count: number, label: string): string {
-  return `${count.toLocaleString("en-GB")} ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+  return `${count.toLocaleString("en-US")} ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
 }
 
 /** Where the console lands after a delete: Projects, in the same organization, no project. */
@@ -148,7 +148,7 @@ export function DeleteProjectDialog({ projectId, name, onClose }: {
                   <ul className={styles.counts}>
                     {preview.counts.map((c) => (
                       <li key={c.key} data-testid={`delete-count-${c.key}`}>
-                        <b>{c.count.toLocaleString("en-GB")}</b> <span>{c.label.toLowerCase()}</span>
+                        <b>{c.count.toLocaleString("en-US")}</b> <span>{c.label.toLowerCase()}</span>
                       </li>
                     ))}
                   </ul>
@@ -310,7 +310,7 @@ export function DangerZone({ projectId, name, home }: {
       <div className={styles.zoneRow}>
         <div>
           <b>Delete project</b>
-          <p className={styles.muted}>Remove it and everything BOSS holds for it: runs, builds, decisions, apps on servers, its knowledge graph. The GitHub repository stays.</p>
+          <p className={styles.muted}>Remove it and everything BOSS holds for it: runs, builds, decisions, apps on servers, its knowledge graph. Connected remote repositories stay untouched; local BOSS repositories are removed.</p>
         </div>
         {home ? (
           <button type="button" className={styles.dangerQuiet} aria-disabled="true" title={homeTip}

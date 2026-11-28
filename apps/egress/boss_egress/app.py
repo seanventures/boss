@@ -34,6 +34,7 @@ from starlette.routing import Route
 from boss_engine.identity import cascade, github_app, runs, tokens
 
 from .proxy import EgressProxy, EgressRequest
+from .registry import RegistryProxy
 
 log = logging.getLogger("boss.egress")
 
@@ -111,9 +112,11 @@ def _raw_path(request: Request) -> str:
     return request.url.path
 
 
-def build_app(engine: Optional[Any] = None, *, upstream=None, listen: bool = False) -> Starlette:
+def build_app(engine: Optional[Any] = None, *, upstream=None, registry_upstream=None,
+              listen: bool = False) -> Starlette:
     engine = engine or _engine()
     proxy = EgressProxy(engine, upstream=upstream)
+    registry = RegistryProxy(engine, upstream=registry_upstream)
     github_app.install_cascade_hook()
 
     async def forward(request: Request) -> Response:
@@ -126,6 +129,20 @@ def build_app(engine: Optional[Any] = None, *, upstream=None, listen: bool = Fal
 
         resp = await run_in_threadpool(proxy.handle, req)
         return Response(resp.body, status_code=resp.status, headers=dict(resp.headers))
+
+    def forward_registry(kind: str):
+        async def _endpoint(request: Request) -> Response:
+            body = await request.body()
+            req = EgressRequest(method=request.method, path=_raw_path(request), query=request.url.query,
+                                headers={k.lower(): v for k, v in request.headers.items()}, body=body,
+                                peer=(request.client.host if request.client else "unknown"),
+                                url=str(request.url).split("?", 1)[0])
+            from starlette.concurrency import run_in_threadpool
+
+            resp = await run_in_threadpool(registry.handle, kind, req)
+            return Response(resp.body, status_code=resp.status, headers=dict(resp.headers))
+
+        return _endpoint
 
     async def register(request: Request) -> Response:
         if not tokens.egress_service_key_ok(request.headers.get("x-boss-egress-key")):
@@ -146,6 +163,11 @@ def build_app(engine: Optional[Any] = None, *, upstream=None, listen: bool = Fal
         Route("/_boss/register", register, methods=["POST"]),
         Route("/github/{path:path}", forward, methods=["GET", "POST"]),
         Route("/github-api/{path:path}", forward, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
+        Route("/gitlab/{path:path}", forward, methods=["GET", "POST"]),
+        Route("/gitlab-api/{path:path}", forward, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
+        Route("/npm/{path:path}", forward_registry("npm"), methods=["GET", "HEAD"]),
+        Route("/pypi/{path:path}", forward_registry("pypi"), methods=["GET", "HEAD"]),
+        Route("/maven/{path:path}", forward_registry("maven"), methods=["GET", "HEAD"]),
         # The host route (P8b S11; HOST_API.md §4.9): a microVM's git and REST, forwarded by its
         # boss-hostd with the host's proof, the moved handle and the run's boss:egress token.
         Route("/git/{path:path}", forward, methods=["GET", "POST"]),

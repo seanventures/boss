@@ -25,6 +25,8 @@ const LIBRARY = codeOnly("app/workflows/library.tsx");
 /** The define/edit step form, moved out of the workflow screen into its own file. */
 const FORM = codeOnly("app/workflows/define-step-form.tsx");
 const ROUTE = codeOnly("app/api/delivery-workflows/route.ts");
+import { isCommunityPrimaryNavVisible } from "../lib/edition";
+
 const SHELL = codeOnly("app/ConsoleShell.tsx");
 const EDITION = codeOnly("lib/edition.ts");
 const CSS = codeOnly("app/globals.css");
@@ -158,10 +160,10 @@ describe("where it lives", () => {
     expect(SHELL).toContain('{ id: "delivery_workflows", label: "Workflows"');
   });
 
-  it("is available to self-hosted operators", () => {
+  it("is available regardless of edition", () => {
     // Someone who cannot choose or see the path their work takes is running the product blind.
-    const set = EDITION.slice(EDITION.indexOf("V1_COMMUNITY_PRIMARY_NAV = new Set("));
-    expect(set.slice(0, set.indexOf("]);"))).toContain('"delivery_workflows"');
+    expect(isCommunityPrimaryNavVisible("delivery_workflows", "community")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("delivery_workflows", "enterprise_self_hosted")).toBe(true);
   });
 });
 

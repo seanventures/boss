@@ -1,0 +1,16 @@
+id: mturn_fixture_07:1
+event: turn.started
+data: {"turn_id":"mturn_fixture_07","thread_id":"athr_fixture_07","model":"gpt-4o","mode":"ask","tools":["ssh_run"],"dropped":[]}
+
+id: mturn_fixture_07:2
+event: usage
+data: {"input_tokens":19,"output_tokens":11,"cost":{"amount":0.00016,"currency":"USD","source":"gpt-4o"}}
+
+id: mturn_fixture_07:3
+event: tool_call
+data: {"call_id":"call_timeout_1","name":"ssh_run","arguments":{"host":"web-1","argv":["sar","-u","1","5"]},"risk_hint":"remote-read","deadline_s":900}
+
+id: mturn_fixture_07:4
+event: turn.failed
+data: {"turn_id":"mturn_fixture_07","code":"tool_result_timeout","message":"Timed out waiting for client tool result.","retryable":false}
+

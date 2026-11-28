@@ -27,10 +27,8 @@ import { RowMenu } from "../setup/parts";
 import { EvFrame, useEv } from "./frame";
 import { Chip, Empty, ReadState, Said, SourceMark, Spark, goEvents, useRead } from "./parts";
 
-/** Sources BOSS cannot connect yet (phase P9b/P9c); a generic webhook covers them today. */
+/** Sources BOSS cannot connect yet (phase P9c); a generic webhook covers them today. */
 const COMING: { kind: string; label: string; line: string; phase: string }[] = [
-  { kind: "teams", label: "Microsoft Teams", line: "People talk to agents in Teams", phase: "P9b" },
-  { kind: "servicenow", label: "ServiceNow", line: "Incidents and changes wake an agent", phase: "P9b" },
   { kind: "salesforce", label: "Salesforce", line: "Record changes, streamed", phase: "P9c" },
   { kind: "mail", label: "Gmail / Outlook", line: "A shared inbox wakes an agent", phase: "P9c" },
 ];
@@ -194,7 +192,7 @@ export function ConnectionsTab() {
             );
           })}
           {COMING.filter((x) => !known.has(x.kind) && !items.some((c) => c.kind === x.kind)).map((x) => (
-            <article key={x.kind} className="ev-card" data-dashed="" data-testid={`ev-coming-${x.kind}`}>
+            <article key={x.kind} className="ev-card ev-card-coming" data-dashed="true" data-testid={`ev-coming-${x.kind}`}>
               <div className="ev-src-head"><SourceMark kind={x.kind} /><div className="ev-src-name"><b>{x.label}</b><span className="ev-faint">{x.line}</span></div></div>
               <div><Chip tone="grey" tip={`Planned for phase ${x.phase}`}><Clock size={12} aria-hidden /> Coming</Chip></div>
               <span className="ev-faint">You can wire it today with a generic webhook.</span>
@@ -229,9 +227,15 @@ function ConnectPicker({ sources, onClose, onDone }: {
         <div className="ev-form">
           {sources.map((s) => (
             <button key={s.key} type="button" className="ev-rule" data-testid={`ev-pick-${s.key}`}
-                    onClick={() => (s.key === "slack" ? (onClose(), goEvents({ events: "connect", kind: "slack" })) : setKind(s))}>
+                    onClick={() => (s.key === "slack" || s.key === "teams"
+                      ? (onClose(), goEvents({ events: "connect", kind: s.key }))
+                      : setKind(s))}>
               <SourceMark kind={s.key} />
-              <span className="ev-row-main"><b>{s.label}</b><span className="ev-faint">{s.key === "slack" ? "Three steps: create the app, paste two secrets, test" : s.description.split(". ")[0]}</span></span>
+              <span className="ev-row-main"><b>{s.label}</b><span className="ev-faint">
+                {s.key === "slack" ? "Three steps: create the app, paste two secrets, test"
+                  : s.key === "teams" ? "Three steps: single-tenant Azure Bot, credentials, Entra & test"
+                  : s.description.split(". ")[0]}
+              </span></span>
             </button>
           ))}
           {!sources.length ? <span className="ev-faint">Loading the sources BOSS can connect…</span> : null}
@@ -239,6 +243,38 @@ function ConnectPicker({ sources, onClose, onDone }: {
       )}
     </Drawer>
   );
+}
+
+function servicenowBusinessRuleSnippet(url: string, secret: string): string {
+  const shownSecret = secret || "<PASTE_WHSEC_SECRET>";
+  return [
+    "// ServiceNow After-Insert/Update Business Rule (incident / change_request)",
+    "(function executeRule(current, previous) {",
+    "  var body = JSON.stringify({",
+    "    table: current.getTableName(),",
+    "    sys_id: String(current.sys_id),",
+    "    number: String(current.number),",
+    "    short_description: String(current.short_description),",
+    "    state: String(current.state),",
+    "    priority: String(current.priority),",
+    "    sys_updated_on: String(current.sys_updated_on),",
+    "    sys_updated_by: String(current.sys_updated_by),",
+    "    sys_mod_count: String(current.sys_mod_count)",
+    "  });",
+    "  var msgId = gs.generateGUID();",
+    "  var ts = String(Math.floor(new Date().getTime() / 1000));",
+    `  // Sign "<msgId>.<ts>.<body>" with HMAC-SHA256 using ${shownSecret}`,
+    "  var r = new sn_ws.RESTMessageV2();",
+    `  r.setEndpoint("${url}");`,
+    '  r.setHttpMethod("POST");',
+    '  r.setRequestHeader("Content-Type", "application/json");',
+    '  r.setRequestHeader("webhook-id", msgId);',
+    '  r.setRequestHeader("webhook-timestamp", ts);',
+    '  r.setRequestHeader("webhook-signature", "v1," + sigBase64);',
+    "  r.setRequestBody(body);",
+    "  r.executeAsync();",
+    "})(current, previous);",
+  ].join("\n");
 }
 
 function ConnectForm({ source, onBack, onDone }: {
@@ -267,6 +303,7 @@ function ConnectForm({ source, onBack, onDone }: {
     setMade({ url: c.url || c.url_path, secret: shown });
   };
   if (made) {
+    const snippet = source.key === "servicenow" ? servicenowBusinessRuleSnippet(made.url, made.secret) : "";
     return (
       <div className="ev-form" data-testid="ev-connect-made">
         <b>{source.label} is connected</b>
@@ -275,6 +312,15 @@ function ConnectForm({ source, onBack, onDone }: {
         {made.secret ? (
           <div className="ev-secret-once"><b>Signing secret · shown once</b>
             <div className="ev-copy"><code data-testid="ev-connect-secret">{made.secret}</code><button type="button" className="ev-btn" data-size="sm" onClick={() => copy(made.secret)}><Copy size={13} aria-hidden /> Copy</button></div></div>
+        ) : null}
+        {snippet ? (
+          <div className="ev-form" data-testid="ev-servicenow-snippet">
+            <b>ServiceNow Business Rule / Flow snippet</b>
+            <pre className="ev-pre"><code>{snippet}</code></pre>
+            <div className="ev-row-line">
+              <button type="button" className="ev-btn" data-size="sm" onClick={() => copy(snippet)} data-testid="ev-servicenow-copy"><Copy size={13} aria-hidden /> Copy Business Rule snippet</button>
+            </div>
+          </div>
         ) : null}
         <div className="ev-row-line"><span className="ev-spacer" />
           <button type="button" className="ev-btn" data-kind="primary" data-testid="ev-connect-done" onClick={() => onDone(`${source.label} connected. Add a rule to wake an agent.`, null)}>Done</button></div>

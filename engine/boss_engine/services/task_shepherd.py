@@ -155,7 +155,8 @@ _SIGNATURES: list[tuple[int, tuple[str, ...]]] = [
 
 
 def classify(error: Optional[str], *, gates_failed: Optional[list[str]] = None,
-             has_pr: bool = False, recorded_class: Optional[int] = None) -> int:
+             has_pr: bool = False, recorded_class: Optional[int] = None,
+             provider_error: Optional[str] = None) -> int:
     """Map observed evidence onto a failure class.
 
     `recorded_class` is what the PIPELINE decided at failure time and wins outright. That
@@ -170,6 +171,9 @@ def classify(error: Optional[str], *, gates_failed: Optional[list[str]] = None,
 
     UNKNOWN is a real answer, not a fallback for "probably infra". Every expensive mistake of
     that session came from treating an unclassified failure as a familiar one.
+
+    BOSSAPP-1488: when `provider_error` (direct CLI stderr / provider error line, separate from
+    mixed build output) is supplied, classify it non-strictly while keeping mixed `error` strict.
     """
     if recorded_class is not None and recorded_class in CLASS_NAMES:
         return recorded_class
@@ -178,6 +182,8 @@ def classify(error: Optional[str], *, gates_failed: Optional[list[str]] = None,
         # The PR shipped with findings attached; the follow-up task already exists. There is
         # nothing for a shepherd to remedy here.
         return GATES_FAILED
+    if provider_error and _is_limit_message(provider_error, strict=False):
+        return SPEND_CAP
     for cls, phrases in _SIGNATURES:
         if any(p in text for p in phrases):
             return cls
@@ -188,13 +194,16 @@ def classify(error: Optional[str], *, gates_failed: Optional[list[str]] = None,
     return UNKNOWN
 
 
-def _is_limit_message(text: str) -> bool:
-    """A plan or spend limit sentence, STRICT: a run's error can quote the app's own test
-    output ("You've hit your limit of 5 free projects"), so a plan window counts only with the
-    reset it named. A bare "429" is left to the phrases above: here it can be a line number."""
+def _is_limit_message(text: str, *, strict: bool = True) -> bool:
+    """A plan or spend limit sentence.
+
+    STRICT for mixed build/app output; NON-STRICT when given the provider's own error line
+    directly (BOSSAPP-1488). A bare "429" is left to the phrases above: here it can be a line
+    number.
+    """
     from .model_router.headroom import limit_verdict
 
-    verdict = limit_verdict(text, strict=True)
+    verdict = limit_verdict(text, strict=strict)
     return verdict is not None and verdict.plan
 
 

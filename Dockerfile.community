@@ -64,6 +64,10 @@ ARG GRADLE_SHA256=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd
 ARG BOSS_UPSTREAM_PROXY=
 ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_TOOLCHAIN_MIRROR_URL=
+ARG BOSS_JDK_DOWNLOAD_BASE_URL=
+ARG BOSS_MAVEN_DOWNLOAD_BASE_URL=
+ARG BOSS_GRADLE_DOWNLOAD_BASE_URL=
 RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
@@ -76,12 +80,18 @@ RUN --mount=type=secret,id=boss_build_ca \
     get() { python -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$1" "$2"; }; \
     tag="jdk-$(printf %s "$JDK_VERSION" | sed 's/+/%2B/')"; \
     file="$(printf 'OpenJDK21U-jdk_%s_linux_hotspot_%s.tar.gz' "$arch" "$(printf %s "$JDK_VERSION" | tr + _)")"; \
+    base_jdk="${BOSS_JDK_DOWNLOAD_BASE_URL:-${BOSS_TOOLCHAIN_MIRROR_URL:+${BOSS_TOOLCHAIN_MIRROR_URL%/}/jdk}}"; \
+    base_jdk="${base_jdk:-https://github.com/adoptium/temurin21-binaries/releases/download}"; \
+    base_maven="${BOSS_MAVEN_DOWNLOAD_BASE_URL:-${BOSS_TOOLCHAIN_MIRROR_URL:+${BOSS_TOOLCHAIN_MIRROR_URL%/}/maven}}"; \
+    base_maven="${base_maven:-https://archive.apache.org/dist/maven/maven-3}"; \
+    base_gradle="${BOSS_GRADLE_DOWNLOAD_BASE_URL:-${BOSS_TOOLCHAIN_MIRROR_URL:+${BOSS_TOOLCHAIN_MIRROR_URL%/}/gradle}}"; \
+    base_gradle="${base_gradle:-https://services.gradle.org/distributions}"; \
     cd /tmp; \
-    get "https://github.com/adoptium/temurin21-binaries/releases/download/$tag/$file" jdk.tgz; \
+    get "${base_jdk%/}/$tag/$file" jdk.tgz; \
     echo "$jdk_sum  jdk.tgz" | sha256sum -c -; \
-    get "https://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz" maven.tgz; \
+    get "${base_maven%/}/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz" maven.tgz; \
     echo "$MAVEN_SHA512  maven.tgz" | sha512sum -c -; \
-    get "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip" gradle.zip; \
+    get "${base_gradle%/}/gradle-$GRADLE_VERSION-bin.zip" gradle.zip; \
     echo "$GRADLE_SHA256  gradle.zip" | sha256sum -c -; \
     mkdir -p /opt/toolchains/java/jdk /opt/toolchains/java/maven /opt/toolchains/bin; \
     tar -xzf jdk.tgz -C /opt/toolchains/java/jdk --strip-components=1; \
@@ -121,6 +131,7 @@ ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_PIP_INDEX_URL=
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_pip_conf \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && set -eu; \
@@ -174,6 +185,8 @@ ARG GO_SHA256_ARM64=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaae
 ARG BOSS_UPSTREAM_PROXY=
 ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_TOOLCHAIN_MIRROR_URL=
+ARG BOSS_GO_DOWNLOAD_BASE_URL=
 RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
@@ -185,7 +198,13 @@ RUN --mount=type=secret,id=boss_build_ca \
     esac; \
     get() { python -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$1" "$2"; }; \
     cd /tmp; \
-    get "https://dl.google.com/go/go$GO_VERSION.linux-${TARGETARCH:-amd64}.tar.gz" go.tgz; \
+    go_base="${BOSS_GO_DOWNLOAD_BASE_URL:-${BOSS_TOOLCHAIN_MIRROR_URL:+${BOSS_TOOLCHAIN_MIRROR_URL%/}/go}}"; \
+    if [ -n "$go_base" ]; then \
+      go_url="${go_base%/}/go$GO_VERSION.linux-${TARGETARCH:-amd64}.tar.gz"; \
+    else \
+      go_url="https://dl.google.com/go/go$GO_VERSION.linux-${TARGETARCH:-amd64}.tar.gz"; \
+    fi; \
+    get "$go_url" go.tgz; \
     echo "$go_sum  go.tgz" | sha256sum -c -; \
     mkdir -p /opt/toolchains/go /opt/toolchains/bin; \
     tar -xzf go.tgz -C /opt/toolchains/go --strip-components=1; \
@@ -308,6 +327,7 @@ ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_PIP_INDEX_URL=
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_pip_conf \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && pip install --no-cache-dir --upgrade pip \
@@ -324,6 +344,7 @@ ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_PIP_INDEX_URL=
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_pip_conf \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && pip freeze > /tmp/core.lock \
@@ -343,6 +364,7 @@ ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_PIP_INDEX_URL=
 ARG BOSS_PLAYWRIGHT_DOWNLOAD_HOST=
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_pip_conf \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && python -m venv /tmp/pw \
@@ -380,7 +402,7 @@ RUN --mount=type=secret,id=boss_build_ca \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
-       iptables libcap2-bin curl build-essential \
+       iptables libcap2-bin curl build-essential procps \
     && rm -rf /var/lib/apt/lists/*
 
 # THE CODING CLIS AND pnpm, FROM A LOCKFILE (scripts/install/cli-lock): every package, the
@@ -394,6 +416,7 @@ RUN --mount=type=secret,id=boss_build_ca \
 COPY scripts/install/cli-lock/package.json scripts/install/cli-lock/package-lock.json /opt/boss-clis/
 ARG BOSS_NPM_REGISTRY=
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_npmrc \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-clis --omit=dev --no-audit --no-fund \
@@ -583,6 +606,7 @@ ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_NPM_REGISTRY=
 COPY scripts/install/cli-lock/pnpm/package.json scripts/install/cli-lock/pnpm/package-lock.json /opt/boss-pnpm/
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_npmrc \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-pnpm --omit=dev --no-audit --no-fund \
@@ -591,6 +615,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/api-client/package.json ./packages/api-client/package.json
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_npmrc \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && pnpm install --frozen-lockfile
@@ -604,6 +629,7 @@ COPY packages/api-client ./packages/api-client
 RUN test -n "$NEXT_PUBLIC_BOSS_API_URL" \
     || { echo 'NEXT_PUBLIC_BOSS_API_URL is required for the Community web build' >&2; exit 1; }
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_npmrc \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && pnpm --filter boss-web build
@@ -626,6 +652,7 @@ ARG BOSS_UPSTREAM_NO_PROXY=
 ARG BOSS_NPM_REGISTRY=
 COPY scripts/install/cli-lock/pnpm/package.json scripts/install/cli-lock/pnpm/package-lock.json /opt/boss-pnpm/
 RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=secret,id=boss_build_npmrc \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-pnpm --omit=dev --no-audit --no-fund \

@@ -338,3 +338,28 @@
 .gv-sub-pool-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; color: var(--ink); }
 .gv-sub-pool-go { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
 @media (max-width: 640px) { .gv-sub-win { grid-template-columns: 1fr; } }
+
+/* Rules book (BOSSAPP-572): read-only searchable catalog of every BOSS rule by category. */
+.gv-rb { display: flex; flex-direction: column; gap: 14px; }
+.gv-rb-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.gv-rb-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.gv-rb-search { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 220px; min-height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--faint); }
+.gv-rb-search input { flex: 1 1 auto; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-ui); }
+.gv-rb-select { min-height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-meta); }
+.gv-rb-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.gv-rb-cat { border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: var(--fs-tag); font-weight: 600; cursor: pointer; }
+.gv-rb-cat[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.gv-rb-groups { display: flex; flex-direction: column; gap: 16px; }
+.gv-rb-group { display: flex; flex-direction: column; gap: 8px; }
+.gv-rb-group-h { margin: 0; font-size: var(--fs-label); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+.gv-rb-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.gv-rb-item { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.gv-rb-item-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.gv-rb-id { font-family: var(--mono); font-size: var(--fs-tag); color: var(--faint); }
+.gv-rb-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: var(--fs-tag); font-weight: 650; background: var(--surface-3); color: var(--muted); }
+.gv-rb-badge[data-kind="setting"], .gv-rb-badge[data-kind="gate"] { background: var(--green-soft); color: var(--green); }
+.gv-rb-badge[data-kind="policy"] { background: var(--accent-soft); color: var(--accent-text); }
+.gv-rb-badge[data-kind="prompt_only"] { background: var(--amber-soft); color: var(--amber); }
+.gv-rb-text { font-size: var(--fs-body); color: var(--ink); }
+.gv-rb-why { font-size: var(--fs-meta); color: var(--muted); }
+.gv-rb-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
