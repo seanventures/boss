@@ -43,6 +43,7 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     "agent.studio.execute": P.AGENT_TEST,
     "agent.orchestrator.next_move": P.AUTOPILOT_OPERATE,
     "agent.resume": P.CODE_TASK_STEER,
+    "metatron.turn": P.ASSISTANT_CHAT,
     # an agent run admitted to execute on a worker (AP-P2, thread_runs.admit): a workflow agent
     # step's run, under the authority the step runs with
     "agent.run": P.WORKFLOW_RUN_START,

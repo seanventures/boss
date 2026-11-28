@@ -32,7 +32,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote, urlsplit
 
 #: Slack refuses a request older than this (its own guidance: 5 minutes); so do we.
 SLACK_TOLERANCE_SECONDS = 300
@@ -68,6 +68,15 @@ class ChatRateLimited(ChatSendFailed):
     def __init__(self, message: str, retry_after: Optional[float] = None):
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class ChatWritesBlocked(ChatSendFailed):
+    """The channel permanently blocked writes to this conversation or user (Teams 403
+    ``MessageWritesBlocked``). Stop retrying immediately and mark the target blocked."""
+
+    def __init__(self, message: str, reason: str = "MessageWritesBlocked"):
+        super().__init__(message)
+        self.reason = reason
 
 
 def _default_transport(method: str, url: str, headers: Mapping[str, str],
@@ -503,8 +512,330 @@ class DiscordChat:
         raise ChatSendFailed("Discord chat is not implemented yet (stub)")
 
 
+# --------------------------------------------------------------------------------------------- #
+# Microsoft Teams (P9b-1, BOSSAPP-1100; LLD §9.3)
+# --------------------------------------------------------------------------------------------- #
+BOTFRAMEWORK_SCOPE = "https://api.botframework.com/.default"
+DEFAULT_TEAMS_SERVICE_URL = "https://smba.trafficmanager.net/amer/"
+#: Hosts Bot Framework serves conversations from (public, GCC, GCC-High, DoD clouds).
+TEAMS_SERVICE_HOST_SUFFIXES = (
+    ".trafficmanager.net", ".botframework.com", ".botframework.us", ".botframework.azure.us",
+    ".teams.microsoft.com", ".teams.microsoft.us",
+)
+
+
+def _teams_service_url_allowed(service_url: str, cfg: Mapping[str, Any]) -> bool:
+    parts = urlsplit(service_url)
+    host = (parts.hostname or "").lower()
+    if not host:
+        return False
+    if parts.scheme == "https" and any(host.endswith(sfx) for sfx in TEAMS_SERVICE_HOST_SUFFIXES):
+        return True
+    configured = urlsplit(str(cfg.get("service_url") or ""))
+    cfg_host = (configured.hostname or "").lower()
+    return (
+        bool(cfg_host)
+        and configured.scheme in ("https", "http")
+        and parts.scheme == configured.scheme
+        and host == cfg_host
+    )
+
+
+class TeamsChat:
+    """Microsoft Teams Bot Framework v3 adapter (single-tenant Azure Bot per D5).
+
+    Tokens are obtained per-send from Entra client credentials via ``TRANSPORT`` and never
+    stored, cached in VMs, or logged. Inbound verification uses Bot Framework RS256 OIDC JWTs
+    (``TeamsIntakeAdapter.verify``).
+    """
+
+    kind = "teams"
+    secret_names = ("app_password",)
+    verify_secret = ""
+    supports_note_form = False
+
+    def verify(self, secret: str, headers: Mapping[str, str], raw_body: bytes,
+               now: Optional[float] = None, *, config: Optional[Mapping[str, Any]] = None) -> None:
+        from ..connectors.intake.contract import IntakeConnection, RawRequest, VerifyRefused
+        from ..connectors.intake.teams.adapter import TeamsIntakeAdapter
+
+        cfg = dict(config or {})
+        conn = IntakeConnection("teams_chat", "", "teams", config=cfg)
+        req = RawRequest(method="POST", headers=_lower(headers), body=raw_body)
+        try:
+            TeamsIntakeAdapter().verify(conn, req, now if now is not None else time.time())
+        except VerifyRefused as refused:
+            raise ChatVerifyRefused(refused.reason) from None
+
+    def parse(self, headers: Mapping[str, str], raw_body: bytes) -> ChatInbound:
+        body = json.loads(raw_body or b"{}")
+        if not isinstance(body, dict):
+            return ChatInbound(kind="ignored")
+        sender = body.get("from") or {}
+        conv = body.get("conversation") or {}
+        uid = str(sender.get("id") or "")
+        name = str(sender.get("name") or "")
+        conv_id = str(conv.get("id") or "")
+        reply_to = str(body.get("replyToId") or body.get("id") or "")
+        act_type = str(body.get("type") or "")
+        value = body.get("value") if isinstance(body.get("value"), dict) else {}
+        if act_type in ("invoke", "message") and value.get("boss_token"):
+            return ChatInbound(
+                kind="press",
+                external_user_id=uid,
+                external_name=name,
+                token=str(value.get("boss_token") or ""),
+                action=str(value.get("boss_action") or ""),
+                note=(str(value.get("boss_note") or "").strip() or None),
+                channel_id=conv_id,
+                thread_id=reply_to,
+                trigger=str(body.get("id") or ""),
+                raw=body,
+            )
+        if act_type == "message" and conv.get("conversationType") == "personal":
+            text_ = str(body.get("text") or "").strip().lower()
+            if "link" in text_.split():
+                return ChatInbound(
+                    kind="link_request",
+                    external_user_id=uid,
+                    external_name=name,
+                    channel_id=conv_id,
+                    thread_id=str(body.get("id") or ""),
+                    raw=body,
+                )
+        return ChatInbound(kind="ignored", raw=body)
+
+    def render_decision(self, card: DecisionCard) -> dict[str, Any]:
+        body: list[dict[str, Any]] = [
+            {"type": "TextBlock", "text": f"BOSS needs a decision · tier {card.risk_tier}",
+             "weight": "Bolder", "wrap": True},
+            {"type": "TextBlock", "text": card.question[:2000], "wrap": True},
+        ]
+        if card.summary:
+            body.append({"type": "TextBlock", "text": card.summary[:2000], "isSubtle": True, "wrap": True})
+        if card.console_only_reason:
+            body.append({"type": "TextBlock", "text": card.console_only_reason[:1000],
+                         "color": "Warning", "wrap": True})
+        actions: list[dict[str, Any]] = []
+        for b in card.buttons:
+            act: dict[str, Any] = {
+                "type": "Action.Submit",
+                "title": b["label"][:70],
+                "data": {"boss_action": b["action"], "boss_token": b["token"]},
+            }
+            if b.get("style") == "primary":
+                act["style"] = "positive"
+            elif b.get("style") == "danger":
+                act["style"] = "destructive"
+            actions.append(act)
+        if card.console_url:
+            actions.append({"type": "Action.OpenUrl", "title": "Open in BOSS", "url": card.console_url})
+        adaptive = {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.5",
+            "body": body,
+            "actions": actions,
+        }
+        return {
+            "text": f"BOSS needs a decision: {card.question}"[:3000],
+            "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive}],
+        }
+
+    def render_answered(self, question: str, words: str) -> dict[str, Any]:
+        adaptive = {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.5",
+            "body": [
+                {"type": "TextBlock", "text": question[:2000], "weight": "Bolder", "wrap": True},
+                {"type": "TextBlock", "text": words[:2000], "color": "Good", "wrap": True},
+            ],
+        }
+        return {
+            "text": words[:3000],
+            "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive}],
+        }
+
+    def _access_token(self, app_id: str, tenant_id: str, app_password: str,
+                      token_url: Optional[str] = None) -> str:
+        from urllib.parse import urlencode
+
+        if not app_id or not app_password or not tenant_id:
+            raise ChatSendFailed("Teams endpoint requires app_id, tenant_id, and app_password")
+        url = (token_url or f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token").strip()
+        form = urlencode({
+            "grant_type": "client_credentials",
+            "client_id": app_id,
+            "client_secret": app_password,
+            "scope": BOTFRAMEWORK_SCOPE,
+        }).encode("utf-8")
+        status, data = TRANSPORT(
+            "POST", url,
+            {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+            form, "chat.teams.token",
+        )
+        if status == 429:
+            retry = (data or {}).get("retry_after") if isinstance(data, dict) else None
+            raise ChatRateLimited("Teams token endpoint rate-limited",
+                                  retry_after=float(retry) if retry else None)
+        if status >= 300 or not isinstance(data, dict) or not data.get("access_token"):
+            raise ChatSendFailed(f"Teams token exchange failed ({status})")
+        return str(data["access_token"])
+
+    def _call(self, access_token: str, method: str, url: str, body: dict) -> dict:
+        status, data = TRANSPORT(
+            method, url,
+            {"Content-Type": "application/json; charset=utf-8",
+             "Authorization": f"Bearer {access_token}"},
+            json.dumps(body).encode("utf-8"), "chat.teams",
+        )
+        if status == 429:
+            retry = (data or {}).get("retry_after") if isinstance(data, dict) else None
+            try:
+                seconds = float(retry) if retry not in (None, "") else None
+            except (TypeError, ValueError):
+                seconds = None
+            raise ChatRateLimited("Teams rate-limited", retry_after=seconds)
+        if status == 403:
+            raw_err = json.dumps(data) if isinstance(data, (dict, list)) else str(data or "")
+            if "MessageWritesBlocked" in raw_err or (
+                isinstance(data, dict)
+                and str((data.get("error") or {}).get("code") or "") == "MessageWritesBlocked"
+            ):
+                raise ChatWritesBlocked("Teams 403 MessageWritesBlocked", reason="MessageWritesBlocked")
+            raise ChatSendFailed("Teams refused 403")
+        if status >= 300:
+            raise ChatSendFailed(f"Teams answered {status}")
+        return dict(data) if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _marker(item: Mapping[str, Any]) -> dict[str, Any]:
+        payload = {k: v for k, v in {
+            "endpoint_id": item.get("endpoint_id"),
+            "run_id": item.get("run_id"),
+            "deployment_id": item.get("deployment_id"),
+            "hops": item.get("hops"),
+        }.items() if v not in (None, "")}
+        return {"boss": payload}
+
+    def send(self, bot_token: str, item: Mapping[str, Any]) -> dict[str, Any]:
+        return self.send_with_config(bot_token, item, item.get("teams_config") or {})
+
+    def send_with_config(self, app_password: str, item: Mapping[str, Any],
+                         config: Mapping[str, Any]) -> dict[str, Any]:
+        cfg = dict(config or {})
+        conv_ref = item.get("conversation_ref") if isinstance(item.get("conversation_ref"), dict) else {}
+        app_id = str(cfg.get("app_id") or "").strip()
+        tenant_id = str(cfg.get("tenant_id") or conv_ref.get("tenantId") or "").strip()
+        service_url = str(
+            item.get("service_url")
+            or conv_ref.get("serviceUrl")
+            or cfg.get("service_url")
+            or DEFAULT_TEAMS_SERVICE_URL
+        ).strip().rstrip("/")
+        bot_id = str(cfg.get("bot_id") or (conv_ref.get("bot") or {}).get("id") or (f"28:{app_id}" if app_id else "")).strip()
+        token_url = str(cfg.get("token_url") or "").strip() or None
+        if not _teams_service_url_allowed(service_url, cfg):
+            # The bearer token is sent to this URL: only Bot Framework's own hosts (or the one
+            # the operator configured on the endpoint) ever receive it.
+            raise ChatSendFailed("Teams serviceUrl is not a Bot Framework host; refusing to send")
+
+        access_token = self._access_token(app_id, tenant_id, app_password, token_url=token_url)
+        kind = str(item.get("op") or "post")
+        raw_channel = str(item.get("channel") or (conv_ref.get("conversation") or {}).get("id") or "").strip()
+        raw_thread = str(item.get("thread") or "").strip()
+        # Conversation and activity ids carry `:`, `@` and `;` — always one escaped path segment.
+        channel = quote(raw_channel, safe="")
+        thread = quote(raw_thread, safe="")
+
+        if kind == "dm":
+            if not channel and item.get("user"):
+                created = self._call(
+                    access_token, "POST", f"{service_url}/v3/conversations",
+                    {"bot": {"id": bot_id, "name": "BOSS"},
+                     "members": [{"id": str(item["user"])}],
+                     "tenantId": tenant_id,
+                     "isGroup": False},
+                )
+                raw_channel = str(created.get("id") or "").strip()
+                channel = quote(raw_channel, safe="")
+            if not channel:
+                raise ChatSendFailed("Teams opened no direct message conversation")
+            msg = item.get("message") if isinstance(item.get("message"), dict) else {"text": str(item.get("text") or "")}
+            body = {"type": "message", **msg, "channelData": self._marker(item)}
+            data = self._call(access_token, "POST", f"{service_url}/v3/conversations/{channel}/activities", body)
+            act_id = str(data.get("id") or "")
+            return {"channel": raw_channel, "thread": act_id or raw_channel, "ts": act_id, "bot_id": bot_id}
+
+        if kind == "ephemeral":
+            target_ch = channel
+            if not target_ch and item.get("user"):
+                return self.send_with_config(app_password, {**item, "op": "dm"}, cfg)
+            msg = {"type": "message", "text": str(item.get("text") or ""), "channelData": self._marker(item)}
+            url = (f"{service_url}/v3/conversations/{target_ch}/activities/{thread}"
+                   if thread else f"{service_url}/v3/conversations/{target_ch}/activities")
+            data = self._call(access_token, "POST", url, msg)
+            act_id = str(data.get("id") or "")
+            return {"channel": raw_channel, "thread": raw_thread or act_id, "ts": act_id, "bot_id": bot_id}
+
+        if kind in ("set_status", "typing"):
+            data = self._call(
+                access_token, "POST", f"{service_url}/v3/conversations/{channel}/activities",
+                {"type": "typing"},
+            )
+            return {"channel": raw_channel, "thread": raw_thread or str(data.get("id") or "")}
+
+        if kind == "post":
+            msg = dict(item.get("message") or {"text": str(item.get("text") or "")})
+            body = {"type": "message", **msg, "channelData": self._marker(item)}
+            url = (f"{service_url}/v3/conversations/{channel}/activities/{thread}"
+                   if thread else f"{service_url}/v3/conversations/{channel}/activities")
+            data = self._call(access_token, "POST", url, body)
+            act_id = str(data.get("id") or "")
+            return {"channel": raw_channel, "thread": act_id or raw_thread, "ts": act_id, "bot_id": bot_id}
+
+        if kind == "update":
+            act_id = raw_thread or str(item.get("ts") or "")
+            msg = dict(item.get("message") or {"text": str(item.get("text") or "")})
+            body = {"type": "message", "id": act_id, **msg, "channelData": self._marker(item)}
+            data = self._call(
+                access_token, "PUT",
+                f"{service_url}/v3/conversations/{channel}/activities/{quote(act_id, safe='')}", body
+            )
+            return {"channel": raw_channel, "thread": str(data.get("id") or act_id), "ts": str(data.get("id") or act_id)}
+
+        if kind in ("stream_start", "stream_append", "stream_stop"):
+            seq = int(item.get("stream_seq") or (1 if kind == "stream_start" else 2))
+            stream_id = str(item.get("ts") or item.get("stream_id") or "")
+            if kind == "stream_stop":
+                body: dict[str, Any] = {
+                    "type": "message",
+                    "text": str(item.get("full") or item.get("text") or ""),
+                    "channelData": {**self._marker(item), "streamType": "final", "streamId": stream_id},
+                }
+            else:
+                body = {
+                    "type": "typing",
+                    "text": str(item.get("full") or item.get("text") or ""),
+                    "channelData": {
+                        "streamType": "informative" if kind == "stream_start" else "streaming",
+                        "streamSequence": seq,
+                        **({"streamId": stream_id} if stream_id else {}),
+                    },
+                }
+            data = self._call(access_token, "POST", f"{service_url}/v3/conversations/{channel}/activities", body)
+            new_id = str(data.get("id") or stream_id)
+            return {"channel": raw_channel, "ts": new_id, "thread": raw_thread or new_id}
+
+        raise ChatSendFailed(f"unknown Teams outbox op {kind!r}")
+
+    def open_note_form(self, *args: Any, **kwargs: Any) -> None:
+        raise ChatSendFailed("Teams note forms are answered in BOSS")
+
+
 ADAPTERS: dict[str, Any] = {"slack": SlackChat(), "telegram": TelegramChat(),
-                            "discord": DiscordChat()}
+                            "discord": DiscordChat(), "teams": TeamsChat()}
 
 
 def adapter_for(kind: str) -> Any:
@@ -514,6 +845,6 @@ def adapter_for(kind: str) -> Any:
         raise ValueError(f"unknown chat kind {kind!r}") from None
 
 
-__all__ = ["ADAPTERS", "ChatInbound", "ChatRateLimited", "ChatSendFailed", "SLACK_MARKER", "ChatVerifyRefused", "DecisionCard",
-           "DiscordChat", "SlackChat", "TelegramChat", "TRANSPORT", "adapter_for",
-           "slack_signature"]
+__all__ = ["ADAPTERS", "BOTFRAMEWORK_SCOPE", "ChatInbound", "ChatRateLimited", "ChatSendFailed",
+           "ChatVerifyRefused", "ChatWritesBlocked", "DecisionCard", "DiscordChat", "SLACK_MARKER",
+           "SlackChat", "TeamsChat", "TelegramChat", "TRANSPORT", "adapter_for", "slack_signature"]

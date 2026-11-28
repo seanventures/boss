@@ -106,7 +106,15 @@ def create_for_project(c: Any, settings: Any, project_id: str, *, name: str, act
     _require_git()
     described = local_repo.create(project_id, name, settings=settings, title=title or name,
                                   description=description, stack=stack)
-    return bind(c, project_id, described, actor=actor, origin="new")
+    bound = bind(c, project_id, described, actor=actor, origin="new")
+    try:
+        from .deployment_fleet import ensure_local_host
+
+        with c.begin_nested():
+            ensure_local_host(c, project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — schema-partial unit tests
+        pass
+    return bound
 
 
 def status(c: Any, settings: Any, project_id: str) -> dict[str, Any]:
@@ -354,6 +362,13 @@ def import_code(c: Any, settings: Any, project_id: str, *, name: str, actor: str
         except local_repo.LocalRepoError as error:
             raise LocalProjectError(str(error), 409) from None
     bound = bind(c, project_id, described, actor=actor, origin="import")
+    try:
+        from .deployment_fleet import ensure_local_host
+
+        with c.begin_nested():
+            ensure_local_host(c, project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — schema-partial unit tests
+        pass
     history = (described.get("marker") or {}).get("history")
     emit_event(c, project_id, "project.local_code_imported", actor, "project", project_id,
                {"repository": described["full_name"], "history": history,

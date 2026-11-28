@@ -229,7 +229,7 @@ def test_the_review_re_ask_lifts_a_ceiling_that_bound_it():
 
 def test_the_pipeline_escalation_lifts_the_limit_and_refuses_a_same_limit_re_ask():
     src = inspect.getsource(g)
-    block = src[src.index('evidence["review_escalated_turns"] = escalated') - 3000:]
+    block = src[src.index('evidence["review_escalated_turns"] = escalated') - 4500:]
     block = block[:block.index("gate_faults = classify_gate_faults")]
     assert "_lifted_ceiling(\n                            r3, _session_budget_ceiling(review_agent)," in block
     assert "clamp=lambda usd: _lift_ceiling(usd, review_agent)" in block
@@ -463,3 +463,302 @@ def test_the_precheck_reserves_what_a_build_reserves(monkeypatch):
                           savepoint=lambda f, default=None: f())
     assert wp.step_reservation(s, step, ctx) == 4_000_000
     assert seen["args"][1] == "p"
+
+
+# ── BOSSAPP-1306: atomic short-TTL session money-cap holds ───────────────────────────────────
+
+def _setup_capped_project(eng, *, daily_cap_micros: int = 10_000_000,
+                          settled_micros: int = 8_000_000):
+    import uuid
+    from datetime import datetime, timezone
+
+    pid = f"p_sbh_{uuid.uuid4().hex[:10]}"
+    with eng.begin() as c:
+        wid = c.execute(text("SELECT workspace_id FROM projects LIMIT 1")).scalar()
+        if wid is None:
+            pytest.skip("boss_test has no workspace")
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
+                       "VALUES (:p, :w, 'session hold test', :p)"), {"p": pid, "w": wid})
+        c.execute(text(
+            "INSERT INTO budget_policies (id, scope_type, scope_id, daily_cap_usd_micros, "
+            "monthly_cap_usd_micros, burst_cap_usd_micros_per_min) VALUES "
+            "(:i, 'project', :p, :d, 1000000000, 0)"),
+            {"i": f"bp_{uuid.uuid4().hex[:10]}", "p": pid, "d": daily_cap_micros})
+        if settled_micros > 0:
+            rid = f"rcpt_{uuid.uuid4().hex[:10]}"
+            c.execute(text(
+                "INSERT INTO receipts (id, org_id, workspace_id, project_id, dedupe_key, "
+                "effect_kind, effect_scope, payload_hash, status) VALUES "
+                "(:id, (SELECT org_id FROM workspaces WHERE id = :w), :w, :p, :dk, "
+                "'budget.llm_spend.settle', '{}'::jsonb, 'hash', 'succeeded')"),
+                {"id": rid, "w": wid, "p": pid, "dk": f"dk:{pid}"})
+            c.execute(text(
+                "INSERT INTO cost_receipts (id, project_id, receipt_id, category, "
+                "skill_or_model_id, estimated_usd_micros, actual_usd_micros, status, created_at) VALUES "
+                "(:id, :p, :r, 'build', 'code_task:settled', :amt, :amt, 'actual', :now)"),
+                {"id": f"cr_{uuid.uuid4().hex[:10]}", "p": pid, "r": rid,
+                 "amt": settled_micros, "now": datetime.now(timezone.utc)})
+    return pid
+
+
+def _teardown_capped_project(eng, pid: str) -> None:
+    with eng.begin() as c:
+        for tbl, col in (
+            ("session_budget_holds", "project_id"),
+            ("cost_receipts", "project_id"),
+            ("receipts", "project_id"),
+            ("budget_policies", "scope_id"),
+            ("projects", "id"),
+        ):
+            c.execute(text(f"DELETE FROM {tbl} WHERE {col} = :p"), {"p": pid})
+
+
+def test_session_budget_holds_subtract_headroom_ignore_expired_and_release_on_error(monkeypatch):
+    import os
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from sqlalchemy import create_engine
+    from boss_engine.services.budget import BudgetGovernor
+
+    db_url = os.environ.get("BOSS_TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not db_url:
+        pytest.skip("no database configured")
+    eng = create_engine(db_url, future=True)
+    s = Settings(_env_file=None, code_agent_session_budget_usd=5.0)
+    gov = BudgetGovernor(s)
+    pid = _setup_capped_project(eng, daily_cap_micros=10_000_000, settled_micros=8_000_000)
+    try:
+        with eng.begin() as c:
+            assert bb.money_headroom(gov, c, pid) == 2_000_000
+            hold_id, ceiling = bb.acquire_session_hold(
+                gov, c, pid, s.model_copy(update={"code_agent_session_budget_usd": 1.5}),
+                money=True,
+            )
+            assert hold_id is not None and ceiling == 1.5
+            assert bb.money_headroom(gov, c, pid) == 500_000
+            # Expired holds are ignored by money_headroom.
+            c.execute(text(
+                "INSERT INTO session_budget_holds (id, project_id, amount_usd_micros, "
+                "status, expires_at) VALUES ('sbh_exp', :p, 500000, 'active', :exp)"),
+                {"p": pid, "exp": datetime.now(timezone.utc) - timedelta(seconds=5)})
+            assert bb.money_headroom(gov, c, pid) == 500_000
+            bb.release_session_hold(c, hold_id)
+            assert bb.money_headroom(gov, c, pid) == 2_000_000
+
+        # ContractedAgent.run_role releases its hold even when the inner engine raises.
+        class _BoomAgent:
+            engine = "claude_code"
+
+            def run_role(self, prompt, cwd, **kw):
+                raise RuntimeError("boom inside engine")
+
+        agent = ec.contracted(_BoomAgent())
+        agent.session_budget_holder = lambda requested_usd=None: _acquire_in_tx(
+            eng, gov, pid, s.model_copy(update={"code_agent_session_budget_usd": 1.5}),
+            requested_usd=requested_usd,
+        )
+        agent.session_budget_releaser = lambda hid: _release_in_tx(eng, hid)
+        with pytest.raises(RuntimeError, match="boom inside engine"):
+            agent.run_role("hi", Path("/tmp"))
+        with eng.begin() as c:
+            assert bb.active_session_holds_micros(c, pid) == 0
+            assert bb.money_headroom(gov, c, pid) == 2_000_000
+
+        # Invalid cwd (e.g. None) fails before acquiring a hold — zero hold rows leaked.
+        with pytest.raises(TypeError):
+            agent.run_role("hi", None)  # type: ignore[arg-type]
+        with eng.begin() as c:
+            assert bb.active_session_holds_micros(c, pid) == 0
+            assert bb.money_headroom(gov, c, pid) == 2_000_000
+    finally:
+        _teardown_capped_project(eng, pid)
+        eng.dispose()
+
+
+def _acquire_in_tx(eng, gov, pid, settings, *, requested_usd=None):
+    with eng.begin() as c:
+        return bb.acquire_session_hold(gov, c, pid, settings, money=True, requested_usd=requested_usd)
+
+
+def _release_in_tx(eng, hold_id):
+    with eng.begin() as c:
+        bb.release_session_hold(c, hold_id)
+
+
+def test_concurrent_builds_and_parallel_review_seats_never_overshoot_money_cap(tmp_path):
+    """BOSSAPP-1306: concurrent ContractedAgent.run_role sessions AND parallel review_seats.run_seats
+    sharing one $2.00 headroom under a $10.00 daily cap never overshoot the cap."""
+    import os
+    import threading
+    from sqlalchemy import create_engine
+    from boss_engine.services import review_seats
+    from boss_engine.services.budget import BudgetGovernor
+
+    db_url = os.environ.get("BOSS_TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not db_url:
+        pytest.skip("no database configured")
+    eng = create_engine(db_url, future=True)
+    s_full = Settings(_env_file=None, code_agent_session_budget_usd=5.0)
+    gov = BudgetGovernor(s_full)
+    pid = _setup_capped_project(eng, daily_cap_micros=10_000_000, settled_micros=8_000_000)
+    try:
+        # 1. Two concurrent builds enter run_role simultaneously for a $2.00 remaining headroom.
+        recorded_budgets: list[float] = []
+        errors: list[Exception] = []
+        entered = threading.Barrier(2, timeout=10)
+        inside = threading.Event()
+        release_run = threading.Event()
+
+        class _SlowAgent:
+            engine = "claude_code"
+            capabilities = ec.EngineCapabilities(budget_limit=True, read_only=True)
+
+            def __init__(self, idx: int):
+                self.idx = idx
+
+            def run_role(self, prompt, cwd, **kw):
+                recorded_budgets.append(float(kw["max_budget_usd"]))
+                inside.set()
+                release_run.wait(timeout=10)
+                return {"summary": "ok", "stop_reason": "end_turn"}
+
+        def _worker(idx: int, settings_obj):
+            ag_obj = ec.contracted(_SlowAgent(idx))
+            ag_obj.session_budget_holder = lambda requested_usd=None: _acquire_in_tx(
+                eng, gov, pid, settings_obj, requested_usd=requested_usd
+            )
+            ag_obj.session_budget_releaser = lambda hid: _release_in_tx(eng, hid)
+            try:
+                entered.wait()
+                ag_obj.run_role("build", tmp_path)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t1 = threading.Thread(target=_worker, args=(1, s_full))
+        t2 = threading.Thread(target=_worker, args=(2, s_full))
+        import time as _time
+
+        t1.start()
+        t2.start()
+        assert inside.wait(timeout=10)
+        # Wait while t1 holds the $2.00 headroom inside _SlowAgent so t2 observes the active hold
+        # and raises insufficient budget BEFORE t1 releases.
+        deadline = _time.monotonic() + 5.0
+        while not errors and _time.monotonic() < deadline:
+            _time.sleep(0.02)
+        release_run.set()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert recorded_budgets == [2.0], f"only one build may hold $2.00: {recorded_budgets}"
+        assert len(errors) == 1 and isinstance(errors[0], ec.EngineSessionFailed)
+        assert "insufficient budget" in str(errors[0])
+
+        # 2. Split-headroom case: $1.25 session budget against $2.00 headroom -> $1.25 + $0.75, 3rd refused.
+        s_split = s_full.model_copy(update={"code_agent_session_budget_usd": 1.25})
+        split_budgets: list[float] = []
+        split_errors: list[Exception] = []
+        hold_ev = threading.Event()
+        release_split = threading.Event()
+        count_lock = threading.Lock()
+
+        class _HoldAgent:
+            engine = "claude_code"
+            capabilities = ec.EngineCapabilities(budget_limit=True, read_only=True)
+
+            def run_role(self, prompt, cwd, **kw):
+                with count_lock:
+                    split_budgets.append(float(kw["max_budget_usd"]))
+                    if len(split_budgets) >= 2:
+                        hold_ev.set()
+                release_split.wait(timeout=10)
+                return {"summary": "ok", "stop_reason": "end_turn"}
+
+        def _split_worker():
+            ag_obj = ec.contracted(_HoldAgent())
+            ag_obj.session_budget_holder = lambda requested_usd=None: _acquire_in_tx(
+                eng, gov, pid, s_split, requested_usd=requested_usd
+            )
+            ag_obj.session_budget_releaser = lambda hid: _release_in_tx(eng, hid)
+            try:
+                ag_obj.run_role("build", tmp_path)
+            except Exception as exc:  # noqa: BLE001
+                split_errors.append(exc)
+
+        ta = threading.Thread(target=_split_worker)
+        tb = threading.Thread(target=_split_worker)
+        ta.start()
+        tb.start()
+        assert hold_ev.wait(timeout=10)
+        # 3rd concurrent build arrives while $1.25 + $0.75 = $2.00 is held -> refused!
+        tc = threading.Thread(target=_split_worker)
+        tc.start()
+        tc.join(timeout=10)
+        release_split.set()
+        ta.join(timeout=10)
+        tb.join(timeout=10)
+
+        assert sorted(split_budgets) == [0.75, 1.25], split_budgets
+        assert sum(split_budgets) <= 2.0
+        assert len(split_errors) == 1 and "insufficient budget" in str(split_errors[0])
+
+        # 3. Parallel review seats via review_seats.run_seats: 3 seats at $1.00 each sharing $2.00 headroom.
+        s_seat = s_full.model_copy(update={"code_agent_session_budget_usd": 1.0})
+        seat_budgets: list[float] = []
+        seat_lock = threading.Lock()
+        two_started = threading.Event()
+        release_seats = threading.Event()
+
+        class _SeatAgent:
+            engine = "claude_code"
+            capabilities = ec.EngineCapabilities(budget_limit=True, read_only=True)
+
+            def run_role(self, prompt, cwd, **kw):
+                with seat_lock:
+                    seat_budgets.append(float(kw["max_budget_usd"]))
+                    if len(seat_budgets) >= 2:
+                        two_started.set()
+                release_seats.wait(timeout=10)
+                return {"summary": "VERDICT: OK", "stop_reason": "end_turn"}
+
+        def _make_seat(label: str):
+            ag_obj = ec.contracted(_SeatAgent())
+            ag_obj.session_budget_holder = lambda requested_usd=None: _acquire_in_tx(
+                eng, gov, pid, s_seat, requested_usd=requested_usd
+            )
+            ag_obj.session_budget_releaser = lambda hid: _release_in_tx(eng, hid)
+
+            def _run():
+                if label == "consistency_check":
+                    two_started.wait(timeout=10)
+                return ag_obj.run_role("review", tmp_path, read_only=True)
+
+            return label, _run
+
+        def _run_panel():
+            return review_seats.run_seats(
+                [_make_seat("review_code"), _make_seat("security_check"),
+                 _make_seat("consistency_check")],
+                max_workers=3,
+                seat_deadline_s=10.0,
+                owner_id=lambda lb: f"seat_{lb}",
+            )
+
+        panel_out: list[review_seats.SeatRun] = []
+        tp = threading.Thread(target=lambda: panel_out.append(_run_panel()))
+        tp.start()
+        assert two_started.wait(timeout=10)
+        # Wait briefly so consistency_check hits the zero-headroom refusal while 2 seats hold $2.00.
+        import time as _time
+        _time.sleep(0.3)
+        release_seats.set()
+        tp.join(timeout=10)
+
+        seat_run = panel_out[0]
+        assert sum(seat_budgets) <= 2.0
+        assert len(seat_run.results) == 2
+        assert "consistency_check" in seat_run.errors
+        assert "insufficient budget" in seat_run.errors["consistency_check"]
+    finally:
+        _teardown_capped_project(eng, pid)
+        eng.dispose()

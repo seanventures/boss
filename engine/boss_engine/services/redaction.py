@@ -24,8 +24,9 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("SECRET", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}")),
     ("SECRET", re.compile(r"\bglpat-[A-Za-z0-9_\-]{16,}")),
     ("SECRET", re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}")),
+    ("SECRET", re.compile(r"\bboss_(?:pat|sak|scim|run)_[A-Za-z0-9_\-]{12,}")),
     ("AWS_KEY", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("JWT", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
+    ("JWT", re.compile(r"\beyJ[A-Za-z0-9_\-]{4,}\.eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}")),
     # A connection URL's password: scheme://user:PASSWORD@host (DATABASE_URL and friends).
     ("SECRET", re.compile(r"(?<=://)(?P<name>[^\s:/@'\"]{1,128})(?P<sep>:)(?P<value>[^\s@/'\"]{1,256})(?=@)")),
     ("BEARER", re.compile(r"\b(?:Bearer|Basic|token)\s+[A-Za-z0-9._~+/\-]{16,}=*", re.IGNORECASE)),

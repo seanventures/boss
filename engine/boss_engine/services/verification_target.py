@@ -1125,6 +1125,8 @@ def resolve_gate_plan(
     lineage: list[str] | None = None,
     recorded: str | None = None,
     finalize_ctx: dict[str, Any] | None = None,
+    app_map: Any = None,
+    require_map: bool = False,
 ) -> GatePlan:
     """The verify plan for a provisioned checkout.
 
@@ -1147,16 +1149,22 @@ def resolve_gate_plan(
     every branch below plans inside it; when BOSS cannot place the app in a shared repository
     the plan is the refusal (source "app_unknown"), never the root.
     """
-    from . import app_root, verify_manifest
+    from . import app_map as _app_map, app_root, verify_manifest
 
     base = Path(root)
     # What the BASE tree held, read before any agent ran: never the lazily pinned copy below.
     base_apps = pinned.base_apps if pinned is not None else None
+    # Stored App Map (BOSSAPP-555): explicit argument, else finalize_ctx.app_map / spec.app_map.
+    resolved_map = _app_map.coerce_entry(app_map) or _app_map.entry_from_run_context(
+        spec=spec, finalize_ctx=finalize_ctx
+    )
     # The named app: the pinned benchmark app, else the one folder the brief names.
     # ``finalize_ctx``: the run's, so a follow-up's findings are never read as its brief.
     named = app_id or app_scope(spec, finalize_ctx)
-    where = app_root.resolve(base, app_id=named, recorded=recorded, changed=changed,
-                             lineage=lineage)
+    where = app_root.resolve(
+        base, app_id=named, recorded=recorded, changed=changed, lineage=lineage,
+        app_map=resolved_map, require_map=require_map,
+    )
     raw = spec.get("test_commands")
     explicit = (isinstance(raw, str) and raw.strip()) or (isinstance(raw, (list, tuple)) and raw)
 
@@ -1181,16 +1189,17 @@ def resolve_gate_plan(
         # BOSS itself holds several apps, so its first plan (made before any file changed)
         # was refused here, the run fell back to the greenfield npm contract at the root, and
         # web_package_honest failed on a root package.json without vite (crun_de5f077a).
-        if not explicit and not app_id:
+        if not explicit and not app_id and not require_map:
             declared = _manifest_plan()
             if declared is not None:
                 return declared
         return GatePlan([], base, "app_unknown", where.refusal or "", error=where.refusal)
     # Every branch below plans in the app's folder: the resolved folder IS the named app.
     # A Python command keeps its own rule (it stays at the root it was written for) unless the
-    # app was NAMED or RECORDED: a JS tools/ folder a change touched is no Python app's home.
+    # app was NAMED, RECORDED, or backed by a stored App Map: a JS tools/ folder a change touched
+    # is no Python app's home.
     named_python = named or (where.path.relative_to(base).as_posix()
-                             if where.source in ("named", "recorded") and where.path != base
+                             if where.source in ("app_map", "named", "recorded") and where.path != base
                              else None)
     in_subfolder = where.path != base
     if in_subfolder:
@@ -1202,7 +1211,8 @@ def resolve_gate_plan(
         npm = bool(commands) and commands[0].split(" ", 1)[0] in ("npm", "npx", "pnpm", "yarn")
         return resolve_verify_cwd(base, app_id=named if npm else named_python,
                                   changed=changed if npm else None,
-                                  lineage=lineage if npm else None)
+                                  lineage=lineage if npm else None,
+                                  app_map=resolved_map)
 
     if explicit:
         commands = resolve_authoritative_test_commands(spec, title)
@@ -1232,7 +1242,11 @@ def resolve_gate_plan(
     # pom.xml and a dozen npm apps at boss-sandbox's root) is never asked (crun_cd48617a).
     # The app's folder may be ONE service of a multi-service app (app/api of app/{api,web}):
     # walk up from it, stopping BEFORE the root, to the first folder that is a multi-service app.
-    if in_subfolder:
+    if resolved_map is not None:
+        # Stored App Map is authoritative: only check the app's own root_path for multi-service
+        # layout, never walking up into a monorepo group folder like `apps/`.
+        stack_root = stacks.find_stack_root(base, changed, named, app_map=resolved_map)
+    elif in_subfolder:
         stack_root = None
         for d in [where.path, *where.path.parents]:
             if d == base or base not in d.parents:
@@ -1241,7 +1255,7 @@ def resolve_gate_plan(
                 stack_root = d
                 break
     else:
-        stack_root = stacks.find_stack_root(base, changed, named)
+        stack_root = stacks.find_stack_root(base, changed, named, app_map=resolved_map)
     # THE STACK THE BRIEF REQUIRES IS THE GATE (required_app_stack): a Go brief is gated by
     # `go vet` and `go test` whatever other manifests the tree grows. Northgate's brief said
     # "Stack: Go." on an empty repo: the first plan (no go.mod yet) was the npm default, the
@@ -1287,7 +1301,7 @@ def resolve_gate_plan(
     from . import toolchains
 
     app_dir, java = app_root.java_build(base, app_id=named, recorded=recorded, changed=changed,
-                                        lineage=lineage)
+                                        lineage=lineage, app_map=resolved_map)
     app_dir = app_dir or where.path
     node_here = (app_dir / "package.json").is_file() \
         or str(spec.get("project_kind", "")).lower() in _WEB_KINDS
@@ -1404,15 +1418,45 @@ def resolve_verify_cwd(
     app_id: str | None = None,
     changed: list[str] | None = None,
     lineage: list[str] | None = None,
+    app_map: Any = None,
+    require_map: bool = False,
 ) -> Path:
     """Directory where the authoritative test command must run.
 
     Official canaries live as subdirectories in a shared sandbox monorepo.
     Running ``npm run verify`` at the clone root either misses the script or
-    executes a sibling app. Prefer the named app, then a changed-file
-    package.json ancestor, then the repo root.
+    executes a sibling app. When a stored `app_map` is supplied (BOSSAPP-555),
+    it wins unconditionally and never escapes to the repository root for a
+    subfolder app. When `require_map=True` and no map is present, raises
+    ``AppMapRequiredError`` rather than falling back to the root.
     """
+    from . import app_map as _app_map
+
     base = Path(root)
+    entry = _app_map.coerce_entry(app_map)
+    if entry is not None:
+        target = entry.resolved_dir(base)
+        if not entry.is_root():
+            # Never escape to repo root: allow a nested package.json strictly inside target, else target.
+            prefix = entry.root_path.rstrip("/") + "/"
+            for paths in (changed, lineage):
+                for rel in paths or []:
+                    clean = str(rel or "").lstrip("./")
+                    if not clean.startswith(prefix):
+                        continue
+                    parts = Path(clean).parts
+                    for depth in range(len(parts), len(Path(entry.root_path).parts), -1):
+                        candidate = base.joinpath(*parts[:depth])
+                        if candidate.is_dir() and (candidate / "package.json").is_file():
+                            return candidate
+            return target
+        return target
+    if require_map:
+        res = _app_map.resolve_for_stage(base, app_id=app_id, require_map=True)
+        if res.path is None:
+            raise _app_map.AppMapRequiredError(res.refusal or _app_map.NO_MAP_REFUSAL,
+                                               candidates=list(res.candidates))
+        return res.path
     aid = str(app_id or "").strip().strip("/")
     if aid and (base / aid / "package.json").is_file():
         return base / aid
@@ -1507,8 +1551,9 @@ def brief_app_dir(instructions: Any) -> str | None:
 
 
 def app_scope(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | None) -> str | None:
-    """THE app directory a build's tests belong to: the pinned benchmark app, else the folder its
-    brief names. None: the whole repository is the app (a single-app repo).
+    """THE app directory a build's tests belong to: stored App Map (finalize_ctx.app_map /
+    spec.app_map), else the pinned benchmark app, else the folder its brief names.
+    None: the whole repository is the app (a single-app repo).
 
     A FINDINGS FOLLOW-UP HAS NO BRIEF. Its instructions are the findings it was sent to fix, and a
     finding quotes folders as evidence: "there is no `schema/` directory at all" made the checks-failing
@@ -1517,6 +1562,11 @@ def app_scope(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | None) 
     read "missing" (BOSSAPP-1307). A follow-up builds on its lineage's app, which BOSS recorded
     (app_root.recorded_app_dir) or the lineage's files place; never on a folder its findings
     happen to name."""
+    from . import app_map as _app_map
+
+    stored = _app_map.entry_from_run_context(spec=spec, finalize_ctx=finalize_ctx)
+    if stored is not None:
+        return stored.rel_or_none()
     named = official_app_id(spec, finalize_ctx)
     if named:
         return named

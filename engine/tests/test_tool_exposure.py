@@ -198,7 +198,7 @@ EXPECTED_PER_SURFACE = {
     # views never list them (the kernel offers them inside every run).
     # +7 the sub-agent tools and write_todos (AP-P7): agent_step only, offered by the kernel to a
     # run whose spec opts in (coordination / planning).
-    "agent_step": 31,
+    "agent_step": 32,
     "decision": 1,     # find_tools; a decision's read tools stay the caller's (ReadPhase)
     "build": 1,        # find_tools; build stages join at K12
 }

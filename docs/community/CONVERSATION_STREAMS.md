@@ -15,3 +15,5 @@ Clients should send one `Idempotency-Key` for one press and reuse it for transpo
 A disconnected, oversized, or incompletely closed HTTP producer keeps its durable key held; headers alone never certify completion. HTTP uncertainty and provider uncertainty are separate: a provider cost may be durably settled while response delivery still needs reconciliation. A new key is a new intent, not evidence that an earlier provider call was unused.
 
 Summary and Propose may validate a structured reply after the model cost is settled. An invalid proposal does not start work or erase that charge. Starting an accepted proposal remains a separate governed action.
+
+See [Metatron Server Protocol](METATRON_PROTOCOL.md) for how `POST /v1/metatron/turns` inherits these exact idempotency, reservation, lease, receipt, and reconciliation guarantees across multi-step client-tool turns.

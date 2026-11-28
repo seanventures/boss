@@ -1,0 +1,47 @@
+{
+  "status": "proposed",
+  "source": "workspace_graph:maven",
+  "workspace_root": ".",
+  "selected_root_path": ".",
+  "shared_paths": [
+    "core"
+  ],
+  "apps": [
+    {
+      "app_key": "05-maven-multi-module",
+      "root_path": ".",
+      "workspace_root": ".",
+      "stack": {
+        "language": "java",
+        "framework": null,
+        "role": "backend",
+        "package_manager": "maven",
+        "workspace_tool": "maven-multi-module",
+        "modules": [
+          "core",
+          "service-api"
+        ],
+        "runnable_modules": [
+          "service-api"
+        ],
+        "library_modules": [
+          "core"
+        ]
+      },
+      "commands": {
+        "build": "mvn -B -ntp verify",
+        "test": "mvn -B -ntp test"
+      },
+      "run": {},
+      "manifests": [
+        "core/pom.xml",
+        "pom.xml",
+        "service-api/pom.xml"
+      ],
+      "shared_paths": [
+        "core"
+      ],
+      "provenance_source": "workspace_graph"
+    }
+  ]
+}

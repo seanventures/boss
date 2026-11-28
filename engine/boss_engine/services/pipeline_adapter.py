@@ -5,6 +5,8 @@ import time
 from typing import Optional, Protocol
 from urllib.parse import quote, urlencode
 
+import httpx
+
 from ..config import Settings
 from .github_adapter import (
     GitHubAdapter,
@@ -93,6 +95,9 @@ def _trigger_and_wait(
     adapter: PipelineAdapter, ref: str, *, timeout_seconds: int,
     poll_interval_seconds: int,
 ) -> PipelineVerdict:
+    from ..db import assert_not_in_written_tx
+
+    assert_not_in_written_tx("pipeline_adapter.wait_for_verdict")
     handle = adapter.trigger(ref)
     started = time.monotonic()
     while True:
@@ -140,10 +145,19 @@ class GitHubActionsPipeline:
 
     def discover(self, repo: str) -> PipelineDescriptor:
         repository = self._require_repository(repo)
-        payload = self.github._request(
-            "GET",
-            f"/repos/{repository}/actions/workflows?per_page=100",
-        )
+        try:
+            payload = self.github._request(
+                "GET",
+                f"/repos/{repository}/actions/workflows?per_page=100",
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                payload = {"workflows": []}
+            else:
+                raise
+        raw_workflows = payload.get("workflows", []) if isinstance(payload, dict) else []
+        if not isinstance(raw_workflows, list):
+            raw_workflows = []
         workflows = [
             {
                 "id": str(item.get("id")),
@@ -152,8 +166,8 @@ class GitHubActionsPipeline:
                 "state": str(item.get("state") or "unknown"),
                 "html_url": item.get("html_url"),
             }
-            for item in payload.get("workflows", [])
-            if str(item.get("state") or "active") == "active"
+            for item in raw_workflows
+            if isinstance(item, dict) and str(item.get("state") or "active") == "active"
         ]
         return PipelineDescriptor(
             provider=self.provider,
@@ -189,6 +203,9 @@ class GitHubActionsPipeline:
             "GET",
             f"/repos/{self.repository}/commits/{ref}/check-runs",
         )
+        raw_checks = payload.get("check_runs", []) if isinstance(payload, dict) else []
+        if not isinstance(raw_checks, list):
+            raw_checks = []
         return [
             PullRequestValidationCheck(
                 name=str(item.get("name") or "Unnamed check"),
@@ -198,8 +215,34 @@ class GitHubActionsPipeline:
                 started_at=item.get("started_at"),
                 completed_at=item.get("completed_at"),
             )
-            for item in payload.get("check_runs", [])
+            for item in raw_checks
+            if isinstance(item, dict)
         ]
+
+    def _has_workflows_configured(self) -> Optional[bool]:
+        try:
+            return self.discover(self.repository).configured
+        except httpx.HTTPStatusError:
+            return None
+        except Exception:  # noqa: BLE001 — keep polling conservatively on unexpected error
+            return None
+
+    def _has_commit_statuses(self, ref: str) -> bool:
+        try:
+            payload = self.github._request(
+                "GET",
+                f"/repos/{self.repository}/commits/{ref}/status",
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                return False
+            return True
+        except Exception:  # noqa: BLE001 — keep polling conservatively on unexpected error
+            return True
+        if not isinstance(payload, dict):
+            return False
+        statuses = payload.get("statuses")
+        return isinstance(statuses, list) and bool(statuses)
 
     def poll(self, handle: PipelineRunHandle) -> PipelineRunStatus:
         if handle.provider != self.provider or handle.repository != self.repository:
@@ -235,6 +278,9 @@ class GitHubActionsPipeline:
         timeout_seconds: int,
         poll_interval_seconds: int,
     ) -> PipelineVerdict:
+        from ..db import assert_not_in_written_tx
+
+        assert_not_in_written_tx("pipeline_adapter.wait_for_verdict")
         normalized_ref = ref.strip()
         if not normalized_ref:
             raise ValueError("Pipeline ref is required.")
@@ -258,13 +304,16 @@ class GitHubActionsPipeline:
                     ci_gate.AdapterCiReader(self.github),
                     normalized_ref,
                 )
-                if has_ci is False:
+                if has_ci is False and not self._has_commit_statuses(normalized_ref):
                     return PipelineVerdict(
                         provider=self.provider,
                         repository=self.repository,
                         ref=normalized_ref,
                         status="no_ci",
-                        summary="No CI is configured (no .github/workflows and no check runs).",
+                        summary=(
+                            f"No CI is configured for {self.repository} "
+                            "(no .github/workflows, no check runs and no commit statuses)."
+                        ),
                         completed=True,
                         checks=[],
                     )

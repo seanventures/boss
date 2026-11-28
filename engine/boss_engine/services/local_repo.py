@@ -234,6 +234,42 @@ def update_marker(path: Path, **fields: Any) -> dict[str, Any]:
     return data
 
 
+def is_ancestor(git_dir: Path, older_sha: str, newer_sha: str) -> bool:
+    """True when `older_sha` is an ancestor of (or equal to) `newer_sha` in `git_dir`."""
+    from . import owned_process
+
+    if not older_sha or not newer_sha:
+        return False
+    if not rev_parse(git_dir, older_sha) or not rev_parse(git_dir, newer_sha):
+        return False
+    done = owned_process.run(
+        ["git", "--git-dir", str(git_dir), "merge-base", "--is-ancestor", older_sha, newer_sha],
+        capture_output=True, env=_env(), timeout=30,
+    )
+    if done.returncode == 0:
+        return True
+    if done.returncode == 1:
+        return False
+    said = (done.stderr or b"").decode("utf-8", "replace").strip()[-300:]
+    raise LocalRepoError(f"git merge-base --is-ancestor failed: {said or f'exit {done.returncode}'}")
+
+
+def recorded_default_sha(git_dir: Path) -> Optional[str]:
+    """The default branch SHA last recorded by BOSS in boss-local.json, or None."""
+    sha = marker_of(git_dir).get("default_branch_sha")
+    return str(sha).strip() if sha else None
+
+
+def record_default_sha(git_dir: Path, sha: str, *, clear_anomaly: bool = False) -> dict[str, Any]:
+    """Persist `default_branch_sha` in boss-local.json (optionally clearing any prior anomaly)."""
+    data = marker_of(git_dir)
+    data["default_branch_sha"] = sha
+    if clear_anomaly:
+        data.pop("default_branch_anomaly", None)
+    (git_dir / MARKER).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return data
+
+
 # ── commits, without a checkout ──────────────────────────────────────────────────────────────
 
 Content = Union[str, bytes, None]
@@ -272,6 +308,8 @@ def commit_files(git_dir: Path, branch: str, files: Mapping[str, Content], messa
     if tip and git(["rev-parse", f"{tip}^{{tree}}"], git_dir=git_dir).strip() == tree:
         if not branch_sha(git_dir, branch):
             git(["update-ref", f"refs/heads/{branch}", tip, _ZERO], git_dir=git_dir)
+        if branch == default_branch(git_dir) and not recorded_default_sha(git_dir):
+            record_default_sha(git_dir, tip)
         return tip
     args = ["commit-tree", tree, "-m", message or "BOSS: update"]
     if tip:
@@ -279,6 +317,8 @@ def commit_files(git_dir: Path, branch: str, files: Mapping[str, Content], messa
     sha = git(args, git_dir=git_dir).strip()
     old = branch_sha(git_dir, branch) or _ZERO
     git(["update-ref", f"refs/heads/{branch}", sha, old], git_dir=git_dir)
+    if branch == default_branch(git_dir):
+        record_default_sha(git_dir, sha, clear_anomaly=True)
     return sha
 
 
@@ -393,6 +433,8 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
         return base_sha                                   # already in
     if method != "squash" and merge_base(git_dir, head_sha, base_sha) == base_sha:
         git(["update-ref", f"refs/heads/{base}", head_sha, base_sha], git_dir=git_dir)
+        if base == default_branch(git_dir):
+            record_default_sha(git_dir, head_sha, clear_anomaly=True)
         return head_sha                                   # fast-forward
     with worktree(git_dir, base) as wt:
         git(["fetch", "--quiet", "origin", f"refs/heads/{head}:refs/remotes/origin/{head}"], cwd=wt)
@@ -416,7 +458,10 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
                 return branch_sha(git_dir, base) or ""
             git(["commit", "--quiet", "-m", message], cwd=wt)
         git(["push", "--quiet", "origin", f"HEAD:refs/heads/{base}"], cwd=wt)
-    return branch_sha(git_dir, base) or ""
+    new_sha = branch_sha(git_dir, base) or ""
+    if new_sha and base == default_branch(git_dir):
+        record_default_sha(git_dir, new_sha, clear_anomaly=True)
+    return new_sha
 
 
 def _wire_alternates(wt_git: Path, git_dir: Path) -> None:
@@ -656,7 +701,9 @@ def create(project_id: str, name: str, *, settings: Any = None, title: str = "",
     Idempotent: an existing repository is returned as it is."""
     owner, repo = owner_for(project_id), clean_name(name)
     path = bare_path(owner, repo, settings)
-    if exists(owner, repo, settings) and branch_sha(path, default_branch(path)):
+    if exists(owner, repo, settings) and (existing_head := branch_sha(path, default_branch(path))):
+        if not recorded_default_sha(path):
+            record_default_sha(path, existing_head)
         return describe(owner, repo, settings)
     init_bare(path, default=default, marker={"project_id": project_id, "name": repo,
                                              "created_at": _now(), "origin": "new"})
@@ -723,6 +770,9 @@ def import_tree(project_id: str, name: str, source: Path, *, settings: Any = Non
             git(["symbolic-ref", "HEAD", f"refs/heads/{default}"], git_dir=path)
         marker.update({"history": "kept", "source_remote": re.sub(r"^(\w+://)[^/@]*@", r"\1", remote)
                        if remote else None})
+        default_head = branch_sha(path, default or default_branch(path))
+        if default_head:
+            marker["default_branch_sha"] = default_head
         (path / MARKER).write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
         return describe(owner, repo, settings)
     init_bare(path, default=default or DEFAULT_BRANCH, marker={**marker, "history": "new"})
@@ -734,6 +784,7 @@ def import_tree(project_id: str, name: str, source: Path, *, settings: Any = Non
         tree = git(["write-tree"], git_dir=path, env=env).strip()
     sha = git(["commit-tree", tree, "-m", "Initial import (BOSS)"], git_dir=path).strip()
     git(["update-ref", f"refs/heads/{default or DEFAULT_BRANCH}", sha, _ZERO], git_dir=path)
+    record_default_sha(path, sha)
     return describe(owner, repo, settings)
 
 

@@ -1,0 +1,16 @@
+id: mturn_fixture_01:1
+event: turn.started
+data: {"turn_id":"mturn_fixture_01","thread_id":"athr_fixture_01","model":"gpt-4o","mode":"ask","tools":["list_projects"],"dropped":[]}
+
+id: mturn_fixture_01:2
+event: text.delta
+data: {"text":"All services are healthy."}
+
+id: mturn_fixture_01:3
+event: usage
+data: {"input_tokens":18,"output_tokens":6,"cost":{"amount":0.00012,"currency":"USD","source":"gpt-4o"}}
+
+id: mturn_fixture_01:4
+event: turn.completed
+data: {"turn_id":"mturn_fixture_01","stop_reason":"end_turn"}
+

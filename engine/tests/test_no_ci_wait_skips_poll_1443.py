@@ -38,6 +38,8 @@ def test_wait_for_verdict_returns_no_ci_immediately_without_sleeping(monkeypatch
             return {"check_runs": []}
         if "/contents/.github/workflows" in path:
             raise _http_error(404, f"https://api.github.com{path}")
+        if path.endswith("/status"):
+            return {"state": "pending", "statuses": []}
         raise AssertionError(f"Unexpected call: {method} {path}")
 
     monkeypatch.setattr(github, "_request", fake_request)

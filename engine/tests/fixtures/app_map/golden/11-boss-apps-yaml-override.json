@@ -1,0 +1,39 @@
+{
+  "status": "proposed",
+  "source": "boss_apps_yaml",
+  "workspace_root": ".",
+  "selected_root_path": "services/billing",
+  "shared_paths": [
+    "libs/contracts"
+  ],
+  "apps": [
+    {
+      "app_key": "billing-api",
+      "root_path": "services/billing",
+      "workspace_root": ".",
+      "stack": {
+        "language": "python",
+        "framework": "stdlib",
+        "role": "backend",
+        "package_manager": "pip"
+      },
+      "commands": {
+        "install": "python3 -m pip install --user --disable-pip-version-check --no-input -q .",
+        "test": "python3 -m unittest discover -v"
+      },
+      "run": {
+        "command": "python3 server.py",
+        "health": "/healthz"
+      },
+      "manifests": [
+        ".boss/apps.yaml",
+        "pom.xml",
+        "services/billing/pyproject.toml"
+      ],
+      "shared_paths": [
+        "libs/contracts"
+      ],
+      "provenance_source": "boss_apps_yaml"
+    }
+  ]
+}

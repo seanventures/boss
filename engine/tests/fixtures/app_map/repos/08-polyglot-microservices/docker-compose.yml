@@ -1,0 +1,8 @@
+services:
+  billing:
+    build: ./services/billing
+  orders:
+    build:
+      context: ./services/orders
+  gateway:
+    build: ./services/gateway

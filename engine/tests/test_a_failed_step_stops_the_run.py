@@ -633,7 +633,7 @@ def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
             "smoke_test": [
                 call("http_probe", {"url": f"http://127.0.0.1:{server.server_port}/"}),
                 call("http_probe", {"url": f"http://127.0.0.1:{dead_port}/", "timeout_s": 2}),
-                call("http_probe", {"url": "http://127.0.0.1:9/"}, edition="community"),
+                call("http_probe", {"url": "http://169.254.169.254/latest/meta-data/"}),
             ],
             # BOSSAPP-1143: cases that cannot run; a case the Down server fails; Community's refusal.
             "contract_test": [

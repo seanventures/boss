@@ -1,0 +1,48 @@
+{
+  "status": "proposed",
+  "source": "workspace_graph:gradle",
+  "workspace_root": ".",
+  "selected_root_path": ".",
+  "shared_paths": [
+    "common"
+  ],
+  "apps": [
+    {
+      "app_key": "06-gradle-multi-project",
+      "root_path": ".",
+      "workspace_root": ".",
+      "stack": {
+        "language": "java",
+        "framework": null,
+        "role": "backend",
+        "package_manager": "gradle",
+        "workspace_tool": "gradle-multi-project",
+        "modules": [
+          "common",
+          "server"
+        ],
+        "runnable_modules": [
+          "server"
+        ],
+        "library_modules": [
+          "common"
+        ]
+      },
+      "commands": {
+        "build": "gradle build",
+        "test": "gradle test"
+      },
+      "run": {},
+      "manifests": [
+        "build.gradle.kts",
+        "common/build.gradle.kts",
+        "server/build.gradle.kts",
+        "settings.gradle.kts"
+      ],
+      "shared_paths": [
+        "common"
+      ],
+      "provenance_source": "workspace_graph"
+    }
+  ]
+}

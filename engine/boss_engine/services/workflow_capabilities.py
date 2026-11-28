@@ -1484,6 +1484,56 @@ def validate_captain(step: Mapping[str, Any],
     ]
 
 
+def _input_is_set(inputs: Mapping[str, Any], name: str, *, allow_empty_str: bool = False) -> bool:
+    if name not in inputs:
+        return False
+    val = inputs[name]
+    if val is None:
+        return False
+    if isinstance(val, str):
+        return True if allow_empty_str else bool(val.strip())
+    if isinstance(val, (list, tuple, dict, set)):
+        return bool(val)
+    return True
+
+
+def _conditional_input_problems(
+    step_id: str, capability: "Capability", inputs: Mapping[str, Any],
+) -> list[tuple[str, str]]:
+    """Inputs that runtime requires whenever another input on the same step is set."""
+    problems: list[tuple[str, str]] = []
+    if capability.key == "config_deploy":
+        if _input_is_set(inputs, "code_task_run_id") and not (
+            _input_is_set(inputs, "source_paths") or _input_is_set(inputs, "source_file")
+        ):
+            problems.append((
+                "source_paths",
+                f"step '{step_id}' ({capability.label}) sets 'code_task_run_id' and needs "
+                "'source_paths', which is not set (or 'source_file' for a single file).",
+            ))
+    elif capability.key == "fix_pr":
+        if _input_is_set(inputs, "path") and not _input_is_set(inputs, "content", allow_empty_str=True):
+            problems.append((
+                "content",
+                f"step '{step_id}' ({capability.label}) sets 'path' and needs 'content', which is not set.",
+            ))
+        if _input_is_set(inputs, "content", allow_empty_str=True) and not _input_is_set(inputs, "path"):
+            problems.append((
+                "path",
+                f"step '{step_id}' ({capability.label}) sets 'content' and needs 'path', which is not set.",
+            ))
+    elif capability.key == "build":
+        if _input_is_set(inputs, "start_from_content") and not (
+            _input_is_set(inputs, "start_from") or _input_is_set(inputs, "target_path")
+        ):
+            problems.append((
+                "start_from",
+                f"step '{step_id}' ({capability.label}) sets 'start_from_content' and needs "
+                "'start_from', which is not set (or 'target_path').",
+            ))
+    return problems
+
+
 def validate_step(step: Mapping[str, Any],
                   roster: Optional[Iterable[str]] = None) -> list[str]:
     """Everything wrong with one capability step, as sentences an operator can act on.
@@ -1542,6 +1592,8 @@ def validate_step_fields(step: Mapping[str, Any],
                 name,
                 f"step '{step_id}' ({capability.label}) needs '{name}', which is not set."
             ))
+
+    problems.extend(_conditional_input_problems(str(step_id), capability, inputs))
 
     unknown = set(inputs) - set(capability.required_inputs) - set(capability.optional_inputs)
     if unknown:

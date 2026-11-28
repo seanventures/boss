@@ -28,17 +28,10 @@ DEFAULT_PROJECT = os.environ.get("BOSS_PROJECT_ID", "boss-dogfood")
 
 
 def _postgres_ports(ctx):
-    """Postgres-backed ports for a CLI/MCP process, mirroring what the API builds at startup.
-
-    Falls back to the OSS defaults for a community edition, which is exactly what
-    apps/api/app/bootstrap_ports.build_ports does — the two must agree, or the same tool
-    behaves differently depending on which process invoked it.
-    """
+    """Postgres-backed ports for a CLI/MCP process, mirroring what the API builds at startup."""
     from .ports import EnginePorts
 
-    edition = str(getattr(ctx.settings, "boss_edition", "community")).strip().lower()
-    if edition not in ("enterprise", "enterprise_plus", "ent"):
-        return EnginePorts.oss_defaults(ctx.settings)
+    _ = ctx
     try:
         from apps.api.app.adapters_postgres import (
             PostgresBudgetPort, PostgresDecisionSink, PostgresEntitlementPort,
@@ -71,25 +64,23 @@ def _ctx():
     from .ports import EnginePorts, configure_engine_ports, get_engine_ports
 
     if get_engine_ports() is None:
-        if os.environ.get("DATABASE_URL"):
+        if ctx.durable_workspace_configured:
             configure_engine_ports(_postgres_ports(ctx))
         else:
             configure_engine_ports(EnginePorts.oss_defaults(ctx.settings))
-    if not os.environ.get("DATABASE_URL"):
+    if not ctx.durable_workspace_configured:
         print(
-            "boss-engine: DATABASE_URL is not set — running in catalog-only mode. "
-            "BOSS workflow commands require a self-hosted Postgres workspace so "
-            "tasks, Receipts, approvals, and leases are durable. Set DATABASE_URL "
-            "and run `python -m boss_engine bootstrap` before invoking workflow tools.",
+            f"boss-engine: no database configured (source={ctx.database_source}) — running in "
+            "catalog-only mode. BOSS workflow commands require a self-hosted Postgres workspace "
+            "so tasks, Receipts, approvals, and leases are durable. Set DATABASE_URL (or "
+            "BOSS_INSTALL_DIR pointing at your install .env) and run "
+            "`python -m boss_engine bootstrap` before invoking workflow tools.",
             file=sys.stderr,
         )
-    elif not ctx.database_reachable():
-        print(
-            "boss-engine: warning — database is unreachable; DB-backed tools will "
-            "fail. Check DATABASE_URL and run `python -m boss_engine bootstrap` "
-            "against a fresh database (see engine/README.md).",
-            file=sys.stderr,
-        )
+    else:
+        db_err = ctx.database_error()
+        if db_err:
+            print(f"boss-engine: warning — {db_err}", file=sys.stderr)
     return ctx
 
 
@@ -154,13 +145,18 @@ def _cmd_call(args) -> int:
 
 def _pipeline_turn(ctx, project_id: str, message: str, thread_id: str | None = None) -> dict:
     """ONE AGENT PIPELINE (BOSSAPP-759): with a database, a CLI turn is an Ask BOSS turn —
-    AgentService.chat → IntentRouter.route_turn, the same thread, decision, actions and reply as
-    the console and Metatron."""
+    AgentService.chat_durably → IntentRouter.route_turn, the same thread, decision, actions and
+    reply as the console and Metatron."""
     from .services.agent_service import AgentService
 
-    with ctx.begin() as connection:
-        return AgentService(ctx.settings).chat(connection, project_id=project_id, actor="cli",
-                                               message=message, thread_id=thread_id)
+    return AgentService(ctx.settings).chat_durably(
+        ctx.engine,
+        background=False,
+        project_id=project_id,
+        actor="cli",
+        message=message,
+        thread_id=thread_id,
+    )
 
 
 def _print_offers(turn: dict) -> None:

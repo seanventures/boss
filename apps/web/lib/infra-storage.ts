@@ -661,11 +661,11 @@ export function useStorageAsk(projectId: string | null, decisionId: string | nul
 // ── writes ──────────────────────────────────────────────────────────────────────────────────
 
 /** The permissions the API checks (contract §1); the buttons gate on these same constants. */
-export const ACKNOWLEDGE_PERMISSION: Permission = "system:operate";
-export const CLEAN_PERMISSION: Permission = "autonomy:manage";
-export const RULES_PERMISSION: Permission = "autonomy:manage";
+export const ACKNOWLEDGE_PERMISSION: Permission = "instance:manage";
+export const CLEAN_PERMISSION: Permission = "instance:manage";
+export const RULES_PERMISSION: Permission = "instance:manage";
 export const STORAGE_DELETE_PERMISSION: Permission = "decision:approve";
-export const REPLAN_PERMISSION: Permission = "autonomy:manage";
+export const REPLAN_PERMISSION: Permission = "instance:manage";
 
 const sampleWrite = (): WriteResult => ({ ok: true, status: 200, body: { sample: true }, error: null });
 

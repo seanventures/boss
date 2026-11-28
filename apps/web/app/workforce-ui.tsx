@@ -25,6 +25,8 @@ import { ChainChips, TakeoverQueue } from "./agents/org-chain";
 import type { OrgDrift } from "../lib/agents-org-board";
 import { notifyChanged } from "./changed";
 import { ActivityRiver } from "./agents/activity-river";
+import { DeploymentsOverview } from "./agents/deployments-overview";
+import { HealthView } from "./agents/health-view";
 import { ConversationSheet } from "./agents/conversation-sheet";
 import { isThreadId } from "../lib/agent-conversation";
 import { openRoom } from "../lib/agent-converse";
@@ -49,13 +51,13 @@ function humanise(key: string): string {
     .join(" ");
 }
 
-export type AgentsView = "live" | "org" | "directory" | "activity" | "panels";
+export type AgentsView = "live" | "org" | "directory" | "activity" | "deployments" | "health" | "panels";
 
 export { UNREGISTERED_TIP } from "./agents/directory-view";
 
 /** Old links keep working: the Roster is the Directory now, the Team is Organization. */
 const LEGACY_VIEWS: Record<string, AgentsView> = { roster: "directory", team: "org" };
-const VIEWS = new Set<AgentsView>(["live", "org", "directory", "activity", "panels"]);
+const VIEWS = new Set<AgentsView>(["live", "org", "directory", "activity", "deployments", "health", "panels"]);
 
 /** The view the URL names. `view` is shared with other areas (the workflow editor uses
  *  visual|json), so anything this area does not know is Live. */
@@ -70,6 +72,8 @@ const TAB_TIP: Record<AgentsView, string | undefined> = {
   org: "Teams, and who hands work to whom",
   directory: "Every agent, to find and set up",
   activity: "What agents did, newest first",
+  deployments: "Live agents, bots, environments, and MCP tools",
+  health: "Deployment health, system services, and worker scaling",
   panels: undefined,
 };
 
@@ -276,6 +280,8 @@ export function WorkforceArea(
     { key: "directory", testid: "agents-view-directory",
       label: <>Directory <em data-testid="wf-roster-count">({everyone.length})</em></> },
     { key: "activity", testid: "agents-view-activity", label: "Activity" },
+    { key: "deployments", testid: "agents-view-deployments", label: "Deployments" },
+    { key: "health", testid: "agents-view-health", label: "Health" },
     ...(panels.length ? [{ key: "panels" as const, testid: "agents-view-panels",
                            label: <>Panels <em>({panels.length})</em></> }] : []),
   ];
@@ -429,6 +435,10 @@ export function WorkforceArea(
                        runLabel={board.board?.missions.find((m) => m.runId === focusRun)?.subject || undefined}
                        onClearRun={() => setView("activity", { run: null })} paused={!consoleLive}
                        onOpenConversation={openConversation} />
+      ) : view === "deployments" ? (
+        <DeploymentsOverview projectId={projectId} actor={actor} onCreateBot={() => setWizard(true)} />
+      ) : view === "health" ? (
+        <HealthView projectId={projectId} actor={actor} />
       ) : view === "panels" && studio ? (
         <PanelsView feed={studio} actor={actor} />
       ) : (

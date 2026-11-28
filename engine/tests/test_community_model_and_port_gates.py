@@ -168,18 +168,40 @@ def test_claude_cli_owned_login_records_metadata_without_credential_or_model(mon
     assert "token" not in payload
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
-def test_host_port_discovery_stops_before_db_or_network(edition, monkeypatch):
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", "enterprise_self_hosted"])
+def test_host_port_discovery_is_exposed_and_enforces_project_host_binding(edition, monkeypatch):
     def no_probe(*_args, **_kwargs):
         raise AssertionError("host probe must not run")
 
     monkeypatch.setattr(socket, "socket", no_probe)
-    ctx = _Ctx(edition)
+
+    class _ProbeCtx:
+        def __init__(self, ed):
+            self.settings = _Settings(ed)
+
+        def begin(self):
+            from contextlib import nullcontext
+
+            class _EmptyConn:
+                def execute(self, *_a, **_k):
+                    class _R:
+                        def mappings(self):
+                            return self
+
+                        def first(self):
+                            return None
+
+                        def all(self):
+                            return []
+
+                    return _R()
+
+            return nullcontext(_EmptyConn())
+
     result = build_default_registry().invoke(
-        "find_free_port", ctx, project_id="project-a", actor="member",
+        "find_free_port", _ProbeCtx(edition), project_id="project-a", actor="member",
         args={"host": "169.254.169.254", "start": 3000},
     )
     assert result["ok"] is False
-    assert "Community host-port probes" in result["error"]
-    assert ctx.began is False
-    assert "find_free_port" not in build_discuss_read_registry(edition=edition).names()
+    assert "not a deployment host registered in this project" in result["error"]
+    assert "find_free_port" in build_discuss_read_registry(edition=edition).names()

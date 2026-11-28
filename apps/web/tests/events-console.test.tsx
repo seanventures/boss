@@ -215,7 +215,8 @@ describe("E1 Connections", () => {
     expect($('[data-testid="ev-src-state-icn_s"]')?.textContent).toBe("Live");
     expect($('[data-testid="ev-src-icn_s"]')?.textContent).toContain("14/min");
     expect($('[data-testid="ev-src-rules-icn_s"]')?.textContent).toContain("2 rules");
-    expect($('[data-testid="ev-coming-teams"]')).not.toBeNull();
+    expect($('[data-testid="ev-coming-salesforce"]')).not.toBeNull();
+    expect($('[data-testid="ev-coming-teams"]')).toBeNull();
     await click($('[data-testid="ev-src-menu-icn_s"]'));
     await click($('[data-testid="ev-src-test-icn_s"]'));
     expect(calls.some((c) => c.method === "POST" && c.url === "/v1/intake/connections/icn_s/test")).toBe(true);
@@ -523,5 +524,234 @@ describe("E7 People", () => {
     await mount(<EventsHome projectId={PID} place={place("people", { conn: "icn_s" })} />);
     expect($('[data-testid="ev-att-off"]')).toBeNull();
     expect($('[data-testid="ev-revoke-U0PRIYA"]')?.getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+describe("E3 Connect Microsoft Teams & ServiceNow Business Rule snippet", () => {
+  it("creates Teams endpoint + connection, offers manifest.json download, and handles /chat/link label", async () => {
+    at("/?area=setup&events=connect&kind=teams");
+    const calls = api((url, method) => {
+      if (url.startsWith("/v1/intake/connections?")) return json({ connections: [] });
+      if (method === "POST" && url === "/v1/chat/endpoints") return json({ id: "che_teams", kind: "teams", name: "Microsoft Teams", status: "active", app_id: "11111111-2222-3333-4444-555555555555", config: {}, secrets_set: ["app_password"], urls: { webhook: "https://boss.example/v1/intake/teams/tok" } }, 201);
+      if (method === "POST" && url === "/v1/intake/connections") return json({ ...SLACK, id: "icn_teams", kind: "teams", label: "Microsoft Teams", url_path: "/v1/intake/teams/tok", config: { chat_endpoint_id: "che_teams", app_id: "11111111-2222-3333-4444-555555555555", tenant_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" } }, 201);
+      if (url === "/v1/intake/connections/icn_teams/test-message") return json({ ok: true, posted: true, channel: "19:chan@thread.tacv2", checks: { "secret:app_password": "ok" } });
+      return undefined;
+    });
+    await mount(<EventsHome projectId={PID} place={place("connect", { kind: "teams" })} />);
+    expect($('[data-testid="ev-teams-manifest"]')?.getAttribute("download")).toBe("boss-teams-manifest.json");
+    const save = $('[data-testid="ev-teams-save"]') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await type('[data-testid="ev-teams-appid"]', "11111111-2222-3333-4444-555555555555");
+    await type('[data-testid="ev-teams-tenantid"]', "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    await type('[data-testid="ev-teams-secret"]', "teams-app-pw");
+    await type('[data-testid="ev-teams-channel"]', "19:chan@thread.tacv2");
+    expect(save.disabled).toBe(false);
+    await click(save);
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/chat/endpoints" && c.body.kind === "teams")).toBe(true);
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/intake/connections" && c.body.kind === "teams")).toBe(true);
+    expect(calls.some((c) => c.url === "/v1/intake/connections/icn_teams/test-message")).toBe(true);
+
+    const { toMatch: toM, fromMatch: fromM } = await import("../lib/intake-rules");
+    const m = toM({ ...emptyDraft(true), when: "mention", channels: ["19:general"], followups: true }, true, "teams");
+    expect(m.match).toMatchObject({ all: expect.arrayContaining([{ field: "type", op: "in", value: ["com.microsoft.teams.message.mention", "com.microsoft.teams.message.thread_reply"] }]) });
+    expect(fromM(m.match, "mention_or_dm", true).when).toBe("mention");
+  });
+
+  it("Connect a source → ServiceNow shows config fields and copyable Business Rule snippet on connect", async () => {
+    const calls = api((url, method) => {
+      if (url.startsWith("/v1/intake/catalog")) {
+        return json({
+          sources: [{
+            key: "servicenow", label: "ServiceNow", modes: ["push", "poll"],
+            description: "Incidents and changes.",
+            auth_fields: [
+              { name: "instance_url", label: "Instance URL", required: false },
+              { name: "signing_secret", label: "Signing secret", secret: true, required: false },
+            ],
+            event_types: ["com.servicenow.incident.created"],
+          }],
+        });
+      }
+      if (method === "POST" && url === "/v1/intake/connections") {
+        return json({
+          ...HOOK, id: "icn_sn", kind: "servicenow", label: "ServiceNow",
+          url: "https://boss.example/v1/intake/servicenow/sntok",
+          secret: "whsec_SNONCE",
+        }, 201);
+      }
+      return undefined;
+    });
+    await mount(<EventsHome projectId={PID} place={place("connections")} />);
+    await click($('[data-testid="ev-connect"]'));
+    await click($('[data-testid="ev-pick-servicenow"]'));
+    await click($('[data-testid="ev-connect-save"]'));
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/intake/connections" && c.body.kind === "servicenow")).toBe(true);
+    expect($('[data-testid="ev-connect-url"]')?.textContent).toBe("https://boss.example/v1/intake/servicenow/sntok");
+    expect($('[data-testid="ev-servicenow-snippet"]')?.textContent).toContain("webhook-signature");
+  });
+});
+
+describe("E8 My chat links in Account", () => {
+  it("lists linked chat accounts and revokes one via POST /v1/chat/links/{id}/revoke", async () => {
+    const { MyChatLinks } = await import("../app/account/security");
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (u: string, init?: RequestInit) => {
+      const url = String(u);
+      const method = String(init?.method ?? "GET");
+      calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : {} });
+      if (url === "/v1/chat/links") {
+        return json({
+          links: [{
+            id: "chl_t1", endpoint_id: "che_teams", kind: "teams", endpoint_name: "Microsoft Teams",
+            external_user_id: "29:u1", external_name: "priya.teams", method: "aad_oid", verified_at: iso(60_000),
+          }],
+        });
+      }
+      if (url === "/v1/chat/links/chl_t1/revoke" && method === "POST") return json({ ok: true, id: "chl_t1" });
+      return json({});
+    }));
+    await mount(<MyChatLinks />);
+    expect($('[data-testid="my-chat-links"]')?.textContent).toContain("Microsoft Teams");
+    expect($('[data-testid="my-chat-links"]')?.textContent).toContain("@priya.teams");
+    await click($('[data-testid="my-chat-link-revoke-chl_t1"]'));
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/chat/links/chl_t1/revoke")).toBe(true);
+    expect($('[data-testid="my-chat-link-chl_t1"]')).toBeNull();
+  });
+});
+
+describe("BOSSAPP-1197 Eventing console polish & uncaptured states", () => {
+  it("E7 People paging: Load more fetches next_offset, appends rows, and hides when done", async () => {
+    const calls = api((url) => {
+      if (url.includes("/people?limit=2&offset=2")) {
+        return json({
+          ...PEOPLE, limit: 2, offset: 2, next_offset: null, total: 3,
+          people: [
+            { external_user_id: "U0PAGE2", display: "page.two", state: "linked", link_id: "chl_p2", method: "code",
+              person: { principal_id: "usr_p2", name: "Page Two", email: "p2@northpeak.com" }, linked_at: iso(60_000) },
+          ],
+        });
+      }
+      if (url.endsWith("/people")) {
+        return json({
+          ...PEOPLE, limit: 2, offset: 0, next_offset: 2, total: 3,
+          people: PEOPLE.people.slice(0, 2),
+        });
+      }
+      return undefined;
+    });
+    await mount(<EventsHome projectId={PID} place={place("people", { conn: "icn_s" })} />);
+    expect($$('[data-testid^="ev-person-U"]').length).toBe(2);
+    expect($('[data-testid="ev-people-more"]')).not.toBeNull();
+    await click($('[data-testid="ev-people-more"]'));
+    expect(calls.some((c) => c.url.includes("/people?limit=2&offset=2"))).toBe(true);
+    expect($$('[data-testid^="ev-person-U"]').length).toBe(3);
+    expect($('[data-testid="ev-person-U0PAGE2"]')).not.toBeNull();
+    expect($('[data-testid="ev-people-more"]')).toBeNull();
+  });
+
+  it("E4 Rules: #channel names, thread+record limits, no stray Always answer people label, and budget bar", async () => {
+    const slackNamed = { ...SLACK, config: { ...SLACK.config, channel_names: { C0SUPPORT: "support", C0PAYMENTS: "payments" } } };
+    const calls = api((url) => (url.startsWith("/v1/intake/connections?") ? json({ connections: [slackNamed, HOOK] }) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("rules", { conn: "icn_s" })} />);
+    // #channel names resolved in list and editor input
+    expect($('[data-testid="ev-rule-open-atrg_3"]')?.textContent).toContain("Every message in #payments");
+    expect(($('[data-testid="ev-channels"]') as HTMLInputElement).value).toBe("#support");
+    await type('[data-testid="ev-channels"]', "#support, #payments");
+    // Both thread and record limits exist and submit cleanly
+    expect($('[data-testid="ev-limit"]')).not.toBeNull();
+    expect($('[data-testid="ev-limit-record"]')).not.toBeNull();
+    await type('[data-testid="ev-limit"]', "15");
+    await type('[data-testid="ev-limit-record"]', "8");
+    // Stray "Always answer people" label is gone
+    expect($('[data-testid="ev-rule-editor"]')?.textContent).not.toContain("Always answer people");
+    // Budget bar renders today's spend against the daily cap ($0.84 of $5.00 = 17%)
+    expect($('[data-testid="ev-budget-bar"]')).not.toBeNull();
+    expect($('[data-testid="ev-budget-used"]')?.textContent).toContain("$0.84 of $5.00 today (17%)");
+    await click($('[data-testid="ev-rule-save"]'));
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.body.limits).toMatchObject({ per_entity: 15, per_thread: 15, per_record: 8 });
+    const matchAll = ((patch.body.config as { match: { all: Array<{ field?: string; value?: unknown }> } }).match.all);
+    expect(matchAll.find((x) => x.field === "data.channel")?.value).toEqual(["C0SUPPORT", "C0PAYMENTS"]);
+  });
+
+  it("E5 Stream: 1440px aside-led split, mobile back control, and CSS 390px detail-first order", async () => {
+    api();
+    await mount(<EventsHome projectId={PID} place={place("stream", { ev: "iev_1" })} />);
+    const split = $('[data-testid="ev-stream-split"]');
+    expect(split?.getAttribute("data-lead")).toBe("aside");
+    expect(split?.className).toContain("ev-stream-split");
+    expect($('[data-testid="ev-detail-back"]')?.textContent).toContain("Back to events");
+  });
+
+  it("E1 Coming cards keep dashed outline and E6 calm cards show source type + Force panel opens and cancels", async () => {
+    api();
+    await mount(<EventsHome projectId={PID} place={place("connections")} />);
+    expect($('[data-testid="ev-coming-mail"]')?.getAttribute("data-dashed")).toBe("true");
+    unmount();
+    await mount(<EventsHome projectId={PID} place={place("dead")} />);
+    expect($('[data-testid="ev-calm-kind-icn_s"]')?.textContent).toBe("Slack");
+    expect($('[data-testid="ev-calm-icn_s"]')?.textContent).toContain("northpeak: nothing stuck");
+    // Uncaptured E6 Force panel open + cancel flow
+    await click($('[data-testid="ev-dl-pick-iev_d1"]'));
+    await click($('[data-testid="ev-dl-force"]'));
+    expect($('[data-testid="ev-force"]')).not.toBeNull();
+    await click($('[data-testid="ev-force-cancel"]'));
+    expect($('[data-testid="ev-force"]')).toBeNull();
+  });
+
+  it("E2 uncaptured states: step 2 existing endpoint, active attestation, and Signed → Saved → Replied", async () => {
+    at("/?area=setup&events=connect&kind=slack");
+    const attestedSlack = {
+      ...SLACK,
+      config: {
+        ...SLACK.config,
+        sso_attested: { idp: "idp_okta", idp_name: "Okta", domains: ["northpeak.com"], attested_by: "Alice Chen", attested_at: "2026-11-03T10:00:00Z" },
+      },
+    };
+    let polled = false;
+    api((url, method) => {
+      if (url.startsWith("/v1/intake/connections?")) return json({ connections: [attestedSlack] });
+      if (url.startsWith("/v1/chat/endpoints?")) {
+        return json({ endpoints: [{ id: "che_1", kind: "slack", name: "Slack", status: "active", config: { channel: "C0SUPPORT" }, secrets_set: ["signing_secret", "bot_token"], urls: { event_subscriptions_request_url: "https://boss.example/slack" } }] });
+      }
+      if (url.endsWith("/test-message") && method === "POST") {
+        return json({ ok: true, posted: true, round_trip: false, channel: "C0SUPPORT", probe_id: "itp_1", checks: { "secret:signing_secret": "ok" } });
+      }
+      if (url.endsWith("/test-message") && method === "GET") {
+        polled = true;
+        return json({ ok: true, posted: true, round_trip: true, channel: "C0SUPPORT", probe_id: "itp_1", checks: {} });
+      }
+      if (url.startsWith("/v1/intake/events?")) {
+        return json({ ...EVENTS, events: [{ ...EVENTS.events[0], received_at: new Date().toISOString() }] });
+      }
+      return undefined;
+    });
+    await mount(<EventsHome projectId={PID} place={place("connect", { kind: "slack" })} />);
+    // Step 2 vault summary + active SSO attestation
+    expect($('[data-testid="ev-slack-endpoint"]')?.textContent).toContain("posts in #C0SUPPORT");
+    expect($('[data-testid="ev-slack-sso"]')?.textContent).toContain("SSO auto-link on · Okta · northpeak.com");
+    expect($('[data-testid="ev-slack-sso-off"]')).not.toBeNull();
+    // Run test and advance poll to capture Signed → Saved → Replied
+    vi.useFakeTimers();
+    const btn = $('[data-testid="ev-slack-test-btn"]') as HTMLButtonElement;
+    btn.click();
+    await vi.advanceTimersByTimeAsync(3200);
+    vi.useRealTimers();
+    await settle();
+    expect(polled).toBe(true);
+    expect($('[data-testid="ev-slack-flow-signed"]')?.getAttribute("data-state")).toBe("done");
+    expect($('[data-testid="ev-slack-flow-saved"]')?.getAttribute("data-state")).toBe("done");
+    expect($('[data-testid="ev-slack-flow-replied"]')?.getAttribute("data-state")).toBe("done");
+    expect($('[data-testid="ev-slack-test"]')?.textContent).toContain("Slack works end to end.");
+  });
+
+  it("CSS polish checks: dashed Coming outline, E5 1440/390 layout, and E7 390px non-truncating handles", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const css = readFileSync(join(process.cwd(), "app/events/events.css"), "utf8");
+    expect(css).toContain("border: 1.5px dashed var(--border-strong)");
+    expect(css).toContain(".ev-stream-split { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr); }");
+    expect(css).toContain(".ev-stream-split > .ev-detail, .ev-stream-split > aside { order: -1; }");
+    expect(css).toContain(".ev-person { grid-template-columns: minmax(0, 1fr); }");
   });
 });

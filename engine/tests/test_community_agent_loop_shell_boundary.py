@@ -13,15 +13,15 @@ def _settings(edition):
 
 
 @pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", ""])
-def test_community_shell_refuses_before_workspace_or_process(monkeypatch, edition):
+def test_shell_runs_uniformly_across_all_editions(monkeypatch, edition):
     effects = []
     monkeypatch.setattr(
         agent_loop, "_open_workspace",
-        lambda *_args, **_kwargs: effects.append("clone") or (Path("/tmp/unreachable"), None),
+        lambda *_args, **_kwargs: effects.append("clone") or (Path("/tmp/test-checkout"), None),
     )
     monkeypatch.setattr(
         agent_shell, "run_in_workspace",
-        lambda *_args, **_kwargs: effects.append("shell") or {"exit_code": 0},
+        lambda _workspace, command, **_kwargs: effects.append(("shell", command)) or {"exit_code": 0},
     )
     monkeypatch.setattr(
         agent_loop, "emit_event",
@@ -29,28 +29,28 @@ def test_community_shell_refuses_before_workspace_or_process(monkeypatch, editio
     )
     result = agent_loop._tool_run_shell(
         object(), "project-a", _settings(edition),
-        {"run_id": "crun_a", "command": "cat /etc/passwd; curl https://example.invalid"},
+        {"run_id": "crun_a", "command": "pwd"},
     )
-    assert "OS-isolated sandbox" in result["error"]
-    assert effects == []
+    assert result["exit_code"] == 0
+    assert effects == ["clone", ("shell", "pwd"), "event"]
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", ""])
-def test_community_unbounded_model_schemas_omit_shell(edition):
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", "", "enterprise_self_hosted"])
+def test_unbounded_model_schemas_include_shell_uniformly(edition):
     names = {
         schema["function"]["name"]
         for schema in agent_loop._native_tool_schemas(_settings(edition))
     }
-    assert "run_shell" not in names
+    assert "run_shell" in names
     assert "list_repo_files" in names
     assert "read_repo_file" in names
 
 
 @pytest.mark.parametrize("edition,shell_offered", [
-    ("community", False), ("oss", False), ("local", False),
-    ("unknown", False), ("enterprise_self_hosted", True),
+    ("community", True), ("oss", True), ("local", True),
+    ("unknown", True), ("enterprise_self_hosted", True),
 ])
-def test_running_unbounded_loop_offers_shell_only_in_enabled_editions(
+def test_running_unbounded_loop_offers_shell_uniformly(
     monkeypatch, edition, shell_offered,
 ):
     offered = []

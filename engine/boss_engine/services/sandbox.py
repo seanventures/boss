@@ -718,6 +718,9 @@ class EphemeralSandbox:
         credential: a credential-shaped name is dropped."""
         extra_env = dict(env or {})
         self._require_provisioned()
+        from ..db import assert_not_in_written_tx
+
+        assert_not_in_written_tx("sandbox.run")
         argv = shlex.split(command)
         if not argv:
             raise SandboxError("Empty command.")
@@ -916,6 +919,9 @@ class EphemeralSandbox:
         until the next diff; every diff re-checks and re-notes it. Anything else over the read
         cap (a text file, new or tracked) refuses in words."""
         self._require_provisioned()
+        from ..db import assert_not_in_written_tx
+
+        assert_not_in_written_tx("sandbox.diff")
         # Last round's left-out block is cleared FIRST, so this round stages and checks those
         # files again: one is noted again while it is still there, and a file the run removed or
         # ignored itself leaves no stale entry behind.

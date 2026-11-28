@@ -46,7 +46,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlsplit
 
 from boss_engine.identity import egress_rules, github_app, github_urls, grants, lineage, repo_scope, runs, tokens
 from boss_engine.identity.principal import RunTokenClaims
@@ -54,6 +54,9 @@ from boss_engine.identity.principal import RunTokenClaims
 log = logging.getLogger("boss.egress")
 
 GIT_UPSTREAM_ENV = "BOSS_GITHUB_GIT_URL"
+GITHUB_WEB_ENV = "BOSS_GITHUB_WEB_URL"
+GITHUB_API_ENV = "BOSS_GITHUB_API_URL"
+GITLAB_BASE_ENV = "BOSS_GITLAB_BASE_URL"
 BITBUCKET_GIT_ENV = "BOSS_BITBUCKET_GIT_URL"       # default https://bitbucket.org
 BITBUCKET_API_ENV = "BOSS_BITBUCKET_API_URL"       # default https://api.bitbucket.org
 STRICT_ENV = "BOSS_EGRESS_STRICT_SECRETS"
@@ -140,9 +143,13 @@ def upstream_url(base: str, encoded_path: str, query: str) -> str:
 
 
 def _httpx_upstream(method: str, url: str, headers: Mapping[str, str], body: bytes) -> EgressResponse:
+    import ssl
+
     import httpx
 
-    with httpx.Client(timeout=60.0, follow_redirects=False) as client:
+    ca = (os.environ.get("SSL_CERT_FILE") or os.environ.get("GIT_SSL_CAINFO") or "").strip()
+    verify: Any = ssl.create_default_context(cafile=ca) if ca else True
+    with httpx.Client(timeout=60.0, follow_redirects=False, verify=verify) as client:
         request = client.build_request(method, httpx.URL(url), headers=dict(headers), content=body or None)
         resp = client.send(request)
         return EgressResponse(resp.status_code, dict(resp.headers), resp.content)
@@ -263,6 +270,73 @@ def _bitbucket_basic(credential: str) -> str:
     return "Basic " + base64.b64encode(pair.encode()).decode()
 
 
+def gitlab_repos(claims: RunTokenClaims, db: Any) -> list[str]:
+    repos = ((getattr(claims.task, "resources", None) or {}).get("gitlab")) or []
+    repos = [r for r in repos if isinstance(r, str)]
+    if not repos:
+        return []
+    try:
+        grant = grants.load(claims.grant_id, db=db)
+    except Exception:  # noqa: BLE001
+        return []
+    return list(repo_scope.granted(db, provider=repo_scope.GITLAB, org_id=claims.org_id,
+                                   run_id=claims.task.run_id, grant=grant,
+                                   obo=claims.mode.value == "obo", repos=repos))
+
+
+def gitlab_credential() -> str:
+    token = (os.environ.get("BOSS_GITLAB_TOKEN") or "").strip()
+    if token:
+        return token
+    user = (os.environ.get("BOSS_GITLAB_USERNAME") or "").strip()
+    password = (os.environ.get("BOSS_GITLAB_PASSWORD") or "").strip()
+    return f"{user}:{password}" if user and password else ""
+
+
+def _gitlab_basic(credential: str) -> str:
+    if ":" in credential:
+        pair = credential
+    else:
+        user = (os.environ.get("BOSS_GITLAB_USERNAME") or "oauth2").strip() or "oauth2"
+        pair = f"{user}:{credential}"
+    return "Basic " + base64.b64encode(pair.encode()).decode()
+
+
+def _host_matches_url(guest_host: str, raw_url: str) -> bool:
+    if not raw_url:
+        return False
+    parts = urlsplit(raw_url)
+    host = (parts.hostname or "").lower()
+    netloc = parts.netloc.lower()
+    return bool(host and guest_host in (netloc, host))
+
+
+def _resolve_host_provider(guest_host: str, kind: str) -> str:
+    static = (GIT_HOSTS if kind == "git" else API_HOSTS).get(guest_host, "")
+    if static:
+        return static
+    if not guest_host:
+        return ""
+    if kind == "git":
+        for var in (GIT_UPSTREAM_ENV, GITHUB_WEB_ENV):
+            if _host_matches_url(guest_host, (os.environ.get(var) or "").strip()):
+                return "github"
+    else:
+        api_url = (os.environ.get(GITHUB_API_ENV) or "").strip()
+        if _host_matches_url(guest_host, api_url):
+            return "github-api"
+        if not api_url and _host_matches_url(guest_host, (os.environ.get(GITHUB_WEB_ENV) or "").strip()):
+            return "github-api"
+    gl_url = (os.environ.get(GITLAB_BASE_ENV) or "").strip()
+    if gl_url:
+        parts = urlsplit(gl_url)
+        gl_host = (parts.hostname or "").lower()
+        has_gl_cfg = bool(gitlab_credential() or (os.environ.get("BOSS_GITLAB_REPOS") or "").strip())
+        if gl_host and (gl_host != "gitlab.com" or has_gl_cfg) and guest_host in (parts.netloc.lower(), gl_host):
+            return "gitlab" if kind == "git" else "gitlab-api"
+    return ""
+
+
 def _check_push_offline(body: bytes, pattern: str, perms: Mapping[str, str], *,
                         allow_delete: bool) -> egress_rules.RuleDecision:
     """A push to a host egress cannot ask about commits outside the pack (Bitbucket): the ref,
@@ -348,7 +422,7 @@ class EgressProxy:
         parts = req.path.lstrip("/").split("/", 2)
         guest_host = parts[1].lower() if len(parts) > 1 else ""
         rest_raw = "/" + (parts[2] if len(parts) > 2 else "")
-        provider = (GIT_HOSTS if kind == "git" else API_HOSTS).get(guest_host, "")
+        provider = _resolve_host_provider(guest_host, kind)
         template = f"/{kind}/{{host}}"
         ghes_api = ""
 
@@ -477,7 +551,10 @@ class EgressProxy:
         # THE PATH FIRST: decoded and canonical BEFORE any rule sees it; `..`, `.`, `//` and
         # encoded separators are refused outright, and the upstream gets exactly this path.
         try:
-            rest, encoded = egress_rules.canonical_path(rest_raw)
+            if provider == "gitlab-api":
+                rest, encoded = egress_rules.canonical_gitlab_api_path(rest_raw)
+            else:
+                rest, encoded = egress_rules.canonical_path(rest_raw)
         except egress_rules.PathRefused as exc:
             return self._refuse(db, claims, provider, req.method, template, str(exc))
         if any(h in _REFUSE_HEADERS for h in req.headers):
@@ -487,6 +564,7 @@ class EgressProxy:
         perms = github_app.run_permissions(claims, db=db)
         repos = github_app.run_repos(claims.task)
         bb_repos = bitbucket_repos(claims, db)
+        gl_repos = gitlab_repos(claims, db)
         pattern = github_app.push_ref_pattern(claims, db=db)
         pairs = parse_qsl(req.query, keep_blank_values=True)
         query = dict(pairs)
@@ -524,6 +602,11 @@ class EgressProxy:
         elif provider == "bitbucket-api":
             decision = egress_rules.check_bitbucket_api(req.method, rest, perms=perms, repos=bb_repos,
                                                         body=body_json(), push_pattern=pattern)
+        elif provider == "gitlab":
+            decision = egress_rules.check_gitlab_git(req.method, rest, query, perms=perms, repos=gl_repos)
+        elif provider == "gitlab-api":
+            decision = egress_rules.check_gitlab_api(req.method, rest, perms=perms, repos=gl_repos,
+                                                     body=body_json(), push_pattern=pattern)
         else:
             decision = egress_rules.RuleDecision(False, "{unknown}", "unknown_provider")
         template = decision.template
@@ -541,6 +624,10 @@ class EgressProxy:
             token = bitbucket_credential()
             if not token:
                 return self._refuse(db, claims, provider, req.method, template, "bitbucket_not_connected")
+        elif provider.startswith("gitlab"):
+            token = gitlab_credential()
+            if not token:
+                return self._refuse(db, claims, provider, req.method, template, "gitlab_not_connected")
         else:
             try:
                 token = installation_token()
@@ -551,7 +638,7 @@ class EgressProxy:
                 # public dependency): forwarded with no credential at all. GitHub serves it only
                 # if it is public; the run's rules above still decided the repo and the method.
                 token = ""
-        if provider in ("github", "bitbucket") and rest.endswith("/git-receive-pack") \
+        if provider in ("github", "bitbucket", "gitlab") and rest.endswith("/git-receive-pack") \
                 and req.method.upper() == "POST":
             if req.headers.get("content-encoding"):
                 return self._refuse(db, claims, provider, req.method, template, "encoded_push")
@@ -736,6 +823,15 @@ class EgressProxy:
             base = (os.environ.get(BITBUCKET_API_ENV) or "https://api.bitbucket.org").rstrip("/")
             headers["Authorization"] = (_bitbucket_basic(token) if ":" in token
                                         else f"Bearer {token}")
+        elif provider == "gitlab":
+            base = (os.environ.get(GITLAB_BASE_ENV) or "https://gitlab.com").rstrip("/")
+            headers["Authorization"] = _gitlab_basic(token)
+        elif provider == "gitlab-api":
+            base = (os.environ.get(GITLAB_BASE_ENV) or "https://gitlab.com").rstrip("/")
+            if ":" in token:
+                headers["Authorization"] = _gitlab_basic(token)
+            else:
+                headers["PRIVATE-TOKEN"] = token
         else:
             base = api or github_app.api_base()
             github_urls.check_send(token, base, where="egress")   # before the header exists

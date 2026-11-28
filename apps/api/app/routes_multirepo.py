@@ -31,7 +31,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 
-from boss_engine.db import begin
+from boss_engine.db import begin, get_engine
 from boss_engine.identity import P, Scope, audit, permit
 
 SPEC = "docs/product/MULTIREPO.md"
@@ -105,8 +105,9 @@ def build_multirepo_router() -> APIRouter:
     def refresh_repos(request: Request, payload: dict = Body(...)) -> Any:
         project_id = str(payload.get("project_id") or "")
         try:
+            result = registry.refresh(None, _settings(), project_id, actor=_actor(request),
+                                      db_engine=get_engine())
             with begin() as db:
-                result = registry.refresh(db, _settings(), project_id, actor=_actor(request))
                 return {**registry.list_registry(db, project_id), "refreshed": result}
         except MultiRepoError as exc:
             return _refuse(exc)

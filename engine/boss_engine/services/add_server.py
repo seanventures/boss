@@ -338,8 +338,8 @@ def understand(connection, settings: Settings, project_id: str, raw: str, *,
         "preconditions": {"outward_ssh": outward_ssh_allowed(settings),
                           "host_writes": writes,
                           "host_writes_words": None if writes else (
-                              "This edition does not install software on servers: the agent "
-                              "reads and verifies, and says what to install.")},
+                              "Direct host writes are disabled (BOSS_SSH_HOST_DEPLOY_ALLOWED is "
+                              "false): the agent reads and verifies, and says what to install.")},
     }
 
 
@@ -730,8 +730,9 @@ def advance(connection, settings: Settings, host_id: str) -> dict[str, Any]:
                 done.append("Caddy plugin on (TLS per app)" if on is not False
                             else "Caddy plugin is off (Infra › Plugins)")
             if todo:
-                why = (f"{' and '.join(todo)} missing, and this edition does not install software on "
-                       f"servers. Install it on {host['address']}; the agent sees it and goes on.")
+                why = (f"{' and '.join(todo)} missing, and direct host writes are disabled "
+                       f"(BOSS_SSH_HOST_DEPLOY_ALLOWED is false). Install it on "
+                       f"{host['address']}; the agent sees it and goes on.")
                 _step(connection, host_id, "install", "now", why)
                 _phase(connection, host_id, "install", why)
                 # look again for it on the next turn

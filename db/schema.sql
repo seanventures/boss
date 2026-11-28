@@ -5233,11 +5233,15 @@ CREATE TABLE IF NOT EXISTS kg_action_priors (
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
   fingerprint_key TEXT NOT NULL,             -- deterministic: v1|<stage>|<language>|<situation>
   action TEXT NOT NULL,                      -- engine_contract.canonical_tool_name vocabulary
-  success_count INTEGER NOT NULL DEFAULT 0,  -- progress credit (procedural_priors._credit)
+  success_count INTEGER NOT NULL DEFAULT 0,  -- progress credit (procedural_priors._credit / v1.1 judge)
   failure_count INTEGER NOT NULL DEFAULT 0,
   last_seen_at TIMESTAMPTZ,
   example_run_id TEXT,
   example_excerpt TEXT,
+  evidence_grade TEXT NOT NULL DEFAULT 'ground_truth', -- ground_truth | jev | correlation (BOSSAPP-1031 v1.1)
+  fingerprint_label TEXT,                    -- optional Jev-assisted label for ambiguous fingerprints
+  ordering_approved BOOLEAN,                 -- Jev sanity-gate before graduation to enforced tool ordering
+  sanity_verdict JSONB,                      -- {approved, verdict, reason, judge, confidence, checked_at}
   UNIQUE(org_id, fingerprint_key, action)
 );
 
@@ -9475,6 +9479,50 @@ CREATE TABLE IF NOT EXISTS model_routes (
 CREATE INDEX IF NOT EXISTS model_routes_unit ON model_routes (unit_id, created_at);
 CREATE INDEX IF NOT EXISTS model_routes_project ON model_routes (project_id, created_at DESC);
 
+-- BOSSAPP-779/780/781: shadow counterfactual decisions, effort lever, cache-loss pricing,
+-- and stage-outcome learning table (additive, idempotent).
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS effort TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS escalation_strategy TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS cache_loss_usd_micros BIGINT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_tier TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_engine TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_model TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_reason TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_classified_tier TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_classifier TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_confidence NUMERIC;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_rules JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+CREATE TABLE IF NOT EXISTS model_route_outcomes (
+  route_id              TEXT PRIMARY KEY,
+  project_id            TEXT NOT NULL,
+  unit_id               TEXT,
+  repo                  TEXT,
+  task_type             TEXT NOT NULL DEFAULT 'unknown',
+  stage                 TEXT NOT NULL,
+  tier                  TEXT NOT NULL,
+  engine                TEXT,
+  model                 TEXT,
+  mode                  TEXT NOT NULL DEFAULT 'fixed',
+  tests_passed          BOOLEAN,
+  review_verdict        TEXT,
+  merged                BOOLEAN,
+  stage_passed          BOOLEAN NOT NULL,
+  escalated             BOOLEAN NOT NULL DEFAULT false,
+  escalation_signal     TEXT,
+  escalation_strategy   TEXT,
+  escalation_rescued    BOOLEAN,
+  cost_usd_micros       BIGINT NOT NULL DEFAULT 0,
+  list_cost_usd_micros  BIGINT NOT NULL DEFAULT 0,
+  tokens_in             BIGINT NOT NULL DEFAULT 0,
+  tokens_out            BIGINT NOT NULL DEFAULT 0,
+  recorded_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS model_route_outcomes_project_stage
+  ON model_route_outcomes (project_id, stage, task_type, tier, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS model_route_outcomes_unit
+  ON model_route_outcomes (unit_id) WHERE unit_id IS NOT NULL;
+
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS route_id TEXT;
 ALTER TABLE run_scorecards ADD COLUMN IF NOT EXISTS route_mode TEXT;
 ALTER TABLE run_scorecards ADD COLUMN IF NOT EXISTS route_tier TEXT;
@@ -10038,26 +10086,50 @@ CREATE TABLE IF NOT EXISTS repo_layouts (
 -- Order = the topological sort of depends_on (component names of the same app); cycles are
 -- refused on save. kind deploy_config is read only: BOSS plans deploys from it, never builds it.
 CREATE TABLE IF NOT EXISTS app_components (
-  id           TEXT PRIMARY KEY,
-  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  app_key      TEXT NOT NULL,
-  app_name     TEXT,
-  name         TEXT NOT NULL,
-  binding_id   TEXT NOT NULL REFERENCES github_repository_bindings(id),
-  path         TEXT NOT NULL DEFAULT '/',
-  access       TEXT NOT NULL DEFAULT 'write',
-  kind         TEXT NOT NULL DEFAULT 'code',
-  depends_on   TEXT[] NOT NULL DEFAULT '{}',
-  ship_target  JSONB NOT NULL DEFAULT '{}'::jsonb,
-  position     INTEGER NOT NULL DEFAULT 0,
-  created_by   TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key        TEXT NOT NULL,
+  app_name       TEXT,
+  name           TEXT NOT NULL,
+  binding_id     TEXT NOT NULL REFERENCES github_repository_bindings(id),
+  path           TEXT NOT NULL DEFAULT '/',
+  access         TEXT NOT NULL DEFAULT 'write',
+  kind           TEXT NOT NULL DEFAULT 'code',
+  depends_on     TEXT[] NOT NULL DEFAULT '{}',
+  ship_target    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  position       INTEGER NOT NULL DEFAULT 0,
+  root_path      TEXT,
+  workspace_root TEXT,
+  stack          JSONB NOT NULL DEFAULT '{}'::jsonb,
+  commands       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  run            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  manifests      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  shared_paths   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  provenance     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  fingerprint    TEXT,
+  baseline       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  map_status     TEXT NOT NULL DEFAULT 'proposed',
+  created_by     TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, app_key, name),
   CHECK (access IN ('write', 'read')),
-  CHECK (kind IN ('code', 'deploy_config'))
+  CHECK (kind IN ('code', 'deploy_config')),
+  CHECK (map_status IN ('proposed', 'confirmed', 'stale', 'ambiguous'))
 );
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS root_path TEXT;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS workspace_root TEXT;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS stack JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS commands JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS run JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS manifests JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS shared_paths JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS provenance JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS baseline JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS map_status TEXT NOT NULL DEFAULT 'proposed';
 CREATE INDEX IF NOT EXISTS app_components_app ON app_components (project_id, app_key);
+CREATE INDEX IF NOT EXISTS app_components_app_root ON app_components (project_id, app_key, root_path);
 -- What a run of a multi-repo app may touch: EXACTLY its app's repositories, recorded when the
 -- person consents (who, which repositories, which access) and checked at every token mint.
 CREATE TABLE IF NOT EXISTS repo_run_grants (
@@ -13089,7 +13161,7 @@ ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS chat_endpoints (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord')),
+  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord', 'teams')),
   name TEXT NOT NULL,
   config JSONB NOT NULL DEFAULT '{}'::jsonb,      -- channel / chat id, team id, max_tier
   secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"signing_secret": "sref_..", ...}
@@ -13404,6 +13476,8 @@ CREATE TABLE IF NOT EXISTS tool_policies_v2 (
   hit_count BIGINT NOT NULL DEFAULT 0,
   last_hit_at TIMESTAMPTZ,
   status TEXT NOT NULL DEFAULT 'active',
+  hard BOOLEAN NOT NULL DEFAULT FALSE,
+  examples JSONB,
   created_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -15224,10 +15298,21 @@ CREATE INDEX IF NOT EXISTS idx_intake_connections_project ON intake_connections 
 
 -- THE INBOX. Inserted by the front door (verify -> insert -> commit -> 2xx), claimed by the
 -- processor (SKIP LOCKED, a lease), finished with a status. `raw` is the verified body;
--- `headers` is allow-listed (never a signature). A redelivery hits UNIQUE (connection_id,
--- dedupe_key) and only bumps `duplicates`.
+-- `headers` is allow-listed (never a signature). Partitioned by month on `received_at` (P9c-3,
+-- BOSSAPP-1107); cross-month deduplication lives in `intake_event_dedupe` so redeliveries across
+-- month boundaries still hit UNIQUE (connection_id, dedupe_key) and only bump `duplicates`.
+CREATE TABLE IF NOT EXISTS intake_event_dedupe (
+  connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
+  dedupe_key TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (connection_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_intake_event_dedupe_received
+  ON intake_event_dedupe (received_at);
+
 CREATE TABLE IF NOT EXISTS intake_events (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
   project_id TEXT,
   dedupe_key TEXT NOT NULL,
@@ -15264,8 +15349,18 @@ CREATE TABLE IF NOT EXISTS intake_events (
   processed_at TIMESTAMPTZ,
   raw_expires_at TIMESTAMPTZ,                       -- retention: raw nulled after 14 days
   expires_at TIMESTAMPTZ,                           -- retention: row deleted after 30/90 days
-  UNIQUE (connection_id, dedupe_key)
-);
+  PRIMARY KEY (id, received_at)
+) PARTITION BY RANGE (received_at);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = current_schema() AND c.relname = 'intake_events'
+                AND c.relkind = 'p') THEN
+    CREATE TABLE IF NOT EXISTS intake_events_default PARTITION OF intake_events DEFAULT;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_intake_events_connection_dedupe
+  ON intake_events (connection_id, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_intake_events_id ON intake_events (id);
 CREATE INDEX IF NOT EXISTS idx_intake_events_due ON intake_events (next_attempt_at, received_at)
   WHERE status IN ('received', 'failed');
 CREATE INDEX IF NOT EXISTS idx_intake_events_conversation
@@ -15443,6 +15538,27 @@ DO $$ BEGIN
   END IF;
 END $$;
 -- ================================ end P9a ==
+
+-- ── P9b-1 (BOSSAPP-1100): Microsoft Teams endpoints, conversation_ref, and write-block tracking ─
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'chat_endpoints'::regclass
+       AND conname = 'chat_endpoints_kind_check'
+       AND pg_get_constraintdef(oid) NOT LIKE '%teams%'
+  ) THEN
+    ALTER TABLE chat_endpoints DROP CONSTRAINT chat_endpoints_kind_check;
+    ALTER TABLE chat_endpoints ADD CONSTRAINT chat_endpoints_kind_check
+      CHECK (kind IN ('slack', 'telegram', 'discord', 'teams'));
+  END IF;
+END $$;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS conversation_ref JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS deployment_id TEXT;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS last_inbound_at TIMESTAMPTZ;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
+ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
+ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
 
 -- ================================ P8b: contract v1.1 and the model gateway (BOSSAPP-1070/1071) ==
 -- MODEL-GATEWAY HANDLES (boss-agent-hosts-lld.md §3.9, §3.1): the `boss_mdl_` placeholder a
@@ -16864,3 +16980,334 @@ ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS purpose TEXT;
 -- One daily journeys wake per install (service.arm_daily also takes an advisory lock).
 CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
   ON agent_wakeups ((1)) WHERE purpose = 'golden_journeys' AND status = 'active';
+
+-- SHORT-TTL SESSION MONEY-CAP HOLDS (BOSSAPP-1306): concurrent money-billed sessions (across
+-- builds or parallel review seats) register their clamped ceiling as a short-TTL active hold
+-- before running and release it in finally, and money_headroom subtracts active non-expired
+-- holds so N concurrent sessions cannot overshoot a period cap by (N - 1) * headroom.
+CREATE TABLE IF NOT EXISTS session_budget_holds (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id TEXT,
+  amount_usd_micros BIGINT NOT NULL CHECK (amount_usd_micros >= 0),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'released')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  released_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_session_budget_holds_project_active
+  ON session_budget_holds (project_id, expires_at)
+  WHERE status = 'active';
+-- METATRON CLI SERVER PROTOCOL (BOSSAPP-1381 / MT-10): streaming agent turns, ordered SSE event
+-- replay, client tool results, act-on-my-behalf TTL grants, audit batch ingest, and single-use
+-- host credential leases. Also extends tool_policies_v2 with `hard` and `examples` for signed
+-- policy bundles.
+ALTER TABLE tool_policies_v2 ADD COLUMN IF NOT EXISTS hard BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE tool_policies_v2 ADD COLUMN IF NOT EXISTS examples JSONB;
+
+CREATE TABLE IF NOT EXISTS metatron_turns (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+  principal_id TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  agent_role TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'ask'
+    CHECK (mode IN ('read-only', 'ask', 'risky-only', 'act-on-my-behalf')),
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'awaiting_tool_result', 'completed', 'failed', 'cancelled')),
+  idempotency_key TEXT,
+  request_hash TEXT,
+  user_message_id TEXT,
+  reply_message_id TEXT,
+  act_id TEXT,
+  model TEXT,
+  tools_offered JSONB NOT NULL DEFAULT '[]'::jsonb,
+  tools_dropped JSONB NOT NULL DEFAULT '[]'::jsonb,
+  client_tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+  messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+  pending_tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb,
+  stop_reason TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  retryable BOOLEAN NOT NULL DEFAULT FALSE,
+  usage JSONB NOT NULL DEFAULT '{}'::jsonb,
+  owner TEXT,
+  tool_deadline_at TIMESTAMPTZ,
+  cancel_requested_at TIMESTAMPTZ,
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_metatron_turns_principal_key
+  ON metatron_turns (principal_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_metatron_turns_thread
+  ON metatron_turns (project_id, thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_metatron_turns_live
+  ON metatron_turns (project_id, heartbeat_at)
+  WHERE status IN ('queued', 'running', 'awaiting_tool_result');
+CREATE INDEX IF NOT EXISTS idx_metatron_turns_tool_deadline
+  ON metatron_turns (tool_deadline_at)
+  WHERE status = 'awaiting_tool_result' AND tool_deadline_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS metatron_turn_events (
+  id BIGSERIAL PRIMARY KEY,
+  turn_id TEXT NOT NULL REFERENCES metatron_turns(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  event_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (turn_id, seq),
+  UNIQUE (event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_turn_events_turn_seq
+  ON metatron_turn_events (turn_id, seq);
+
+CREATE TABLE IF NOT EXISTS metatron_turn_tool_results (
+  turn_id TEXT NOT NULL REFERENCES metatron_turns(id) ON DELETE CASCADE,
+  call_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('ok', 'error', 'denied', 'cancelled')),
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision JSONB NOT NULL DEFAULT '{}'::jsonb,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (turn_id, call_id)
+);
+
+CREATE TABLE IF NOT EXISTS metatron_grants (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  principal_id TEXT NOT NULL,
+  scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+  allowed_tools TEXT[] NOT NULL DEFAULT '{}',
+  max_risk_class TEXT,
+  ttl_seconds INTEGER NOT NULL CHECK (ttl_seconds > 0),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_grants_principal_project
+  ON metatron_grants (principal_id, project_id, expires_at)
+  WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS metatron_audit_events (
+  event_id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  turn_id TEXT,
+  ticket_id TEXT,
+  principal_id TEXT NOT NULL,
+  ts TIMESTAMPTZ NOT NULL,
+  kind TEXT NOT NULL,
+  tool TEXT,
+  risk_class TEXT,
+  argv_redacted JSONB,
+  host TEXT,
+  domain TEXT,
+  cookie_names TEXT[],
+  method TEXT,
+  path TEXT,
+  status INTEGER,
+  decision TEXT,
+  decided_by TEXT,
+  rule_id TEXT,
+  exit_code INTEGER,
+  bytes BIGINT,
+  duration_ms INTEGER,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_audit_events_project_ts
+  ON metatron_audit_events (project_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_metatron_audit_events_session
+  ON metatron_audit_events (session_id, ts);
+
+CREATE TABLE IF NOT EXISTS metatron_credential_leases (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL REFERENCES deployment_hosts(id) ON DELETE CASCADE,
+  secret_ref_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  session_id TEXT,
+  purpose TEXT NOT NULL,
+  ttl_seconds INTEGER NOT NULL CHECK (ttl_seconds > 0),
+  expires_at TIMESTAMPTZ NOT NULL,
+  redeemed_at TIMESTAMPTZ,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_credential_leases_host
+  ON metatron_credential_leases (host_id, created_at DESC);
+
+-- ── P9b-2 / P9c (BOSSAPP-1101, 1105, 1106, 1107): scale-from-zero, subscriptions, partitioning ──
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS min_replicas INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS max_replicas INTEGER NOT NULL DEFAULT 64;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS scale_to_zero BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS max_queued_runs INTEGER NOT NULL DEFAULT 200;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS queue_slo_ms INTEGER NOT NULL DEFAULT 1000;
+
+ALTER TABLE intake_subscriptions ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE intake_subscriptions ADD COLUMN IF NOT EXISTS last_renewed_at TIMESTAMPTZ;
+ALTER TABLE intake_subscriptions ADD COLUMN IF NOT EXISTS last_error TEXT;
+
+-- Idempotent upgrade of pre-P9c unpartitioned `intake_events` tables to monthly range partitioning
+-- on `received_at` (BOSSAPP-1107). A fresh schema is already partitioned (`relkind = 'p'`).
+DO $$
+DECLARE
+  rk "char";
+BEGIN
+  SELECT c.relkind INTO rk
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = current_schema() AND c.relname = 'intake_events';
+
+  IF rk = 'r' THEN
+    DROP TRIGGER IF EXISTS intake_events_notify_boss_intake ON intake_events;
+    ALTER TABLE intake_events RENAME TO intake_events_unpartitioned_legacy;
+    -- Rename old indexes out of the way so canonical names belong to the partitioned table.
+    PERFORM (
+      SELECT count(*) FROM (
+        SELECT idx.relname
+          FROM pg_index i
+          JOIN pg_class idx ON idx.oid = i.indexrelid
+          JOIN pg_class tbl ON tbl.oid = i.indrelid
+          JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+         WHERE ns.nspname = current_schema()
+           AND tbl.relname = 'intake_events_unpartitioned_legacy'
+           AND NOT i.indisprimary
+      ) s
+    );
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_due';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_conversation';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_project';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_connection_status';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_retention';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_connection_actor';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_connection_dedupe';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_id';
+
+    CREATE TABLE intake_events (
+      id TEXT NOT NULL,
+      connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
+      project_id TEXT,
+      dedupe_key TEXT NOT NULL,
+      source_event_id TEXT,
+      type TEXT,
+      subject TEXT,
+      conversation_key TEXT,
+      status TEXT NOT NULL DEFAULT 'received'
+        CHECK (status IN ('received', 'processing', 'routed', 'ignored', 'filtered', 'refused',
+                          'failed', 'dead', 'shed', 'digest')),
+      raw BYTEA,
+      raw_sha256 TEXT,
+      raw_ref TEXT,
+      headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+      envelope JSONB,
+      actor_kind TEXT,
+      actor_external_id TEXT,
+      principal_id TEXT,
+      screen JSONB,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      lease_until TIMESTAMPTZ,
+      claimed_by TEXT,
+      last_error TEXT,
+      retry_count_seen INTEGER NOT NULL DEFAULT 0,
+      duplicates INTEGER NOT NULL DEFAULT 0,
+      outcome JSONB NOT NULL DEFAULT '[]'::jsonb,
+      replays INTEGER NOT NULL DEFAULT 0,
+      replay_of TEXT,
+      trace_id TEXT,
+      verify_scheme TEXT,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      event_time TIMESTAMPTZ,
+      processed_at TIMESTAMPTZ,
+      raw_expires_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      PRIMARY KEY (id, received_at)
+    ) PARTITION BY RANGE (received_at);
+
+    CREATE TABLE intake_events_default PARTITION OF intake_events DEFAULT;
+    CREATE INDEX idx_intake_events_connection_dedupe ON intake_events (connection_id, dedupe_key);
+    CREATE INDEX idx_intake_events_id ON intake_events (id);
+    CREATE INDEX idx_intake_events_due ON intake_events (next_attempt_at, received_at)
+      WHERE status IN ('received', 'failed');
+    CREATE INDEX idx_intake_events_conversation
+      ON intake_events (conversation_key, received_at) WHERE conversation_key IS NOT NULL;
+    CREATE INDEX idx_intake_events_project ON intake_events (project_id, received_at DESC);
+    CREATE INDEX idx_intake_events_connection_status
+      ON intake_events (connection_id, status, received_at DESC);
+    CREATE INDEX idx_intake_events_retention ON intake_events (expires_at)
+      WHERE expires_at IS NOT NULL;
+    CREATE INDEX idx_intake_events_connection_actor
+      ON intake_events (connection_id, actor_external_id, received_at DESC)
+      WHERE actor_external_id IS NOT NULL;
+
+    INSERT INTO intake_events (
+      id, connection_id, project_id, dedupe_key, source_event_id, type, subject, conversation_key,
+      status, raw, raw_sha256, raw_ref, headers, envelope, actor_kind, actor_external_id,
+      principal_id, screen, attempts, next_attempt_at, lease_until, claimed_by, last_error,
+      retry_count_seen, duplicates, outcome, replays, replay_of, trace_id, verify_scheme,
+      received_at, event_time, processed_at, raw_expires_at, expires_at)
+    SELECT
+      id, connection_id, project_id, dedupe_key, source_event_id, type, subject, conversation_key,
+      status, raw, raw_sha256, raw_ref, headers, envelope, actor_kind, actor_external_id,
+      principal_id, screen, attempts, next_attempt_at, lease_until, claimed_by, last_error,
+      retry_count_seen, duplicates, outcome, replays, replay_of, trace_id, verify_scheme,
+      received_at, event_time, processed_at, raw_expires_at, expires_at
+      FROM intake_events_unpartitioned_legacy;
+
+    INSERT INTO intake_event_dedupe (connection_id, dedupe_key, event_id, received_at)
+    SELECT connection_id, dedupe_key, id, received_at
+      FROM intake_events_unpartitioned_legacy
+    ON CONFLICT (connection_id, dedupe_key) DO NOTHING;
+
+    DROP TABLE intake_events_unpartitioned_legacy;
+
+    CREATE TRIGGER intake_events_notify_boss_intake AFTER INSERT ON intake_events
+      FOR EACH ROW EXECUTE FUNCTION boss_intake_notify();
+  END IF;
+END $$;
+
+-- FAILURE PRE-CHECK PROPOSALS (BOSSAPP-541, services/precheck_proposals.py): every failed run
+-- classifies its cause and proposes the pre-check that would have caught it, linked to an issue
+-- (boss_recommendations). Proposals are artifacts only — never self-modifying without approval.
+CREATE TABLE IF NOT EXISTS precheck_proposals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  dedupe_key TEXT NOT NULL,
+  run_id TEXT NOT NULL DEFAULT '',
+  last_run_id TEXT NOT NULL DEFAULT '',
+  run_kind TEXT NOT NULL DEFAULT 'code_task',
+  run_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cause_class TEXT NOT NULL,
+  reason_code TEXT NOT NULL DEFAULT '',
+  proposed_check_id TEXT NOT NULL,
+  existing_check_id TEXT NOT NULL DEFAULT '',
+  checkpoint TEXT NOT NULL DEFAULT 'pre_run',
+  target_capability TEXT NOT NULL DEFAULT 'build',
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  why TEXT NOT NULL DEFAULT '',
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  probe_spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+  files JSONB NOT NULL DEFAULT '[]'::jsonb,
+  acceptance_tests JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recommendation_id TEXT,
+  status TEXT NOT NULL DEFAULT 'proposed'
+    CHECK (status IN ('proposed', 'approved', 'rejected', 'implemented')),
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_precheck_proposals_project_status
+  ON precheck_proposals (project_id, status, updated_at DESC);

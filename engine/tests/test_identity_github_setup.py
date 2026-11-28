@@ -347,6 +347,7 @@ def test_verify_says_whether_the_app_can_create_repositories(env):
     with env.db() as c:
         out = github_setup.verify(c, "org_boss")
         mode = github_setup.mode(c, "org_boss")
+    with env.db() as c:
         perms = github_setup.installation_permissions(c, "4242")
     assert out["flows"]["create_repository"] == {"ok": True, "missing": [], "words": "Can create repos: yes.", "fix_url": None, "reason": ""}
     assert mode["verdict"]["tone"] == "green"

@@ -706,7 +706,10 @@ class GovernedChatAdapter:
             return None
 
         def stream(*args: Any, **kwargs: Any):
+            from ..db import assert_not_in_written_tx
+
             held = self._open()
+            assert_not_in_written_tx("model_routing.stream_text_response")
             usage: dict = {}
             try:
                 for piece in inner(*args, **kwargs):
@@ -749,7 +752,10 @@ class GovernedChatAdapter:
         return lambda *args, **kwargs: self._governed("create_embeddings", args, kwargs, usage_at=1)
 
     def _governed(self, method: str, args: tuple, kwargs: dict, *, usage_at: int):
+        from ..db import assert_not_in_written_tx
+
         held = self._open()
+        assert_not_in_written_tx(f"model_routing.{method}")
         try:
             result = getattr(self._inner, method)(*args, **kwargs)
         except Exception as error:

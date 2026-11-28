@@ -5,5 +5,25 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+chrono.workspace = true
+crossterm.workspace = true
+metatron-boss-client.workspace = true
+metatron-core.workspace = true
+metatron-policy.workspace = true
+metatron-protocol.workspace = true
+metatron-remote.workspace = true
+metatron-sandbox.workspace = true
+metatron-secrets.workspace = true
+metatron-session.workspace = true
+ratatui.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "io-std", "io-util"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

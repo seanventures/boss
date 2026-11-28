@@ -20,6 +20,8 @@ help:
 	  '  make status  Show service status' \
 	  '  make check   Check installation health' \
 	  '  make metatron  Open the local BOSS terminal in the API container (or: boss metatron)' \
+	  '  make metatron-build  Build the native Rust Metatron CLI binary (metatron/)' \
+	  '  make metatron-rust   Run the native Rust Metatron CLI against the local stack' \
 	  '  make mcp-setup  Give an agent client its own key for one project' \
 	  '  make mcp    Start a scoped MCP stdio session for an agent client' \
 	  '  make stop    Stop services and keep data' \
@@ -46,6 +48,17 @@ metatron: .env docker-ready
 	  key="$$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env | head -n 1)"; fi; \
 	if [ -n "$$key" ]; then export BOSS_API_KEY="$$key"; set -- -e BOSS_API_KEY; else set --; fi; \
 	$(COMPOSE) exec -u boss "$$@" api sh -c 'BOSS_PROJECT_ID="$${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" python scripts/metatron_tui.py'
+
+metatron-build:
+	cd metatron && cargo build --release --bin metatron
+
+metatron-rust: .env
+	@key="$$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env | head -n 1)"; \
+	if [ -z "$$key" ]; then bash scripts/install/boss.sh --dir "$(CURDIR)" identity host-key >/dev/null 2>&1 || true; \
+	  key="$$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env | head -n 1)"; fi; \
+	if [ ! -x metatron/target/release/metatron ]; then $(MAKE) metatron-build; fi; \
+	BOSS_API_URL="http://127.0.0.1:$${BOSS_API_PORT:-8000}" BOSS_API_KEY="$$key" \
+	  BOSS_PROJECT_ID="$${BOSS_PROJECT_ID:-boss-dogfood}" ./metatron/target/release/metatron
 
 # BOSS_PROJECT_ID=another-project selects an accessible project. Setup asks the host
 # shell for a service account pinned to that project and keeps its key in .env as

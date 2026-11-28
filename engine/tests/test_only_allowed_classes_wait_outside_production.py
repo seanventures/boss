@@ -49,14 +49,11 @@ PINNED_WAITS = {
         "stuck_work_needs_person"},
     "ask_prod_release": {
         "github.community.merge_authorization", "promote_agent_deployment",
-        # Widening egress or a data boundary reaches outside; a changed tool definition is
-        # untrusted; a standing grant or an autonomy raise is authority that reaches production.
+        # Widening egress or a data boundary reaches outside; customer repo delegation
+        # (`grant_builder_authority`) accesses customer resources.
         "allow_repository_or_change_clone_target", "rules_forbidden",
-        "reclassify_or_configure_approved_boundary_adapter", "review_tool_change",
-        "grant_builder_authority", "role.autonomy_change",
-        # They change the agents production work runs with (autonomy_gate.PERSON_ONLY_ACTIONS,
-        # #307 review P1-3): an agent-drafted skill, an agent's prompt, a new hire.
-        "activate_authored_skill", "apply_agent_prompt_diff", "role.hire"},
+        "reclassify_or_configure_approved_boundary_adapter",
+        "grant_builder_authority"},
     "ask_spend": {
         "approve_budget_increase_or_accept_degraded_mode", "approve_initiative_budget",
         "budget_denied", "budget_tier2_frozen", "configure_or_enable_infra_provisioning",
@@ -363,10 +360,17 @@ def test_a_two_person_tier_card_is_never_answered_by_autonomy(card, monkeypatch)
 
 def test_person_only_actions_ask_and_are_one_list_with_the_settings_list(monkeypatch):
     _dev_world(monkeypatch, prod=False)
-    assert autonomy_gate.PERSON_ONLY_ACTIONS == {"activate_authored_skill",
-                                                 "apply_agent_prompt_diff", "role.hire"}
+    assert autonomy_gate.PERSON_ONLY_ACTIONS == frozenset()
     assert autonomy_gate.PERSON_ONLY_ACTIONS <= autonomy_gate.SETTING_NEVER_APPROVES
-    for action in autonomy_gate.PERSON_ONLY_ACTIONS:
+    assert autonomy_gate.SETTING_NEVER_APPROVES == {"review_architecture"}
+    # BOSS-side agent/skill/prompt/role/self-fix actions now act autonomously in dev, while
+    # customer resource delegation (`grant_builder_authority`) still asks.
+    for action in ("activate_authored_skill", "apply_agent_prompt_diff", "role.hire",
+                   "role.autonomy_change", "self_fix.install", "self_fix.remove"):
+        found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": 2,
+                                           "recommendation": {"action": action}})
+        assert found.acts, action
+    for action in ("grant_builder_authority",):
         found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": 1,
                                            "recommendation": {"action": action}})
         assert not found.acts, action

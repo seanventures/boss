@@ -43,8 +43,8 @@ export function PackImportForm({
       <input type="hidden" name="actor" value={actor} />
       <h4>Import pack YAML</h4>
       <p className="detail">
-        Local Community import. Requires pack_manage. Hosted marketplace stays
-        hidden on Community, paste or upload a pack YAML here.
+        Import a pack YAML into this project (requires <code>pack:install</code>). Paste or upload
+        a pack YAML here.
       </p>
       <label className="field">
         <span>Pack YAML</span>

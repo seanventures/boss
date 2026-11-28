@@ -121,12 +121,13 @@ def build_setup_router(
         with background():
             with begin(engine) as connection:
                 require_actor(connection, body.project_id, actor, "entitlement_manage")
-                if setup_actions.first_press(body.project_id, body.idempotency_key):
-                    try:
-                        setup_actions.run_checks(connection, get_settings(), body.project_id,
-                                                 body.target, actor=actor)
-                    except setup_actions.SetupActionError as error:
-                        fail(error)
+                should_run = setup_actions.first_press(body.project_id, body.idempotency_key)
+            if should_run:
+                try:
+                    setup_actions.run_checks_phased(engine, get_settings(), body.project_id,
+                                                    body.target, actor=actor)
+                except setup_actions.SetupActionError as error:
+                    fail(error)
             return fresh_view(body.project_id)
 
     @router.post("/v1/setup/subscriptions/keep-alive")
@@ -575,7 +576,7 @@ def build_setup_router(
         actor = actor_for(body.actor)
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "entitlement_manage")
-            openrouter_catalog.refresh(connection, get_settings(), body.project_id)
+        openrouter_catalog.refresh(None, get_settings(), body.project_id, db_engine=engine)
         from boss_engine.services.model_router import store as router_store
 
         router_store.invalidate(body.project_id)
@@ -595,6 +596,25 @@ def build_setup_router(
             rows = [r for r in routes_for(connection, unit_id) if r.get("project_id") in
                     (None, project_id)]
         return {"unit_id": unit_id, "routes": rows}
+
+    @router.get("/v1/setup/routing/outcomes")
+    @permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
+    def get_routing_outcomes(project_id: str, days: int = 30,
+                             repo: Optional[str] = None) -> dict[str, Any]:
+        """BOSSAPP-779/781: per-stage, per-task-type outcome priors table and shadow
+        counterfactual summary for this project."""
+        from boss_engine.services.model_router.outcomes import outcome_table_report
+        from boss_engine.services.model_router.savings import shadow_summary
+
+        days = max(1, min(365, int(days)))
+        with begin(engine) as connection:
+            if require_reader is not None:
+                require_reader(connection, project_id)
+            else:
+                require_actor(connection, project_id, actor_for(None), "entitlement_manage")
+            outcomes = outcome_table_report(connection, project_id, days=days, repo=repo)
+            shadow = shadow_summary(connection, project_id, days=days)
+        return {"project_id": project_id, "days": days, "outcomes": outcomes, "shadow": shadow}
 
     @router.put("/v1/setup/budget", response_model=SetupView, response_model_by_alias=True)
     @permit(P.BUDGET_MANAGE, scope=Scope.project(body="project_id"))

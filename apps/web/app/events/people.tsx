@@ -8,7 +8,7 @@
  * linked (the BOSS person, a method chip: Code / SSO email / Entra ID, when, Revoke), not linked
  * (when a link prompt last went), a guest (never auto-linked), a link revoked in the last 30 days.
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ShieldCheck, UsersThree } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
@@ -38,10 +38,40 @@ export function PeopleTab() {
   const [filter, setFilter] = useState<"all" | PersonState>("all");
   const [said, setSaid] = useState<{ text: string; tone: "green" | "red" | "amber" } | null>(null);
   const [confirm, setConfirm] = useState<Person | null>(null);
+  const [extra, setExtra] = useState<Person[]>([]);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const data = read?.ok ? read.data : null;
   const att = data?.attestation ?? null;
-  const rows = (data?.people ?? []).filter((p) => filter === "all" || p.state === filter);
+
+  useEffect(() => {
+    setExtra([]);
+    setNextOffset(data ? data.next_offset : null);
+  }, [picked?.id, data]);
+
+  const allPeople = (() => {
+    const base = data?.people ?? [];
+    if (!extra.length) return base;
+    const seen = new Set(base.map((p) => `${p.external_user_id}:${p.link_id}`));
+    const merged = [...base];
+    for (const p of extra) {
+      const k = `${p.external_user_id}:${p.link_id}`;
+      if (!seen.has(k)) { seen.add(k); merged.push(p); }
+    }
+    return merged;
+  })();
+  const rows = allPeople.filter((p) => filter === "all" || p.state === filter);
   const ago = (iso: string) => (iso && now ? formatRelativeTime(iso, now) : "");
+
+  const loadMore = async () => {
+    if (!picked || nextOffset === null || loadingMore) return;
+    setLoadingMore(true);
+    const r = await readPeople(picked.id, { limit: data?.limit || 200, offset: nextOffset });
+    setLoadingMore(false);
+    if (!r.ok) { setSaid({ text: r.error || "Could not load more people.", tone: "red" }); return; }
+    setExtra((cur) => [...cur, ...r.data.people]);
+    setNextOffset(r.data.next_offset);
+  };
 
   const promptWords = (body: unknown): string => {
     const x = body && typeof body === "object" ? body as Record<string, unknown> : {};
@@ -76,8 +106,11 @@ export function PeopleTab() {
   return (
     <EvFrame tab="people" title="People links" sub="Who each Slack or Teams user is in BOSS.">
       {conns?.ok && !list.length ? (
-        <Empty icon={<UsersThree size={30} aria-hidden />} title="No chat connection yet" line="Connect Slack first; people link the first time they talk to BOSS." testId="ev-people-none">
-          <button type="button" className="ev-btn" data-kind="primary" onClick={() => goEvents({ events: "connect", kind: "slack" })}>Connect Slack</button>
+        <Empty icon={<UsersThree size={30} aria-hidden />} title="No chat connection yet" line="Connect Slack or Microsoft Teams first; people link the first time they talk to BOSS." testId="ev-people-none">
+          <div className="ev-row-line">
+            <button type="button" className="ev-btn" data-kind="primary" onClick={() => goEvents({ events: "connect", kind: "slack" })}>Connect Slack</button>
+            <button type="button" className="ev-btn" onClick={() => goEvents({ events: "connect", kind: "teams" })}>Connect Teams</button>
+          </div>
         </Empty>
       ) : null}
       {list.length > 1 ? (
@@ -120,7 +153,7 @@ export function PeopleTab() {
                 {FILTERS.map((f) => <button key={f.key} type="button" role="radio" aria-checked={filter === f.key} onClick={() => setFilter(f.key)} data-testid={`ev-people-filter-${f.key}`}>{f.word}</button>)}
               </div>
             </div>
-            {!rows.length ? <span className="ev-faint" data-testid="ev-people-empty">{data.people.length ? "Nobody here." : "Nobody has talked to BOSS on this connection yet."}</span> : null}
+            {!rows.length ? <span className="ev-faint" data-testid="ev-people-empty">{allPeople.length ? "Nobody here." : "Nobody has talked to BOSS on this connection yet."}</span> : null}
             <div data-testid="ev-people-list">
               {rows.map((p) => (
                 <div key={p.external_user_id + p.link_id} className="ev-person" data-state={p.state} data-testid={`ev-person-${p.external_user_id}`}>
@@ -157,6 +190,15 @@ export function PeopleTab() {
                 </div>
               ))}
             </div>
+            {nextOffset !== null ? (
+              <div className="ev-row-line ev-people-pager" data-testid="ev-people-pager">
+                <span className="ev-faint">Showing {allPeople.length.toLocaleString("en-US")} of {Math.max(data.total, allPeople.length).toLocaleString("en-US")}</span>
+                <span className="ev-spacer" />
+                <button type="button" className="ev-btn" data-size="sm" disabled={loadingMore} onClick={() => void loadMore()} data-testid="ev-people-more">
+                  {loadingMore ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            ) : null}
           </section>
           {!manage.allowed ? <span className="ev-faint">{manage.reason}</span> : null}
         </>

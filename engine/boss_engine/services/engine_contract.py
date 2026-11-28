@@ -531,62 +531,79 @@ class ContractedAgent:
                                       parallel_agents=(int(parallel_agents or 0)
                                                        if caps.sub_agents and not read_only else 0))
         kwargs.update(extra)
-        if caps.budget_limit and kwargs.get("max_budget_usd") is None:
-            # A DEFAULT SPEND CEILING FOR EVERY SESSION OF THIS AGENT. The CLI has honoured
-            # --max-budget-usd all along, but the governed pipeline's forty-odd run_role call
-            # sites never passed it, so a runaway session was only stopped at the next stage
-            # boundary. The pipeline sets `budget_ceiling` ONCE on the agent it builds
-            # (_agent_for_locked) and every session it runs is bounded; an explicit
-            # max_budget_usd from a caller still wins.
-            ceiling = _default_ceiling(self)
-            if ceiling is not None:
-                kwargs["max_budget_usd"] = ceiling
         work = Path(cwd)
         copy: Optional[Path] = None
-        if read_only and (not caps.read_only or caps.read_only_shell) and (
-                readonly_guard.is_repo(work) or work.resolve() != Path.cwd().resolve()):
-            # NO (TRUSTWORTHY) READ-ONLY MODE: the reviewer judges a copy; nothing it writes
-            # reaches the build. The engine is told it is a review (its review prompt, timeout
-            # and argv) and that BOSS holds the read-only invariant by isolation, so it must
-            # not refuse the seat. `read_only_shell` engines land here too: their review seat
-            # keeps an unconfined shell, and "read-only" that can `echo >` into the live tree
-            # is not read-only.
-            copy = _isolated_copy(work)
-            work = copy
-            kwargs["_contract_read_only_copy"] = True
-        if read_only and getattr(self._inner, "local_repo", False):
-            # A LOCAL REPOSITORY HAS NO GITHUB (BOSSAPP-1350): its change set's URL is
-            # http://boss-local/..., and a reviewer that went to the connector for it got a 404
-            # and judged nothing. The tree it was handed is the whole change.
-            run_prompt = run_prompt + LOCAL_TREE_NOTE
-        guard = None
-        if copy is not None:
-            # A seat with no inner sandbox: the live tree is fingerprinted before the turn and
-            # compared after, and a difference is REPORTED, never acted on (readonly_guard).
-            guard = readonly_guard.snapshot(Path(cwd))
-        problem = session_tree_problem(work)
-        if problem:
-            if copy is not None:
-                shutil.rmtree(copy.parent, ignore_errors=True)
-            raise EngineSessionFailed(f"{self.engine} not started: {problem}")
-        # THE ONE TURN PATH (harness_failures.TurnSink): every streaming engine's turns are
-        # checked for the harness answering in a tool's place — its sandbox that cannot start,
-        # an organisation's policy holding a writer to read-only — whatever driver produced
-        # them. A driver that swallowed the sink's error still stops here.
-        from . import harness_failures
-
-        sink = harness_failures.TurnSink(kwargs.get("on_turn"), engine=self.engine,
-                                         writer=not read_only)
-        kwargs["on_turn"] = sink
+        hold_id: Optional[str] = None
+        holder = getattr(self, "session_budget_holder", None)
+        releaser = getattr(self, "session_budget_releaser", None)
         try:
-            raw = _call(self._inner.run_role, run_prompt, work, kwargs)
-        except harness_failures.HarnessFailure:
-            raise
-        except Exception as exc:
-            if sink.failure is not None:
-                raise sink.failure from exc
-            raise
+            if callable(holder):
+                hold_id, held_ceiling = holder(requested_usd=kwargs.get("max_budget_usd"))
+                if held_ceiling is not None:
+                    if held_ceiling <= 0:
+                        raise EngineSessionFailed(
+                            "insufficient budget: no cap headroom remains for this session while "
+                            "concurrent sessions hold the remaining budget"
+                        )
+                    if caps.budget_limit or kwargs.get("max_budget_usd") is not None:
+                        kwargs["max_budget_usd"] = round(float(held_ceiling), 2)
+            elif caps.budget_limit and kwargs.get("max_budget_usd") is None:
+                # A DEFAULT SPEND CEILING FOR EVERY SESSION OF THIS AGENT. The CLI has honoured
+                # --max-budget-usd all along, but the governed pipeline's forty-odd run_role call
+                # sites never passed it, so a runaway session was only stopped at the next stage
+                # boundary. The pipeline sets `budget_ceiling` ONCE on the agent it builds
+                # (_agent_for_locked) and every session it runs is bounded; an explicit
+                # max_budget_usd from a caller still wins.
+                ceiling = _default_ceiling(self)
+                if ceiling is not None:
+                    kwargs["max_budget_usd"] = ceiling
+            if read_only and (not caps.read_only or caps.read_only_shell) and (
+                    readonly_guard.is_repo(work) or work.resolve() != Path.cwd().resolve()):
+                # NO (TRUSTWORTHY) READ-ONLY MODE: the reviewer judges a copy; nothing it writes
+                # reaches the build. The engine is told it is a review (its review prompt, timeout
+                # and argv) and that BOSS holds the read-only invariant by isolation, so it must
+                # not refuse the seat. `read_only_shell` engines land here too: their review seat
+                # keeps an unconfined shell, and "read-only" that can `echo >` into the live tree
+                # is not read-only.
+                copy = _isolated_copy(work)
+                work = copy
+                kwargs["_contract_read_only_copy"] = True
+            if read_only and getattr(self._inner, "local_repo", False):
+                # A LOCAL REPOSITORY HAS NO GITHUB (BOSSAPP-1350): its change set's URL is
+                # http://boss-local/..., and a reviewer that went to the connector for it got a 404
+                # and judged nothing. The tree it was handed is the whole change.
+                run_prompt = run_prompt + LOCAL_TREE_NOTE
+            guard = None
+            if copy is not None:
+                # A seat with no inner sandbox: the live tree is fingerprinted before the turn and
+                # compared after, and a difference is REPORTED, never acted on (readonly_guard).
+                guard = readonly_guard.snapshot(Path(cwd))
+            problem = session_tree_problem(work)
+            if problem:
+                raise EngineSessionFailed(f"{self.engine} not started: {problem}")
+            # THE ONE TURN PATH (harness_failures.TurnSink): every streaming engine's turns are
+            # checked for the harness answering in a tool's place — its sandbox that cannot start,
+            # an organisation's policy holding a writer to read-only — whatever driver produced
+            # them. A driver that swallowed the sink's error still stops here.
+            from . import harness_failures
+
+            sink = harness_failures.TurnSink(kwargs.get("on_turn"), engine=self.engine,
+                                             writer=not read_only)
+            kwargs["on_turn"] = sink
+            try:
+                raw = _call(self._inner.run_role, run_prompt, work, kwargs)
+            except harness_failures.HarnessFailure:
+                raise
+            except Exception as exc:
+                if sink.failure is not None:
+                    raise sink.failure from exc
+                raise
         finally:
+            if hold_id is not None and callable(releaser):
+                try:
+                    releaser(hold_id)
+                except Exception:  # noqa: BLE001 — short TTL expires on failure; never mask real outcome
+                    log.warning("failed to release session budget hold %s", hold_id, exc_info=True)
             if copy is not None:
                 shutil.rmtree(copy.parent, ignore_errors=True)
         if sink.failure is not None:

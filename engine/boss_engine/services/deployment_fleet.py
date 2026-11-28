@@ -42,41 +42,25 @@ EXPIRED_PASSWORD_MARKERS = (
 )
 
 
-_DIRECT_HOST_WRITE_EDITIONS = frozenset({
-    "enterprise", "enterprise_cloud", "enterprise_self_hosted", "cloud",
-})
-_COMMUNITY_HOST_WRITE_DENIAL = (
-    "Direct deployment-host changes are disabled in Community until they use an "
-    "approved Resource Plane ChangeSet, budget reservation, and ResourceReceipt."
-)
-
-
 def outward_ssh_allowed(settings: Settings) -> bool:
     """May BOSS open an SSH session at all — to VERIFY a host, or to apply a GOVERNED change?
 
     Two different questions used to share one switch. BOSS_SSH_HOST_DEPLOY_ALLOWED gates the
     legacy direct writes (key install, docker provisioning, retire, the per-app container
-    deploy) and defaults off, so a fresh Community install could not even run `echo` on the VM
-    it had just been handed: the Infra panel hid "Add a VM" behind a note telling the operator
-    to edit the BOSS host's environment. A read-only probe and a ChangeSet-approved stack
-    deployment carry their own governance, so they need only this, which defaults on.
+    deploy) and defaults off. A read-only probe and a ChangeSet-approved stack deployment carry
+    their own governance, so they need only this, which defaults on.
     """
     return (bool(getattr(settings, "ssh_outward_allowed", True))
             or bool(getattr(settings, "ssh_host_deploy_allowed", False)))
 
 
 def direct_host_writes_allowed(settings: Settings) -> bool:
-    """Unknown editions and a disabled outward-SSH switch fail closed."""
-    edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
-    return (edition in _DIRECT_HOST_WRITE_EDITIONS
-            and bool(getattr(settings, "ssh_host_deploy_allowed", False)))
+    """A disabled host-deploy switch fails closed uniformly across all installs."""
+    return bool(getattr(settings, "ssh_host_deploy_allowed", False))
 
 
 def require_direct_host_write_policy(settings: Settings) -> None:
     """Guard the service itself so callers cannot skip the HTTP route's check."""
-    edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
-    if edition not in _DIRECT_HOST_WRITE_EDITIONS:
-        raise PermissionError(_COMMUNITY_HOST_WRITE_DENIAL)
     if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
         raise PermissionError(
             "BOSS_SSH_HOST_DEPLOY_ALLOWED is false — direct host changes are disabled."
@@ -1231,6 +1215,98 @@ def this_machine_names() -> set[str]:
     return names
 
 
+BUILTIN_LOCAL_HOST_NAME = "this machine"
+
+
+def is_builtin_local_host(host: Optional[dict[str, Any]]) -> bool:
+    """True when `host` is BOSS's built-in `'this machine'` local deploy destination."""
+    if not host:
+        return False
+    labels = host.get("labels") or {}
+    if isinstance(labels, str):
+        try:
+            labels = json.loads(labels)
+        except ValueError:
+            labels = {}
+    if isinstance(labels, dict) and labels.get("builtin") and labels.get("local_host"):
+        return True
+    return (str(host.get("ssh_user") or "").strip().lower() == "local"
+            and str(host.get("address") or "").strip().lower() in _LOOPBACK)
+
+
+def is_local_only_install(connection=None, project_id: Optional[str] = None) -> bool:
+    """True for local-only installs (`install_tier() != 'prod'`) with no remote host registered."""
+    from . import production
+
+    if production.resolve_install().prod:
+        return False
+    if connection is not None and project_id:
+        for h in list_hosts(connection, project_id):
+            if not is_builtin_local_host(h):
+                return False
+    return True
+
+
+def ensure_local_host(connection, project_id: str, *, actor: str = "boss",
+                      force: bool = False) -> Optional[dict[str, Any]]:
+    """Idempotently ensure a verified built-in `'this machine'` host on local-only installs."""
+    if not force and not is_local_only_install(connection, project_id):
+        return None
+    for h in list_hosts(connection, project_id):
+        if is_builtin_local_host(h):
+            return dict(h)
+    existing = connection.execute(
+        sql("SELECT id, status FROM deployment_hosts WHERE project_id = :p "
+            "AND lower(name) = lower(:n) LIMIT 1"),
+        {"p": project_id, "n": BUILTIN_LOCAL_HOST_NAME}).mappings().first()
+    if existing:
+        if existing["status"] == "retired":
+            return None
+        return get_host(connection, str(existing["id"]))
+    host_id = _new_id()
+    labels = {"builtin": True, "local_host": True}
+    preflight = {"ready": True, "reachable": True, "problems": [],
+                 "local_host": True, "connector": "local"}
+    inserted = connection.execute(
+        sql("INSERT INTO deployment_hosts "
+            "(id, project_id, name, address, ssh_user, ssh_port, labels, "
+            " port_min, port_max, status, last_preflight_at, last_preflight, "
+            " notes, created_by) "
+            "VALUES (:i, :p, :n, '127.0.0.1', 'local', 0, CAST(:l AS JSONB), "
+            "        8000, 8999, 'verified', now(), CAST(:pf AS JSONB), :no, :by) "
+            "ON CONFLICT (project_id, name) DO NOTHING RETURNING id"),
+        {"i": host_id, "p": project_id, "n": BUILTIN_LOCAL_HOST_NAME,
+         "l": json.dumps(labels), "pf": json.dumps(preflight),
+         "no": "Built-in local machine target for local-only installs (no SSH or Docker required).",
+         "by": actor}).scalar()
+    if inserted:
+        emit_event(connection, project_id, "host.local_ensured", actor,
+                   "deployment_host", str(inserted),
+                   {"name": BUILTIN_LOCAL_HOST_NAME, "address": "127.0.0.1",
+                    "port_min": 8000, "port_max": 8999})
+        return get_host(connection, str(inserted))
+    row = connection.execute(
+        sql("SELECT id FROM deployment_hosts WHERE project_id = :p AND lower(name) = lower(:n)"),
+        {"p": project_id, "n": BUILTIN_LOCAL_HOST_NAME}).first()
+    return get_host(connection, str(row[0])) if row else None
+
+
+def ensure_this_machine_target(
+    connection, project_id: str, *, app_name: str, repo: str = "",
+    environment: str = "staging", port: Optional[int] = None,
+    health_path: Optional[str] = None, manifest_text: Optional[str] = None,
+    actor: str = "boss",
+) -> dict[str, Any]:
+    """Ensure `'this machine'` exists and create/adopt the local deployment target for `app_name`."""
+    host = ensure_local_host(connection, project_id, actor=actor)
+    if host is None:
+        return {"ok": False, "error": "this install is not eligible for a built-in local host"}
+    return create_deployment_target(
+        connection, project_id=project_id, app_name=app_name, environment=environment,
+        repo=repo, host_id=str(host["id"]), port=port, actor=actor,
+        health_path=health_path, manifest_text=manifest_text)
+
+
 def match_host(connection, project_id: str, hint: str
                ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
     """(host, None) when `hint` ("local", a host's id, name or address) names a registered host
@@ -1347,8 +1423,9 @@ def update_deployment_target(
     from .secrets_service import bind_secret_to_target
 
     row = connection.execute(
-        sql("SELECT id, app_name, host_id, domains, health_checks, required_resources, "
-            "secret_refs FROM deployment_targets WHERE id = :i AND project_id = :p FOR UPDATE"),
+        sql("SELECT id, app_name, host_id, domains, public_url, health_checks, "
+            "required_resources, secret_refs FROM deployment_targets "
+            "WHERE id = :i AND project_id = :p FOR UPDATE"),
         {"i": target_id, "p": project_id}).mappings().first()
     if row is None:
         return {"ok": False, "error": f"no deployment target {target_id} in this project"}
@@ -1407,18 +1484,38 @@ def update_deployment_target(
         attach_target(connection, target_id=target_id, host_id=host_id)
         changed["host_id"] = host_id
     if host is not None and (host_changes or port):
+        from urllib.parse import urlsplit, urlunsplit
+
         # The domain names the host's address and the port; moving either rewrites it, which
         # also frees the old address:port reservation.
         resources = [r for r in (row["required_resources"] or [])
                      if not (isinstance(r, dict) and r.get("kind") == "app_port")]
         if new_port:
             resources.append({"kind": "app_port", "name": str(new_port)})
+        old_host = get_host(connection, row["host_id"]) if row.get("host_id") else None
+        old_addr = str(old_host["address"]) if old_host else ""
+        new_pub = row.get("public_url")
+        if new_pub and new_port:
+            parts = urlsplit(str(new_pub))
+            if parts.scheme and parts.hostname:
+                target_host = (str(host["address"])
+                               if (host_changes and old_addr and parts.hostname == old_addr)
+                               else parts.hostname)
+                if parts.port is not None or target_host == str(host["address"]) or (
+                        old_addr and parts.hostname == old_addr):
+                    host_fmt = f"[{target_host}]" if ":" in target_host else target_host
+                    new_pub = urlunsplit((parts.scheme, f"{host_fmt}:{int(new_port)}",
+                                          parts.path, parts.query, parts.fragment))
         connection.execute(
             sql("UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
-                "domains = CAST(:d AS JSONB), updated_at = now() WHERE id = :i"),
+                "domains = CAST(:d AS JSONB), public_url = :pub, updated_at = now() "
+                "WHERE id = :i"),
             {"r": json.dumps(resources),
              "d": json.dumps([f"{host['address']}:{new_port}"] if new_port
-                             else [str(host["address"])]), "i": target_id})
+                             else [str(host["address"])]),
+             "pub": new_pub, "i": target_id})
+        if new_pub != row.get("public_url"):
+            changed["public_url"] = new_pub
         if port:
             changed["port"] = int(port)
         if host_changes and new_port:
@@ -1452,6 +1549,20 @@ def update_deployment_target(
 
     if not changed:
         return {"ok": True, "target_id": target_id, "changed": {}, "note": "nothing to change"}
+    if "port" in changed or "host_id" in changed or "public_url" in changed:
+        from .stack_deploy import target_address
+
+        updated_target = connection.execute(
+            sql("SELECT * FROM deployment_targets WHERE id = :i"),
+            {"i": target_id}).mappings().first()
+        if updated_target and host is not None:
+            fresh_open_url = target_address(dict(updated_target), host)
+            if fresh_open_url:
+                connection.execute(
+                    sql("UPDATE stack_deployments SET open_url = :u, updated_at = now() "
+                        "WHERE target_id = :t AND status IN "
+                        "('planned', 'awaiting_approval', 'running')"),
+                    {"u": fresh_open_url, "t": target_id})
     emit_event(connection, project_id, "deployment.target_updated", actor,
                "deployment_target", target_id, {"changed": changed})
     return {"ok": True, "target_id": target_id, "changed": changed,
@@ -1550,6 +1661,8 @@ def create_deployment_target(
                         "creating a second one."}
 
     if host and not host_id:
+        if str(host).strip().lower() in _LOCAL_WORDS and is_local_only_install(connection, project_id):
+            ensure_local_host(connection, project_id, actor=actor)
         # ASKED FOR A PLACE THAT IS NOT REGISTERED ("local" staging with only a remote host):
         # say so and offer the path, never quietly build somewhere else. A match (by id, name,
         # address, or "local" for this machine) SELECTS that host.
@@ -1558,6 +1671,10 @@ def create_deployment_target(
             return refusal
         host_id = str(matched["id"])
     hosts = [dict(h) for h in list_hosts(connection, project_id)]
+    if not host_id and not hosts and is_local_only_install(connection, project_id):
+        ensured = ensure_local_host(connection, project_id, actor=actor)
+        if ensured is not None:
+            hosts = [dict(h) for h in list_hosts(connection, project_id)]
     verified = [h for h in hosts if h.get("status") == "verified"]
     if host_id:
         try:
@@ -1639,18 +1756,28 @@ def create_deployment_target(
         connection, project_id=project_id, repo=repo_full, app_name=app,
         health_path=health_path, manifest_text=manifest_text)
 
+    from . import local_repo
+
+    required_resources = [{"kind": "app_port", "name": str(port)}]
+    if "/" in repo_full:
+        repo_owner = repo_full.split("/", 1)[0]
+        if local_repo.is_local_owner(repo_owner):
+            required_resources.append({"kind": "repo_owner", "name": repo_owner})
+
+    target_kind = "local" if is_builtin_local_host(host) else "ssh"
     target_id = _target_id()
     connection.execute(
         sql("INSERT INTO deployment_targets "
             "(id, project_id, app_name, repo, environment, target_kind, target_ref, domains, "
             " health_checks, required_resources, status, created_by, created_at, updated_at) "
-            "VALUES (:i, :p, :a, :r, :e, 'ssh', :ref, CAST(:dom AS JSONB), "
+            "VALUES (:i, :p, :a, :r, :e, :tk, :ref, CAST(:dom AS JSONB), "
             "        CAST(:hc AS JSONB), CAST(:rr AS JSONB), 'active', :by, now(), now())"),
         # THE APP PORT IS DECLARED, not only implied by the domain: the governed host plan
         # refuses a target with no app_port ("has no app port. Set the app's port…"), which
         # stopped the very first auto-created deploy.
         {"i": target_id, "p": project_id, "a": app, "r": repo, "e": environment,
-         "rr": json.dumps([{"kind": "app_port", "name": str(port)}]),
+         "tk": target_kind,
+         "rr": json.dumps(required_resources),
          "ref": target_ref_for(host), "dom": json.dumps([f"{address}:{port}"]),
          "hc": json.dumps([{"kind": "http", "scheme": scheme, "path": check_path,
                             "expect_status": 200, "port": port}]),
@@ -1659,10 +1786,10 @@ def create_deployment_target(
     emit_event(connection, project_id, "deployment.target_created", actor,
                "deployment_target", target_id,
                {"app_name": app, "environment": environment, "host": host["name"],
-                "domain": f"{address}:{port}"})
+                "domain": f"{address}:{port}", "target_kind": target_kind})
 
     return {"ok": True, "target_id": target_id, "app_name": app, "environment": environment,
-            "host": host["name"], "address": address, "port": port,
+            "host": host["name"], "address": address, "port": port, "target_kind": target_kind,
             "domain": f"{address}:{port}", "target_ref": attached.get("target_ref"),
             "arch": attached.get("arch"), "repo": repo,
             "health_check": f"{scheme}://{address}:{port}{check_path} expecting 200",

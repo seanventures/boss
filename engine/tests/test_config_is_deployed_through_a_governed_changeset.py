@@ -557,3 +557,164 @@ def test_two_runs_in_flight_each_promote_only_what_they_staged(eng, project, gat
     # Outside a workflow too, the source is named, never "the latest for the app".
     guessed = promote("", binding)
     assert guessed["status"] == "failed" and "Name the deployment" in guessed["reason"]
+
+
+def test_manual_config_deploy_and_promote_config_workflow_gates_ask_once(
+    eng, project, gateway, dirs,  # noqa: F811
+):
+    """BOSSAPP-1410: a manual workflow gate on config_deploy (staging) or promote_config
+    (production) produces ONE decision card total — approving the step gate lets the deployment
+    run without opening a second card, while unapproved production still asks a person."""
+    from boss_engine.services import workflow_capability_runner as runner
+    from boss_engine.services import workflows
+    from boss_engine.services.decisions import DecisionService
+
+    settings = _fresh_settings()
+    gateway["state"].update(healthy=True, reloads=0)
+    staging_dir, production_dir = dirs["staging"], dirs["production"]
+
+    class _RunnerCtx:
+        def __init__(self):
+            self.engine = eng
+            self.settings = settings
+
+        def begin(self):
+            return eng.begin()
+
+    ctx = _RunnerCtx()
+
+    with eng.begin() as c:
+        _target(c, settings, project, "staging", staging_dir, gateway)
+        production = _target(c, settings, project, "production", production_dir, gateway)
+        # Even if staging has requires_approval=True (default) and production has no auto policy,
+        # the manual workflow step gate is the ONE card.
+        created = workflows.create_definition(
+            c, project_id=project, workflow_key="cfg_single_gate",
+            name="Config Single Gate", description=None, actor=PERSON, namespace="product",
+        )
+        version = workflows.publish_version(
+            c,
+            project_id=project,
+            definition_id=created["id"],
+            actor=PERSON,
+            spec={
+                "entry_step": "stage",
+                "steps": [
+                    {
+                        "id": "stage",
+                        "kind": "capability",
+                        "approval": {"mode": "manual"},
+                        "binding": {
+                            "capability": "config_deploy",
+                            "inputs": {
+                                "app_name": "Northgate Gateway",
+                                "environment": "staging",
+                                "files": {"lumen-pay.yaml": "tenant: lumen-pay\nversion: 7\n"},
+                            },
+                        },
+                        "next": ["promote"],
+                    },
+                    {
+                        "id": "promote",
+                        "kind": "capability",
+                        "approval": {"mode": "manual"},
+                        "binding": {
+                            "capability": "promote_config",
+                            "inputs": {
+                                "deployment_id": {"from_step": "stage", "field": "deployment_id"},
+                                "bundle_sha256": {"from_step": "stage", "field": "bundle_sha256"},
+                                "target_id": production["target_id"],
+                            },
+                        },
+                        "next": [],
+                    },
+                ],
+            },
+        )
+        workflows.start_run(
+            c, project_id=project, workflow_version_id=version["id"],
+            actor=PERSON, input_data={}, dedupe_key="dk_cfg_single_gate",
+        )
+
+    try:
+        with eng.begin() as c:
+            runner.tick(c, ctx, project_id=project)
+            decisions = c.execute(
+                text("SELECT id, status, question FROM decisions WHERE project_id = :p "
+                     "ORDER BY created_at"), {"p": project},
+            ).mappings().all()
+            assert len(decisions) == 1 and decisions[0]["status"] == "pending"
+            stage_dec = decisions[0]["id"]
+        with eng.begin() as c:
+            DecisionService(settings).transition(
+                c, stage_dec, action="approve", actor=PERSON, note="ship staging",
+            )
+        with eng.begin() as c:
+            runner.tick(c, ctx, project_id=project)
+
+        with eng.begin() as c:
+            stage_run = c.execute(
+                text("SELECT id, status, decision_id FROM deployment_runs "
+                     "WHERE project_id = :p AND environment = 'staging'"), {"p": project},
+            ).mappings().one()
+            assert stage_run["status"] == "approved"
+            assert stage_run["decision_id"] == stage_dec
+            # Zero extra cards created for staging.
+            all_decs = c.execute(
+                text("SELECT id, status FROM decisions WHERE project_id = :p"), {"p": project},
+            ).mappings().all()
+            assert len(all_decs) == 1
+
+        # Complete the staging deployment job so promote_config can run.
+        assert _apply(eng, settings, project, stage_run["id"])["status"] == "succeeded"
+
+        with eng.begin() as c:
+            runner.tick(c, ctx, project_id=project)
+            runner.tick(c, ctx, project_id=project)
+            all_decs = c.execute(
+                text("SELECT id, status, question FROM decisions WHERE project_id = :p "
+                     "ORDER BY created_at"), {"p": project},
+            ).mappings().all()
+            assert len(all_decs) == 2 and all_decs[1]["status"] == "pending"
+            prod_dec = all_decs[1]["id"]
+        with eng.begin() as c:
+            DecisionService(settings).transition(
+                c, prod_dec, action="approve", actor=PERSON, note="ship prod",
+            )
+        with eng.begin() as c:
+            runner.tick(c, ctx, project_id=project)
+
+        with eng.begin() as c:
+            prod_run = c.execute(
+                text("SELECT id, status, decision_id FROM deployment_runs "
+                     "WHERE project_id = :p AND environment = 'production'"), {"p": project},
+            ).mappings().one()
+            assert prod_run["status"] == "approved"
+            assert prod_run["decision_id"] == prod_dec
+            final_decs = c.execute(
+                text("SELECT id, status, question, approved_by FROM decisions "
+                     "WHERE project_id = :p AND status <> 'withdrawn'"),
+                {"p": project},
+            ).mappings().all()
+            assert len(final_decs) == 2, f"Expected 1 active card per step gate, got {[dict(d) for d in final_decs]}"
+
+        # Direct/unapproved production deploy without a gate decision STILL asks a person.
+        unapproved = config_deploy.deploy_files(
+            eng, settings, project_id=project, actor=PERSON,
+            target_id=production["target_id"],
+            files={"lumen-pay.yaml": "tenant: lumen-pay\nversion: 8\n"},
+        )
+        assert unapproved["status"] == "planned"
+        assert unapproved["run_status"] == "awaiting_approval"
+        assert unapproved["decision_id"]
+        with eng.begin() as c:
+            total_decs = c.execute(
+                text("SELECT count(*) FROM decisions WHERE project_id = :p "
+                     "AND status <> 'withdrawn'"), {"p": project},
+            ).scalar_one()
+            assert total_decs == 3
+    finally:
+        with eng.begin() as c:
+            for tbl in ("deployment_gate_uses", "workflow_step_runs", "workflow_runs",
+                        "workflow_versions", "workflow_definitions"):
+                c.execute(text(f"DELETE FROM {tbl} WHERE project_id = :p"), {"p": project})

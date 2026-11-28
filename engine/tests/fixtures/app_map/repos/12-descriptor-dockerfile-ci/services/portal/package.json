@@ -1,0 +1,10 @@
+{
+  "name": "portal",
+  "dependencies": {
+    "hono": "^4.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test"
+  }
+}

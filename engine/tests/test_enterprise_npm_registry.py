@@ -20,12 +20,17 @@ def test_enterprise_registry_reaches_agents_with_tls_enabled(monkeypatch, tmp_pa
               "NPM_CONFIG_STRICT_SSL": "false", "npm_config_strict_ssl": "false",
               "DATABASE_URL": "private", "NPM_TOKEN": "private"}
     env = agent_environment(source)
-    assert env == {"npm_config_registry": registry, "npm_config_strict_ssl": "true"}
+    assert env == {
+        "npm_config_registry": registry,
+        "npm_config_strict_ssl": "true",
+        "YARN_NPM_REGISTRY_SERVER": registry,
+    }
     for name, value in source.items():
         monkeypatch.setenv(name, value)
     shell = _shell_environment(tmp_path)
     assert shell["npm_config_registry"] == registry
     assert shell["npm_config_strict_ssl"] == "true"
+    assert shell["YARN_NPM_REGISTRY_SERVER"] == registry
     assert "DATABASE_URL" not in shell and "NPM_TOKEN" not in shell
 
 

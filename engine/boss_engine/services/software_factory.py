@@ -299,12 +299,32 @@ def _host_writes_on_caller(method):
 
     @functools.wraps(method)
     def wrapper(self, connection, *args, **kwargs):
+        if connection is None:
+            return method(self, None, *args, **kwargs)
         from . import local_repo_host
 
         with local_repo_host.writes_on(connection):
             return method(self, connection, *args, **kwargs)
 
     return wrapper
+
+
+@contextlib.contextmanager
+def _phase_tx(connection: Any, db_engine: Any, settings: Any, *, writes_local: bool = False):
+    """Yield `connection` if the caller already holds one, or open a short transaction on `db_engine`."""
+    if connection is not None:
+        yield connection
+        return
+    from ..db import begin as _db_begin, get_engine as _get_engine
+    from . import local_repo_host
+
+    eng = db_engine or _get_engine(settings)
+    with _db_begin(eng) as conn:
+        if writes_local:
+            with local_repo_host.writes_on(conn):
+                yield conn
+        else:
+            yield conn
 
 
 class SoftwareFactoryService:
@@ -1418,8 +1438,9 @@ class SoftwareFactoryService:
 
     def _merge_after_restack(self, connection: Any, project_id: str, pull_request_number: int,
                              title: str, branch_name: Optional[str], receipt_id: str,
-                             pull_request_url: str,
-                             *, approved_head: Optional[str] = None) -> Any:
+                             pull_request_url: str, *,
+                             pre_events: Optional[list[tuple]] = None,
+                             approved_head: Optional[str] = None) -> Any:
         """Tier 1b of conflict recovery (pr_follow_up): the merge result, or None."""
         merged_of = getattr(self.github, "last_merged_pull_request", None)
         restack = getattr(self.github, "restack_after_merge", None)
@@ -1447,13 +1468,23 @@ class SoftwareFactoryService:
                     pull_request_url,
                 )
                 return None
-            self.events.emit(
-                connection, project_id, "software_factory.pull_request_restacked",
-                "release_manager", "receipt", receipt_id,
-                {"pull_request_url": pull_request_url, "after": int(earlier["number"]),
-                 "paths": done.get("paths") or [],
-                 "why": f"its branch still carried #{earlier['number']}'s merged commits; put "
-                        "it back on its base with only the follow-up change, then merged"})
+            event_payload = {
+                "pull_request_url": pull_request_url, "after": int(earlier["number"]),
+                "paths": done.get("paths") or [],
+                "why": f"its branch still carried #{earlier['number']}'s merged commits; put "
+                       "it back on its base with only the follow-up change, then merged",
+            }
+            if pre_events is not None:
+                pre_events.append((
+                    "software_factory.pull_request_restacked",
+                    "release_manager", "receipt", receipt_id,
+                    event_payload,
+                ))
+            elif connection is not None:
+                self.events.emit(
+                    connection, project_id, "software_factory.pull_request_restacked",
+                    "release_manager", "receipt", receipt_id,
+                    event_payload)
             restack_pin = (
                 {"head_sha": restacked_head}
                 if restacked_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
@@ -2016,6 +2047,60 @@ class SoftwareFactoryService:
         ).mappings().all()
         return [dict(row) for row in rows]
 
+    def _build_review_packet_model(self, connection: Any, project_id: str) -> Any:
+        if self.openai is not None:
+            return self.openai
+        try:
+            return model_routing.project_chat_adapter(connection, self.settings, project_id)
+        except Exception as error:  # noqa: BLE001 — packet is optional
+            return error
+
+    def _run_review_packet_model(
+        self,
+        model_or_error: Any,
+        *,
+        receipt_id: str,
+        title: str,
+        summary: str,
+        files: list[FileChange],
+        module_spec: Any,
+        model_id: Optional[str],
+        skipped_events: Optional[list[tuple[str, str, str, dict]]] = None,
+    ) -> str:
+        """Build review-packet markdown outside any DB transaction. Model failure never sinks the PR."""
+        prompt = review_packet_prompt(title=title, summary=summary, files=files)
+        system = self._merge_system_prompts(
+            self._module_prompt(module_spec, "system"),
+            self._module_prompt(module_spec, "review_packet"),
+            (
+                "Return concise markdown with these sections: implementation summary, "
+                "tests added or still needed, risk hotspots, rollback plan, confidence, "
+                "and recommendation. Do not invent UI/UX scores."
+            ),
+        )
+        try:
+            if isinstance(model_or_error, Exception):
+                raise model_or_error
+            _ref, text, _usage = model_or_error.create_text_response(
+                prompt, system, model_id
+            )
+            if str(text or "").strip():
+                return str(text)
+        except Exception as error:  # noqa: BLE001 — packet is optional
+            if skipped_events is not None:
+                skipped_events.append((
+                    "software_factory.review_packet_skipped",
+                    "receipt",
+                    receipt_id,
+                    {"message": str(error)[:400], "reason": "review_packet_optional"},
+                ))
+            return fallback_review_packet(
+                title=title, summary=summary, files=files, error=str(error)
+            )
+        return fallback_review_packet(
+            title=title, summary=summary, files=files, error="empty review packet"
+        )
+
     def _review_packet_markdown(
         self,
         connection: Any,
@@ -2029,40 +2114,21 @@ class SoftwareFactoryService:
         model_id: Optional[str],
     ) -> str:
         """Build review-packet markdown. Model failure never sinks the PR."""
-        prompt = review_packet_prompt(title=title, summary=summary, files=files)
-        system = self._merge_system_prompts(
-            self._module_prompt(module_spec, "system"),
-            self._module_prompt(module_spec, "review_packet"),
-            (
-                "Return concise markdown with these sections: implementation summary, "
-                "tests added or still needed, risk hotspots, rollback plan, confidence, "
-                "and recommendation. Do not invent UI/UX scores."
-            ),
+        skipped: list[tuple[str, str, str, dict]] = []
+        model_or_error = self._build_review_packet_model(connection, project_id)
+        text = self._run_review_packet_model(
+            model_or_error,
+            receipt_id=receipt_id,
+            title=title,
+            summary=summary,
+            files=files,
+            module_spec=module_spec,
+            model_id=model_id,
+            skipped_events=skipped,
         )
-        try:
-            model = self.openai or model_routing.project_chat_adapter(
-                connection, self.settings, project_id)
-            _ref, text, _usage = model.create_text_response(
-                prompt, system, model_id
-            )
-            if str(text or "").strip():
-                return str(text)
-        except Exception as error:  # noqa: BLE001 — packet is optional
-            self.events.emit(
-                connection,
-                project_id,
-                "software_factory.review_packet_skipped",
-                "coding_worker",
-                "receipt",
-                receipt_id,
-                {"message": str(error)[:400], "reason": "review_packet_optional"},
-            )
-            return fallback_review_packet(
-                title=title, summary=summary, files=files, error=str(error)
-            )
-        return fallback_review_packet(
-            title=title, summary=summary, files=files, error="empty review packet"
-        )
+        for etype, entity_type, entity_id, data in skipped:
+            self.events.emit(connection, project_id, etype, "coding_worker", entity_type, entity_id, data)
+        return text
 
     _DEAD_RUN_STATUSES = frozenset({"failed", "cancelled", "canceled"})
     _DEAD_JOB_STATUSES = frozenset({"deadlettered", "dead", "failed", "cancelled", "canceled"})
@@ -2109,13 +2175,135 @@ class SoftwareFactoryService:
                 return True
         return False
 
+    def _open_pull_request(
+        self,
+        branch_name: str,
+        title: str,
+        pr_body: str,
+        *,
+        checks_failing: bool = False,
+        base_kwargs: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        """Single door for factory PR creation; refuses any body lacking trailing Test evidence."""
+        from . import test_evidence as _test_evidence
+
+        _test_evidence.require_test_evidence_section(pr_body)
+        _base = dict(base_kwargs or {})
+        if checks_failing and getattr(self.github, "supports_draft_pull_requests", False):
+            # A DRAFT where the host has drafts: GitHub itself then refuses a merge until
+            # it is marked ready, which BOSS does only for a person's approved merge.
+            return self.github.create_pull_request(
+                branch_name, title, pr_body, draft=True, **_base
+            )
+        return self.github.create_pull_request(branch_name, title, pr_body, **_base)
+
+    def _publish_test_evidence_check_run(
+        self,
+        connection: Any,
+        *,
+        scope: dict[str, str],
+        project_id: str,
+        dedupe_key: str,
+        title: str,
+        head_sha: str,
+        test_report_content: dict[str, Any],
+        test_report_artifact_id: str,
+        created_by_job_id: Optional[str],
+        db_engine: Any = None,
+    ) -> tuple[Optional[int], Optional[str]]:
+        """Publish full per-case test evidence as a GitHub Check Run on ``head_sha`` (BOSSAPP-1011).
+
+        Local hosts are console-download-only and skip this completely. On GitHub, publishes
+        the full output as a native Check Run (no repo pollution, no extra commits) under a
+        durable receipt; failures are recorded visibly on the event log without dropping the PR.
+        """
+        if getattr(self.github, "kind", "") == "local":
+            return None, None
+        create_fn = getattr(self.github, "create_check_run", None)
+        if not callable(create_fn) or not str(head_sha or "").strip():
+            return None, None
+        from . import test_evidence as _test_evidence
+
+        te = test_report_content.get("test_evidence") if isinstance(
+            test_report_content.get("test_evidence"), dict
+        ) else {}
+        out = _test_evidence.render_check_run_output(test_report_content, title=title)
+        conclusion = _test_evidence.check_run_conclusion(
+            str(te.get("status") or test_report_content.get("status") or "neutral")
+        )
+        cr_dedupe = f"{dedupe_key}:test-evidence-check-run:{head_sha}"
+        with _phase_tx(connection, db_engine, self.settings) as c:
+            receipt, created = self.receipts.create_or_reuse(
+                c,
+                scope["org_id"],
+                scope["workspace_id"],
+                project_id,
+                cr_dedupe,
+                "github.check_run.create",
+                {"repository": self.github.repository_full_name, "head_sha": head_sha},
+                {"name": "BOSS Test Evidence", "head_sha": head_sha, "conclusion": conclusion,
+                 "artifact_id": test_report_artifact_id},
+                created_by_job_id=created_by_job_id,
+            )
+        if not created and receipt["status"] == "succeeded":
+            prior = receipt.get("result") or {}
+            return prior.get("check_run_id"), prior.get("check_run_url")
+        try:
+            cr = create_fn(
+                name="BOSS Test Evidence",
+                head_sha=head_sha,
+                title=out["title"],
+                summary=out["summary"],
+                text=out["text"],
+                conclusion=conclusion,
+                status="completed",
+                external_id=test_report_artifact_id,
+            )
+            cr_id = int(getattr(cr, "id", 0) or 0) or None
+            cr_url = str(getattr(cr, "html_url", "") or "").strip() or None
+            with _phase_tx(connection, db_engine, self.settings) as c:
+                self.receipts.mark_succeeded(
+                    c,
+                    receipt["id"],
+                    cr_url or f"check-run:{cr_id}",
+                    {"check_run_id": cr_id, "check_run_url": cr_url, "head_sha": head_sha,
+                     "conclusion": conclusion, "artifact_id": test_report_artifact_id},
+                )
+                self.events.emit(
+                    c,
+                    project_id,
+                    "software_factory.test_evidence_check_run_published",
+                    "coding_worker",
+                    "receipt",
+                    receipt["id"],
+                    {"check_run_id": cr_id, "check_run_url": cr_url, "head_sha": head_sha,
+                     "artifact_id": test_report_artifact_id, "conclusion": conclusion},
+                )
+            return cr_id, cr_url
+        except Exception as error:  # noqa: BLE001 — visible failure, never drops the PR
+            with _phase_tx(connection, db_engine, self.settings) as c:
+                self.receipts.mark_failed(
+                    c, receipt["id"], {"message": str(error)[:400], "head_sha": head_sha}
+                )
+                self.events.emit(
+                    c,
+                    project_id,
+                    "software_factory.test_evidence_check_run_failed",
+                    "coding_worker",
+                    "receipt",
+                    receipt["id"],
+                    {"head_sha": head_sha, "artifact_id": test_report_artifact_id,
+                     "error": f"{type(error).__name__}: {error}"[:300]},
+                )
+            return None, None
+
     @_host_writes_on_caller
     def propose_pull_request(
         self,
         connection: Any,
         project_id: str,
         task_id: Optional[str],
-        reservation_id: str,
+        reservation_id: Optional[str],
         dedupe_key: str,
         title: str,
         branch_name: str,
@@ -2134,6 +2322,13 @@ class SoftwareFactoryService:
         rescue_of_run: Optional[str] = None,
         deleted_paths: Optional[list[str]] = None,
         parent_branch: Optional[str] = None,
+        require_test_evidence: Optional[bool] = None,
+        verified_changes_digest: Optional[str] = None,
+        verified_tree_sha: Optional[str] = None,
+        gate_integrity_invalidated: bool = False,
+        gate_integrity_reason: Optional[str] = None,
+        *,
+        db_engine: Any = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
 
@@ -2163,146 +2358,142 @@ class SoftwareFactoryService:
         build's own exit (build_budget.settle_or_release), so the rescue needs no active
         reservation and never settles or releases one: the waiver is recorded as
         `software_factory.rescue_pr_without_reservation`, never a blocking card."""
-        # Prefer Mission Control primary binding credentials when present (P0-6).
-        # Surface github_plane on every return path so dual-path is never silent.
-        plane = self.bind_project_github(
-            connection,
-            project_id,
-            owner=getattr(self.github, "owner", None),
-            repo=getattr(self.github, "repo", None),
-        )
-        plane_fields = {
-            "github_plane": plane.get("github_plane") or self.github_plane,
-            "github_binding_id": plane.get("github_binding_id") or self.github_binding_id,
-            "github_connection_id": (
-                plane.get("github_connection_id") or self.github_connection_id
-            ),
-        }
-
-        reservation = (self.budget.assert_active_reservation(connection, project_id, reservation_id)
-                       if reservation_id else None)
-        if rescue_of_run and not self._is_rescue_of(connection, project_id, rescue_of_run,
-                                                    reservation_id):
-            # Not this project's build, or not its hold: no waiver, the ordinary rule below.
-            self.events.emit(
-                connection, project_id, "software_factory.rescue_pr_refused", "coding_worker",
-                "code_task_run", rescue_of_run,
-                {"reservation_id": reservation_id,
-                 "why": "the rescue names no build of this project holding this reservation"})
-            rescue_of_run = None
-        if rescue_of_run:
-            # THE RESCUE TOUCHES NO HOLD: the build's exit settles its money on its reservation.
-            self.events.emit(
-                connection, project_id, "software_factory.rescue_pr_without_reservation",
-                "coding_worker", "code_task_run", rescue_of_run,
-                {"reservation_id": reservation_id, "reservation_active": bool(reservation),
-                 "why": "a partial PR for a stopped build; its exit settles the money"})
-            reservation_id = None
-        elif not reservation:
-            # A dead fix run cannot answer this decision, so it must not stay pending
-            # (BOSSAPP-984). A live run that is actually missing a hold still blocks.
-            if self._proposal_subject_is_dead(
-                connection, project_id, run_id or settle_run_id, created_by_job_id
-            ):
-                return {"status": "blocked", "reason": "run_dead", **plane_fields}
-            decision_id = self.decisions.create_blocking(
-                connection,
+        # ── Short Tx 1: bind, reserve/policy/route checks, receipt create_or_reuse ──────────────
+        with _phase_tx(connection, db_engine, self.settings) as c:
+            plane = self.bind_project_github(
+                c,
                 project_id,
-                task_id,
-                "Missing active reservation for PR proposal",
-                {"action": "create_budget_reservation"},
-                {},
-                "missing_reservation",
+                owner=getattr(self.github, "owner", None),
+                repo=getattr(self.github, "repo", None),
             )
-            return {"status": "blocked", "decision_id": decision_id, **plane_fields}
-
-        boundary_block = self._block_github_effect_for_data_boundary(
-            connection,
-            project_id,
-            task_id,
-            "github.pull_request.create",
-            "coding_worker",
-        )
-        if boundary_block:
-            self._release_hold(
-                connection,
-                project_id,
-                reservation_id,
-                "Released reservation because data-boundary policy blocked the GitHub PR effect.",
-            )
-            return {**boundary_block, **plane_fields}
-
-        module_spec = self._resolve_agent_module(
-            connection,
-            project_id,
-            requested_module_id=agent_module_id,
-            job_kind="software_factory.propose_pr",
-        )
-        route = self._route_model_execution(
-            connection,
-            project_id,
-            task_id=task_id,
-            task_kind="review",
-            preferred_capabilities=self._module_preferred_capabilities(
-                module_spec, ["review", "coding", "summarization"]
-            ),
-        )
-        if route.get("blocked"):
-            self._release_hold(
-                connection,
-                project_id,
-                reservation_id,
-                "Released reservation because no eligible model entitlement source was available.",
-            )
-            return {**route["blocked"], **plane_fields}
-
-        scope = self._scope(connection, project_id)
-        pr_receipt, created = self.receipts.create_or_reuse(
-            connection,
-            scope["org_id"],
-            scope["workspace_id"],
-            project_id,
-            dedupe_key,
-            "github.pull_request.create",
-            {"repository": self.github.repository_full_name},
-            {
-                "title": title,
-                "branch_name": branch_name,
-                "summary": summary,
-                "files": [file.model_dump() for file in files],
-            },
-            created_by_job_id=created_by_job_id,
-        )
-        if not created and pr_receipt["status"] == "succeeded":
-            self._release_hold(
-                connection,
-                project_id,
-                reservation_id,
-                "Released reservation because the PR effect was already satisfied by a prior receipt.",
-            )
-            result = pr_receipt["result"] or {}
-            return {
-                "status": "reused",
-                "artifact_id": result.get("artifact_id"),
-                "diff_artifact_id": result.get("diff_artifact_id"),
-                "test_report_artifact_id": result.get("test_report_artifact_id"),
-                "security_review_artifact_id": result.get("security_review_artifact_id"),
-                "release_go_no_go_artifact_id": result.get(
-                    "release_go_no_go_artifact_id"
+            plane_fields = {
+                "github_plane": plane.get("github_plane") or self.github_plane,
+                "github_binding_id": plane.get("github_binding_id") or self.github_binding_id,
+                "github_connection_id": (
+                    plane.get("github_connection_id") or self.github_connection_id
                 ),
-                "receipt_id": pr_receipt["id"],
-                "decision_id": result.get("decision_id"),
-                "pull_request_url": result.get("pull_request_url"),
-                "pull_request_number": result.get("pull_request_number"),
-                "branch_name": result.get("branch_name"),
-                "validation_status": result.get("validation_status"),
-                "validation_summary": result.get("validation_summary"),
-                **plane_fields,
             }
 
-        # THE SAME WORK, ALREADY MERGED (pr_follow_up.same_as_merged): a retry that re-proposes
-        # the files the squash already put on the base must not open a second pull request
-        # (Hello World #237 after #236). A file that differs falls through to the named follow-up.
+            reservation = (self.budget.assert_active_reservation(c, project_id, reservation_id)
+                           if reservation_id else None)
+            if rescue_of_run and not self._is_rescue_of(c, project_id, rescue_of_run,
+                                                        reservation_id):
+                self.events.emit(
+                    c, project_id, "software_factory.rescue_pr_refused", "coding_worker",
+                    "code_task_run", rescue_of_run,
+                    {"reservation_id": reservation_id,
+                     "why": "the rescue names no build of this project holding this reservation"})
+                rescue_of_run = None
+            if rescue_of_run:
+                self.events.emit(
+                    c, project_id, "software_factory.rescue_pr_without_reservation",
+                    "coding_worker", "code_task_run", rescue_of_run,
+                    {"reservation_id": reservation_id, "reservation_active": bool(reservation),
+                     "why": "a partial PR for a stopped build; its exit settles the money"})
+                reservation_id = None
+            elif not reservation:
+                if self._proposal_subject_is_dead(
+                    c, project_id, run_id or settle_run_id, created_by_job_id
+                ):
+                    return {"status": "blocked", "reason": "run_dead", **plane_fields}
+                decision_id = self.decisions.create_blocking(
+                    c,
+                    project_id,
+                    task_id,
+                    "Missing active reservation for PR proposal",
+                    {"action": "create_budget_reservation"},
+                    {},
+                    "missing_reservation",
+                )
+                return {"status": "blocked", "decision_id": decision_id, **plane_fields}
+
+            boundary_block = self._block_github_effect_for_data_boundary(
+                c,
+                project_id,
+                task_id,
+                "github.pull_request.create",
+                "coding_worker",
+            )
+            if boundary_block:
+                self._release_hold(
+                    c,
+                    project_id,
+                    reservation_id,
+                    "Released reservation because data-boundary policy blocked the GitHub PR effect.",
+                )
+                return {**boundary_block, **plane_fields}
+
+            module_spec = self._resolve_agent_module(
+                c,
+                project_id,
+                requested_module_id=agent_module_id,
+                job_kind="software_factory.propose_pr",
+            )
+            route = self._route_model_execution(
+                c,
+                project_id,
+                task_id=task_id,
+                task_kind="review",
+                preferred_capabilities=self._module_preferred_capabilities(
+                    module_spec, ["review", "coding", "summarization"]
+                ),
+            )
+            if route.get("blocked"):
+                self._release_hold(
+                    c,
+                    project_id,
+                    reservation_id,
+                    "Released reservation because no eligible model entitlement source was available.",
+                )
+                return {**route["blocked"], **plane_fields}
+
+            scope = self._scope(c, project_id)
+            pr_receipt, created = self.receipts.create_or_reuse(
+                c,
+                scope["org_id"],
+                scope["workspace_id"],
+                project_id,
+                dedupe_key,
+                "github.pull_request.create",
+                {"repository": self.github.repository_full_name},
+                {
+                    "title": title,
+                    "branch_name": branch_name,
+                    "summary": summary,
+                    "files": [file.model_dump() for file in files],
+                },
+                created_by_job_id=created_by_job_id,
+            )
+            if not created and pr_receipt["status"] == "succeeded":
+                self._release_hold(
+                    c,
+                    project_id,
+                    reservation_id,
+                    "Released reservation because the PR effect was already satisfied by a prior receipt.",
+                )
+                result = pr_receipt["result"] or {}
+                return {
+                    "status": "reused",
+                    "artifact_id": result.get("artifact_id"),
+                    "diff_artifact_id": result.get("diff_artifact_id"),
+                    "test_report_artifact_id": result.get("test_report_artifact_id"),
+                    "security_review_artifact_id": result.get("security_review_artifact_id"),
+                    "release_go_no_go_artifact_id": result.get(
+                        "release_go_no_go_artifact_id"
+                    ),
+                    "receipt_id": pr_receipt["id"],
+                    "decision_id": result.get("decision_id"),
+                    "pull_request_url": result.get("pull_request_url"),
+                    "pull_request_number": result.get("pull_request_number"),
+                    "branch_name": result.get("branch_name"),
+                    "validation_status": result.get("validation_status"),
+                    "validation_summary": result.get("validation_summary"),
+                    **plane_fields,
+                }
+            review_model = self._build_review_packet_model(c, project_id)
+
+        # ── No Tx: external model call, git-host PR creation, CI wait, sandbox validation ───────
+        pre_events: list[tuple[str, str, str, dict]] = []
         from . import pr_follow_up
 
         same = pr_follow_up.same_as_merged(
@@ -2320,21 +2511,21 @@ class SoftwareFactoryService:
                 "branch_name": branch_name,
                 "message": message,
             }
-            self.receipts.mark_succeeded(connection, pr_receipt["id"], url, kept)
-            self.budget.release(connection, project_id, reservation_id, message)
+            with _phase_tx(connection, db_engine, self.settings) as c:
+                self.receipts.mark_succeeded(c, pr_receipt["id"], url, kept)
+                self.budget.release(c, project_id, reservation_id, message)
             return {**kept, **plane_fields}
 
-        review_text = self._review_packet_markdown(
-            connection,
-            project_id=project_id,
+        review_text = self._run_review_packet_model(
+            review_model,
             receipt_id=pr_receipt["id"],
             title=title,
             summary=summary,
             files=files,
             module_spec=module_spec,
             model_id=route.get("model_id"),
+            skipped_events=pre_events,
         )
-        # Packet is optional commentary. A skipped model call has no provider ref.
         review_provider_ref = None
 
         follow_up: Optional[dict] = None
@@ -2347,11 +2538,6 @@ class SoftwareFactoryService:
                     pr_base = parent_branch
             else:
                 self.github.ensure_branch(branch_name)
-            # ONE PULL REQUEST PER PIECE OF WORK (pr_follow_up): an open PR on this branch is
-            # updated in place; after an earlier PR from it merged, this is a named follow-up
-            # on a branch put back on its base, so it shows only its own change.
-            from . import pr_follow_up
-
             follow_up = pr_follow_up.prepare_branch(
                 self.github, branch_name, base=pr_base, paths=[f.path for f in files],
                 parent_branch=parent_branch)
@@ -2361,14 +2547,13 @@ class SoftwareFactoryService:
                 follow_up["reason"] = reason
                 title = pr_follow_up.follow_up_title(title, follow_up["after"])
                 summary = f"{reason}\n\n{summary}"
-                self.events.emit(
-                    connection, project_id, "software_factory.follow_up_after_merge",
-                    "coding_worker", "receipt", pr_receipt["id"],
+                pre_events.append((
+                    "software_factory.follow_up_after_merge",
+                    "receipt",
+                    pr_receipt["id"],
                     {k: follow_up.get(k) for k in ("after", "restacked", "paths", "why")}
-                    | {"branch": branch_name, "title": title})
-            # A CHANGE NEVER SILENTLY DROPS MONITORING (monitoring_guard; PR #234): a manifest
-            # that lost `alerts:` / `dashboard:` entries the change did not name gets them back
-            # from the branch's own version before anything is written.
+                    | {"branch": branch_name, "title": title},
+                ))
             from . import monitoring_guard
 
             _read = getattr(self.github, "read_text_file", None)
@@ -2378,67 +2563,135 @@ class SoftwareFactoryService:
                     files, lambda p: _read(branch_name, p), allowed=monitoring_removals)
             if monitoring_kept:
                 summary = summary + "\n\n" + monitoring_guard.pr_section(monitoring_kept)
-                self.events.emit(
-                    connection, project_id, "software_factory.monitoring_kept",
-                    "coding_worker", "receipt", pr_receipt["id"],
-                    {"kept": monitoring_kept, "branch": branch_name})
+                pre_events.append((
+                    "software_factory.monitoring_kept",
+                    "receipt",
+                    pr_receipt["id"],
+                    {"kept": monitoring_kept, "branch": branch_name},
+                ))
             # Guarded here too, so "the branch holds what was judged" compares the guarded text.
-            _changes = [(p, _guarded(branch_name, p, c))
-                        for p, c in with_deletions(files, deleted_paths)]
+            _changes = [(p, _guarded(branch_name, p, c_txt))
+                        for p, c_txt in with_deletions(files, deleted_paths)]
+            # GATE INTEGRITY (BOSSAPP-1029): the shippable artifact is the exact committed tree
+            # that the last gate run verified. Any edit after the last test run invalidates the
+            # prior pass and refuses landing until re-verified.
+            from . import gate_integrity as _gate_integrity
+            from . import test_evidence as _test_evidence
+
+            _landing_integrity = _gate_integrity.verify_landing_integrity(
+                expected_changes_digest=verified_changes_digest,
+                landing_changes=_changes,
+                gate_passed=not bool(checks_failing),
+                invalidated=bool(gate_integrity_invalidated),
+                invalidation_reason=gate_integrity_reason,
+                verified_tree_sha=verified_tree_sha,
+            )
+            _host_kind = "local" if getattr(self.github, "kind", "") == "local" else "github"
+            _fallback_te_section: Optional[str] = None
+            if not _test_evidence.has_test_evidence_section(summary):
+                if isinstance(evidence, dict) and evidence:
+                    _fallback_te_section = _test_evidence.render_pr_section(
+                        _test_evidence.build_evidence_record(
+                            evidence=evidence,
+                            host_kind=_host_kind,
+                        )
+                    )
+                elif require_test_evidence is not True:
+                    _fallback_te_section = _test_evidence.render_pr_section(
+                        _test_evidence.build_evidence_record(
+                            evidence={},
+                            host_kind=_host_kind,
+                            extra_not_run=(
+                                ["No automated test suite was recorded for this proposal"],
+                            ),
+                        )
+                    )
+            pr_body = _test_evidence.assemble_pr_body(
+                summary,
+                review_text=review_text,
+                fallback_section=_fallback_te_section,
+            )
+            # ENFORCING CHECK (BOSSAPP-1011): a factory PR missing the trailing Test evidence
+            # section is refused BEFORE any branch commit or PR creation.
+            _test_evidence.require_test_evidence_section(pr_body)
+
             commit_shas = commit_change(
                 self.github, branch_name, _changes,
                 f"BOSS: {title}"[:200],
                 per_file=lambda path: f"BOSS proposal update: {path}")
-            # THE COMMITTED BRANCH IS WHAT WAS JUDGED (dry run 2, gap 1): the gates and the
-            # acceptance check ran on the sandbox tree; a branch that differs (a deletion that
-            # never landed) would make their "met" untrue of what a person merges.
             _differs = branch_mismatches(self.github, branch_name, _changes)
             if _differs:
                 raise IntegrationConfigurationError(
                     "The change branch does not hold what BOSS checked: "
                     + "; ".join(f"{d['path']} ({d['why']})" for d in _differs[:5])
                     + ". BOSS did not open the pull request.")
-            pr_body = "\n\n".join(
-                [
-                    summary,
-                    "## Review packet",
-                    review_text,
-                ]
-            )
             # The build's resolved base (build_base_branch) reaches every host that takes one;
             # a host whose create_pull_request has no `base` (Bitbucket, MCP) keeps its own.
             _base = ({"base": pr_base}
                      if pr_base and _accepts_kwarg(self.github.create_pull_request, "base")
                      else {})
-            if checks_failing and getattr(self.github, "supports_draft_pull_requests", False):
-                # A DRAFT where the host has drafts: GitHub itself then refuses a merge until
-                # it is marked ready, which BOSS does only for a person's approved merge.
-                pr = self.github.create_pull_request(branch_name, title, pr_body, draft=True,
-                                                     **_base)
-            else:
-                pr = self.github.create_pull_request(branch_name, title, pr_body, **_base)
+            pr = self._open_pull_request(
+                branch_name, title, pr_body,
+                checks_failing=bool(checks_failing), base_kwargs=_base,
+            )
+        except (_test_evidence.MissingTestEvidenceError, _gate_integrity.GateIntegrityError) as error:
+            with _phase_tx(connection, db_engine, self.settings) as c:
+                for etype, entity_type, entity_id, data in pre_events:
+                    self.events.emit(c, project_id, etype, "coding_worker", entity_type, entity_id, data)
+                self.receipts.mark_failed(
+                    c, pr_receipt["id"], {"message": str(error), "code": error.code}
+                )
+                self._release_hold(
+                    c,
+                    project_id,
+                    reservation_id,
+                    f"Released reservation because PR proposal was refused: {error.code}.",
+                )
+                event_name = (
+                    "software_factory.pull_request_refused_missing_test_evidence"
+                    if isinstance(error, _test_evidence.MissingTestEvidenceError)
+                    else "software_factory.gate_integrity_refused"
+                )
+                self.events.emit(
+                    c,
+                    project_id,
+                    event_name,
+                    "coding_worker",
+                    "receipt",
+                    pr_receipt["id"],
+                    {"message": str(error), "code": error.code, "branch": branch_name},
+                )
+            return {
+                "status": "refused",
+                "error": error.code,
+                "receipt_id": pr_receipt["id"],
+                "message": str(error),
+                **plane_fields,
+            }
         except IntegrationConfigurationError as error:
-            self.receipts.mark_failed(
-                connection, pr_receipt["id"], {"message": str(error)}
-            )
-            self._release_hold(
-                connection,
-                project_id,
-                reservation_id,
-                "Released reservation because GitHub credentials are not configured.",
-            )
-            decision_id = self.decisions.create_blocking(
-                connection,
-                project_id,
-                task_id,
-                "GitHub integration is not configured",
-                # WHAT CLEARS IT (cleared_causes): a GitHub effect that succeeds later.
-                {**_failed_effect_cause("github.pull_request.create",
-                                        repository=_repo_name(self.github)),
-                 "action": "provide_github_token"},
-                {},
-                "missing_github_credentials",
-            )
+            with _phase_tx(connection, db_engine, self.settings) as c:
+                for etype, entity_type, entity_id, data in pre_events:
+                    self.events.emit(c, project_id, etype, "coding_worker", entity_type, entity_id, data)
+                self.receipts.mark_failed(
+                    c, pr_receipt["id"], {"message": str(error)}
+                )
+                self._release_hold(
+                    c,
+                    project_id,
+                    reservation_id,
+                    "Released reservation because GitHub credentials are not configured.",
+                )
+                decision_id = self.decisions.create_blocking(
+                    c,
+                    project_id,
+                    task_id,
+                    "GitHub integration is not configured",
+                    {**_failed_effect_cause("github.pull_request.create",
+                                            repository=_repo_name(self.github)),
+                     "action": "provide_github_token"},
+                    {},
+                    "missing_github_credentials",
+                )
             return {
                 "status": "blocked",
                 "decision_id": decision_id,
@@ -2446,24 +2699,27 @@ class SoftwareFactoryService:
                 **plane_fields,
             }
         except Exception as error:
-            self.receipts.mark_failed(
-                connection, pr_receipt["id"], {"message": str(error)}
-            )
-            self._release_hold(
-                connection,
-                project_id,
-                reservation_id,
-                "Released reservation because sandbox PR creation failed.",
-            )
-            self.events.emit(
-                connection,
-                project_id,
-                "software_factory.pull_request_failed",
-                "coding_worker",
-                "receipt",
-                pr_receipt["id"],
-                {"message": str(error)},
-            )
+            with _phase_tx(connection, db_engine, self.settings) as c:
+                for etype, entity_type, entity_id, data in pre_events:
+                    self.events.emit(c, project_id, etype, "coding_worker", entity_type, entity_id, data)
+                self.receipts.mark_failed(
+                    c, pr_receipt["id"], {"message": str(error)}
+                )
+                self._release_hold(
+                    c,
+                    project_id,
+                    reservation_id,
+                    "Released reservation because sandbox PR creation failed.",
+                )
+                self.events.emit(
+                    c,
+                    project_id,
+                    "software_factory.pull_request_failed",
+                    "coding_worker",
+                    "receipt",
+                    pr_receipt["id"],
+                    {"message": str(error)},
+                )
             return {
                 "status": "failed",
                 "receipt_id": pr_receipt["id"],
@@ -2474,30 +2730,31 @@ class SoftwareFactoryService:
         branch_head_sha = commit_shas[-1] if commit_shas else self.github.ensure_branch(
             branch_name
         )
-        if getattr(self.github, "kind", "") == "local":
-            # LOCAL REVIEW (BOSSAPP-948): the change set belongs to this build now; its threads
-            # follow the new head, and the build's answers to a person's comments become its
-            # replies, citing this commit.
-            from . import local_review
-
-            local_review.on_change_proposed(connection, self.settings, run_id=run_id,
-                                            repository=self.github.repository_full_name,
-                                            number=pr.number)
-        # CI CHANGED (services/ci_gate.py): a change under .github/workflows/ is flagged on the
-        # pull request and in BOSS's review, gets deterministic static checks, and needs a
-        # PERSON's approval before merge or deploy (ci_gate.refuse_approval).
+        from . import checks_failing as _checks_failing
         from . import ci_gate
 
-        # A DELETED workflow file is a CI change too: it needs the same person's approval.
         ci_changed = ci_gate.ci_changed_evidence(
             {**{f.path: f.content for f in files}, **{str(p): None for p in deleted_paths or []}})
         if ci_changed:
             ci_changed["head_sha"] = branch_head_sha
-            self._flag_ci_changed(connection, project_id, pr.number, pr.url, ci_changed,
-                                  pr_receipt["id"])
+            ci_findings, ci_posted = self._flag_ci_changed_external(pr.number, ci_changed)
+            pre_events.append((
+                "software_factory.ci_changed",
+                "receipt",
+                pr_receipt["id"],
+                {"pull_request_url": pr.url, "files": ci_changed["ci_changed_files"],
+                 "findings": len(ci_findings), **ci_posted},
+            ))
         if checks_failing:
-            self._flag_checks_failing(connection, project_id, pr.number, pr.url,
-                                      checks_failing, pr_receipt["id"])
+            cf_posted = self._flag_checks_failing_external(pr.number)
+            pre_events.append((
+                "software_factory.checks_failing_flagged",
+                "receipt",
+                pr_receipt["id"],
+                {"pull_request_url": pr.url,
+                 "failing_gates": _checks_failing.gate_names(checks_failing),
+                 "security": bool(checks_failing.get("security")), **cf_posted},
+            ))
         try:
             validation = self.pipeline.wait_for_verdict(
                 branch_head_sha,
@@ -2507,37 +2764,67 @@ class SoftwareFactoryService:
         except Exception as error:
             validation = PullRequestValidationResult(
                 status="unavailable",
-                # In words: which permission is missing and where to grant it, never the raw
-                # client error with GitHub's URL and a link to MDN.
                 summary=_github_words(error, doing="Couldn't read the pull request's checks"),
                 head_sha=branch_head_sha,
                 completed=False,
                 checks=[],
             )
-            self.events.emit(
-                connection,
-                project_id,
+            pre_events.append((
                 "software_factory.validation_unavailable",
-                "coding_worker",
                 "receipt",
                 pr_receipt["id"],
                 {
                     "pull_request_url": pr.url,
                     "message": str(error),
                 },
-            )
+            ))
 
-        local_validation, local_validation_receipt_id, local_validation_receipt_status = (
-            self._run_sandbox_validation(
-                connection,
-                scope,
-                project_id,
-                task_id,
-                dedupe_key,
-                branch_name,
-                created_by_job_id,
-            )
-        )
+        local_validation: Optional[dict] = None
+        local_validation_receipt_id: Optional[str] = None
+        local_validation_receipt_status: Optional[str] = None
+        pending_sandbox_payload: Optional[dict] = None
+        if self.sandbox_validation.enabled:
+            validation_dedupe_key = f"{dedupe_key}:sandbox-validation"
+            commands = self.sandbox_validation.configured_commands()
+            with _phase_tx(connection, db_engine, self.settings) as c:
+                sb_receipt, sb_created = self.receipts.create_or_reuse(
+                    c,
+                    scope["org_id"],
+                    scope["workspace_id"],
+                    project_id,
+                    validation_dedupe_key,
+                    "sandbox.validation.run",
+                    {
+                        "repository": self.github.repository_full_name,
+                        "branch_name": branch_name,
+                        "repo_path": str(self.settings.sandbox_validation_repo_path or ""),
+                    },
+                    {"branch_name": branch_name, "commands": commands},
+                    created_by_job_id=created_by_job_id,
+                )
+            local_validation_receipt_id = sb_receipt["id"]
+            if not sb_created and sb_receipt["status"] == "succeeded":
+                sb_result = sb_receipt["result"] or {}
+                local_validation = sb_result.get("validation")
+                local_validation_receipt_status = sb_receipt["status"]
+            else:
+                try:
+                    sb_run = self.sandbox_validation.run(branch_name)
+                    pending_sandbox_payload = self.sandbox_validation.to_payload(sb_run)
+                except SandboxValidationConfigurationError as error:
+                    pending_sandbox_payload = {
+                        "status": "failed",
+                        "summary": f"Sandbox local validation could not run: {error}",
+                        "repository_path": str(self.settings.sandbox_validation_repo_path or ""),
+                        "branch_name": branch_name,
+                        "head_sha": None,
+                        "completed": False,
+                        "commands": [],
+                    }
+                local_validation = pending_sandbox_payload
+                local_validation_receipt_status = (
+                    "succeeded" if pending_sandbox_payload["status"] == "passed" else "failed"
+                )
         validation_status, validation_summary, validation_sources = (
             self._combine_validation_evidence(validation, local_validation)
         )
@@ -2563,52 +2850,100 @@ class SoftwareFactoryService:
         security_dependency_review = self._build_security_dependency_review(files)
         browser_validation = self._build_browser_validation_review(files)
 
-        diff_artifact_id = create_artifact(
-            connection,
-            self.settings,
-            project_id,
-            task_id,
-            "diff_manifest",
-            f"Diff manifest for {title}",
-            {
-                "title": title,
-                "branch_name": branch_name,
-                "files_changed": [file.path for file in files],
-                "github_commits": commit_shas,
-            },
-            created_by_job_id=created_by_job_id,
+        # ── Short Tx 2a: pre-events, sandbox validation settlement, initial artifacts ──
+        te_record = _test_evidence.build_evidence_record(
+            evidence=evidence if isinstance(evidence, dict) else {},
+            local_validation=local_validation,
+            checks=validation_checks,
+            host_kind=_host_kind,
+            head_sha=branch_head_sha,
         )
-        security_review_artifact_id = create_artifact(
-            connection,
-            self.settings,
-            project_id,
-            task_id,
-            "security_dependency_review",
-            f"Security and dependency review for {title}",
-            {
-                "title": title,
-                "branch_name": branch_name,
-                "pull_request_url": pr.url,
-                "review": security_dependency_review,
-                "browser_validation": browser_validation,
-                "files_changed": [file.path for file in files],
-                "diff_artifact_id": diff_artifact_id,
-                "data_boundary": self._data_boundary_for_task(connection, task_id),
-            },
-            created_by_job_id=created_by_job_id,
+        full_report_text = _test_evidence.render_full_report_text(
+            {"title": f"Test report for {title}", "status": validation_status,
+             "head_sha": branch_head_sha, "test_evidence": te_record}
         )
-        test_report_artifact_id = create_artifact(
-            connection,
-            self.settings,
-            project_id,
-            task_id,
-            "test_report",
-            f"Test report for {title}",
-            {
+        with _phase_tx(connection, db_engine, self.settings, writes_local=True) as c:
+            for etype, entity_type, entity_id, data in pre_events:
+                self.events.emit(c, project_id, etype, "coding_worker", entity_type, entity_id, data)
+            if pending_sandbox_payload is not None and local_validation_receipt_id is not None:
+                if pending_sandbox_payload["status"] == "passed":
+                    self.receipts.mark_succeeded(
+                        c,
+                        local_validation_receipt_id,
+                        f"local-sandbox:{branch_name}",
+                        {"validation": pending_sandbox_payload},
+                    )
+                    sb_event = "software_factory.local_validation_passed"
+                else:
+                    self.receipts.mark_failed(
+                        c,
+                        local_validation_receipt_id,
+                        {"validation": pending_sandbox_payload},
+                    )
+                    sb_event = "software_factory.local_validation_failed"
+                self.events.emit(
+                    c,
+                    project_id,
+                    sb_event,
+                    "coding_worker",
+                    "receipt",
+                    local_validation_receipt_id,
+                    {
+                        "task_id": task_id,
+                        "branch_name": branch_name,
+                        "status": pending_sandbox_payload["status"],
+                        "summary": pending_sandbox_payload["summary"],
+                    },
+                )
+            if getattr(self.github, "kind", "") == "local":
+                from . import local_review
+
+                local_review.on_change_proposed(c, self.settings, run_id=run_id,
+                                                repository=self.github.repository_full_name,
+                                                number=pr.number)
+
+            diff_artifact_id = create_artifact(
+                c,
+                self.settings,
+                project_id,
+                task_id,
+                "diff_manifest",
+                f"Diff manifest for {title}",
+                {
+                    "title": title,
+                    "branch_name": branch_name,
+                    "files_changed": [file.path for file in files],
+                    "github_commits": commit_shas,
+                },
+                created_by_job_id=created_by_job_id,
+            )
+            security_review_artifact_id = create_artifact(
+                c,
+                self.settings,
+                project_id,
+                task_id,
+                "security_dependency_review",
+                f"Security and dependency review for {title}",
+                {
+                    "title": title,
+                    "branch_name": branch_name,
+                    "pull_request_url": pr.url,
+                    "review": security_dependency_review,
+                    "browser_validation": browser_validation,
+                    "files_changed": [file.path for file in files],
+                    "diff_artifact_id": diff_artifact_id,
+                    "data_boundary": self._data_boundary_for_task(c, task_id),
+                },
+                created_by_job_id=created_by_job_id,
+            )
+            test_report_payload = {
                 "title": title,
                 "status": validation_status,
                 "summary": validation_summary,
-                "head_sha": validation.head_sha,
+                "head_sha": branch_head_sha or validation.head_sha,
+                "verified_commit_sha": branch_head_sha,
+                "verified_tree_sha": verified_tree_sha,
+                "verified_changes_digest": _landing_integrity.get("landing_changes_digest"),
                 "validation_source": "+".join(validation_sources),
                 "validation_sources": validation_sources,
                 "tests_added_or_run": tests_added_or_run,
@@ -2618,432 +2953,482 @@ class SoftwareFactoryService:
                 "local_validation_receipt_status": local_validation_receipt_status,
                 "required_follow_up": validation_follow_up,
                 "notes": review_text,
+                "test_evidence": te_record,
+                "full_report": full_report_text,
                 "agent_module": self._module_descriptor(module_spec),
                 "security_dependency_review_artifact_id": security_review_artifact_id,
                 "security_dependency_review": security_dependency_review,
                 "browser_validation": browser_validation,
-            },
-            created_by_job_id=created_by_job_id,
-        )
-        release_go_no_go = self._build_release_go_no_go(
-            validation_status=validation_status,
-            validation_summary=validation_summary,
-            security_dependency_review=security_dependency_review,
-            browser_validation=browser_validation,
-            evidence_refs=[
-                f"artifact:{diff_artifact_id}",
-                f"artifact:{test_report_artifact_id}",
-                f"artifact:{security_review_artifact_id}",
-                f"receipt:{pr_receipt['id']}",
-            ],
-        )
-        release_go_no_go_artifact_id = create_artifact(
-            connection,
-            self.settings,
-            project_id,
-            task_id,
-            "release_go_no_go",
-            f"Release go/no-go for {title}",
-            {
-                "title": title,
-                "branch_name": branch_name,
-                "pull_request_url": pr.url,
-                "decision_input": release_go_no_go,
-                "rollback_plan": "Revert the sandbox PR branch or close the PR.",
-                "manual_approval_required": True,
-                "no_auto_merge": True,
-                "evidence_refs": release_go_no_go["evidence_refs"],
-                "data_boundary": self._data_boundary_for_task(connection, task_id),
-            },
-            created_by_job_id=created_by_job_id,
-        )
-        artifact_id = create_artifact(
-            connection,
-            self.settings,
-            project_id,
-            task_id,
-            "review_packet",
-            f"Review packet for {title}",
-            {
-                "title": title,
-                "summary": summary,
-                "files_changed": [file.path for file in files],
-                "tests_added_or_run": tests_added_or_run,
-                "ci_validation_status": validation_status,
-                "ci_validation_summary": validation_summary,
-                "ci_checks": validation_checks,
-                "local_validation": local_validation,
-                "risk_hotspots": review_text,
-                "rollback_plan": "Revert the sandbox PR branch or close the PR.",
-                "security_dependency_review": security_dependency_review,
-                "security_review_artifact_id": security_review_artifact_id,
-                "browser_validation": browser_validation,
-                "release_go_no_go": release_go_no_go,
-                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
-                "confidence_score": self._review_confidence_for_status(validation_status),
-                "recommendation": self._review_recommendation_for_status(
-                    validation_status
-                ),
-                "github_commits": commit_shas,
-                "ci_changed": bool(ci_changed),
-                "ci_changed_files": ci_changed.get("ci_changed_files") or [],
-                "ci_findings": ci_changed.get("ci_findings") or [],
-                "openai_response_id": review_provider_ref,
-                "routing_log_id": route["route_decision_log_id"],
-                "agent_module": self._module_descriptor(module_spec),
-            },
-            created_by_job_id=created_by_job_id,
-        )
-        sealed_evidence = attach_sealed_evidence(evidence)
-        citations: list[str] = []
-        try:
-            from .knowledge.capture import pull_request_source_id
-            from .knowledge.runtime import remember_written_files
-
-            remembered = remember_written_files(
-                connection,
-                project_id=project_id,
-                source_id=pull_request_source_id(
-                    getattr(self.github, "repository_full_name", "") or "", pr.number),
-                title=title,
-                body=summary,
-                files=files,
-                run_id=str(run_id or ""),
+            }
+            test_report_artifact_id = create_artifact(
+                c,
+                self.settings,
+                project_id,
+                task_id,
+                "test_report",
+                f"Test report for {title}",
+                test_report_payload,
+                created_by_job_id=created_by_job_id,
             )
-            citations = [str(item) for item in (remembered.get("cited_fact_ids") or [])]
-        except Exception:
-            citations = []
-            try:
-                self.events.emit(
-                    connection,
-                    project_id,
-                    "knowledge.commit_capture_failed",
-                    "coding_worker",
-                    "task",
-                    task_id or project_id,
-                    {},
-                )
-            except Exception:
-                pass
 
-        # ONE DECISION FOR A MULTI-REPO CHANGE (multirepo/change_sets.py). A lane of a change set
-        # opens its PR and stops: the set asks once, pinned to every PR's head, when all of them
-        # (and the cross-repo check) are green. A per-PR merge decision here would let one PR of
-        # the set be merged on its own.
-        from ..multirepo import change_sets as _change_sets
-
-        set_member = _change_sets.member_change_set(connection, run_id) if run_id else None
-        from . import acceptance_gate as _acceptance_gate
-        from . import checks_failing as _checks_failing
-
-        # THE CARD SPEAKS FOR THE WHOLE PULL REQUEST (acceptance_gate.lineage_failures,
-        # BOSSAPP-1211). A follow-up's own checks judge only the findings it was sent to fix, so
-        # its clean result said "Automated checks: passed" on a PR whose earlier builds had
-        # shipped past refuted reviews and missing must-haves (Northgate, dec_ef42b38d). The
-        # card carries the UNION of the gates the lineage shipped past, and the must-have table.
-        card_checks, acceptance = _acceptance_gate.merge_card_checks(
-            connection, run_id=run_id, evidence=evidence, checks_failing=checks_failing,
-            pr_url=pr.url)
-
-        # A local change set is "change #N", never a PR (BOSSAPP-946).
-        _local = getattr(self.github, "kind", "") == "local"
-        _ref = f"change #{pr.number}" if _local else f"PR #{pr.number}"
-        # FOLLOW-UPS ARE NOT A FAILURE (quality_bar.merge_followups, operator 2026-11-18): a
-        # build whose only open items are follow-ups — review findings below the bar's blocking
-        # severity, gates the bar let through — gets the normal ready-to-merge card, "Recipe box
-        # is ready — 1 follow-up queued, BOSS is fixing it", never "Checks failing — decide" and
-        # never a reason to type. BOSS's follow-up build fixes them; the PR lists them.
-        from . import quality_bar as _quality_bar
-
-        _followups = (None if card_checks else
-                      _quality_bar.merge_followups(evidence if isinstance(evidence, dict) else {}))
-        # THE REVIEW PACKET (review_packet.py, boss.review_packet/v2): typed findings, counts and
-        # a computed verdict from the step outputs, never prose. The card's title is the ROOT
-        # build's own name — never "Follow-up: … — Follow-up: … —" from the newest follow-up.
-        from . import review_packet as _review_packet
-
-        _packet = None
-        if run_id:
-            try:
-                with connection.begin_nested():
-                    # The build's validation ran on the tree this commit holds: its evidence head.
-                    _review_packet.stamp_evidence_head(connection, str(run_id), branch_head_sha)
-                    # A FOLLOW-UP BUILD'S COMMIT on a local change up for merge: when the change's
-                    # validation ran on an older head, it re-runs here ("stale → re-checking").
-                    from .local_repo_host import is_local_pr_url as _is_local_pr
-
-                    if _is_local_pr(getattr(pr, "url", None)) and branch_head_sha:
-                        from .finding_overrides import on_head_moved
-
-                        on_head_moved(connection, self.settings, project_id, int(pr.number),
-                                      branch_head_sha)
-                    _packet = _review_packet.for_run(
-                        connection, str(run_id), head_sha=branch_head_sha, change=pr.number,
-                        project_id=project_id,
-                        followups=_followups or (_quality_bar.merge_followups(
-                            evidence if isinstance(evidence, dict) else {})))
-            except Exception:  # noqa: BLE001 — the card stands without it (and says so: no packet)
-                import logging
-
-                logging.getLogger(__name__).warning("review packet not built for %s", run_id,
-                                                    exc_info=True)
-        _work_title = ((_packet or {}).get("work") or {}).get("title") \
-            or _review_packet.work_title(title)
-        _superseded_pending: list[str] = []
-        if not set_member and run_id and getattr(pr, "url", None) and hasattr(connection, "begin_nested"):
-            try:
-                from sqlalchemy import bindparam as _bindparam
-
-                from .run_decisions import normalize_pr_url as _norm_pr_url
-
-                _want_pr = _norm_pr_url(pr.url)
-                with connection.begin_nested():
-                    _cand = connection.execute(
-                        sql(
-                            "SELECT id, recommendation->>'pull_request_url' AS u "
-                            "FROM decisions "
-                            "WHERE project_id = :p "
-                            "AND recommendation->>'action' = 'review_pull_request' "
-                            "AND recommendation->>'run_id' IS DISTINCT FROM :r "
-                            "AND status = 'pending'"
-                        ),
-                        {"p": project_id, "r": run_id},
-                    ).mappings().all()
-                    _superseded_pending = [
-                        str(row["id"])
-                        for row in _cand
-                        if row["u"] and _norm_pr_url(row["u"]) == _want_pr
-                    ]
-                    if _superseded_pending:
-                        connection.execute(
-                            sql(
-                                "UPDATE decisions SET status = 'withdrawn' "
-                                "WHERE project_id = :p AND id IN :ids AND status = 'pending'"
-                            ).bindparams(_bindparam("ids", expanding=True)),
-                            {"p": project_id, "ids": _superseded_pending},
-                        )
-            except Exception:  # noqa: BLE001 — non-DB / fake connection test double
-                _superseded_pending = []
-        decision_id = None
+        te_record["artifact_id"] = test_report_artifact_id
+        te_record["download_url"] = f"/v1/artifacts/{test_report_artifact_id}/download"
+        # External enrichment (outside any DB tx): Check Run + PR body link refresh (BOSSAPP-1011).
+        check_run_id, check_run_url = self._publish_test_evidence_check_run(
+            connection,
+            scope=scope,
+            project_id=project_id,
+            dedupe_key=dedupe_key,
+            title=title,
+            head_sha=branch_head_sha,
+            test_report_content={**test_report_payload, "test_evidence": te_record},
+            test_report_artifact_id=test_report_artifact_id,
+            created_by_job_id=created_by_job_id,
+            db_engine=db_engine,
+        )
+        if check_run_url:
+            te_record["check_run_url"] = check_run_url
         try:
-            if not set_member:
-                decision_id = self.decisions.create_blocking(
-                    connection,
-                    project_id,
-                    task_id,
-                    (f"Checks failing — decide the merge: {_work_title} ({_ref})"
-                     if card_checks else
-                     f"Approve follow-up fix after #{follow_up['after']}: "
-                     f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
-                     f"{_quality_bar.ready_words(_work_title, _followups)}"
-                     f" ({_ref})" if _followups else
-                     f"Approve code change: {_work_title} ({_ref})"),
-                    {
-                        # FIRST, so nothing it carries can replace the action below. Its keys are the
-                        # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
-                        # the decision-producer scan refuses a spread placed after "action".
-                        **sealed_evidence,
-                        "action": "review_pull_request",
-                        "summary": (
-                            (_checks_failing.decision_summary(card_checks) + " "
-                             if card_checks else "")
-                            + (f"Ready to merge — {_quality_bar.followup_words(_followups)}. "
-                               f"{'They' if _followups['count'] != 1 else 'It'} did not block at the "
-                               f"{_followups['bar']} quality bar and "
-                               f"{'are' if _followups['count'] != 1 else 'is'} listed on the "
-                               f"{'change' if _local else 'pull request'}. "
-                               if _followups else "")
-                            + f"BOSS built “{title}” in a sandbox and opened "
-                            + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
-                            + (f"{_acceptance_gate.headline(acceptance)}. "
-                               if _acceptance_gate.headline(acceptance) else "")
-                            + _acceptance_gate.card_words(card_checks, acceptance, validation_status)
-                            + (f" — {validation_summary}" if validation_summary else "")
-                            + (". Review the change in BOSS (it is on this machine), then approve to merge "
-                               "into the default branch or reject to send back."
-                               if getattr(self.github, "kind", "") == "local" else
-                               ". Review the diff on GitHub, then approve to merge or reject to send back.")
-                            + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
-                        ),
-                        "head_sha": branch_head_sha,
-                        # What ci_gate.refuse_approval reads: a CI change needs a PERSON's approval.
-                        "ci_changed": bool(ci_changed),
-                        "ci_changed_files": ci_changed.get("ci_changed_files") or [],
-                        "ci_findings": ci_changed.get("ci_findings") or [],
-                        "requires_person_approval": bool(ci_changed),
-                        "artifact_id": artifact_id,
-                        "diff_artifact_id": diff_artifact_id,
-                        "test_report_artifact_id": test_report_artifact_id,
-                        "security_review_artifact_id": security_review_artifact_id,
-                        "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
-                        "receipt_id": pr_receipt["id"],
-                        "pull_request_url": pr.url,
-                        "branch_name": branch_name,
-                        # The branch the PR merges INTO (None: the host's default). An approval delegate
-                        # merges only into the project's bound release branch (approval_delegations).
-                        "pr_base": pr_base,
-                        "title": _work_title,
-                        "validation_status": validation_status,
-                        "validation_summary": validation_summary,
-                        "validation_sources": validation_sources,
-                        "release_go_no_go_status": release_go_no_go["status"],
-                        "local_validation_receipt_id": local_validation_receipt_id,
-                        "agent_module_id": (
-                            module_spec.get("id") if isinstance(module_spec, dict) else None
-                        ),
-                        "quality_gate_id": quality_gate_id,
-                        "run_id": run_id,
-                        "no_auto_merge": True,
-                        # What the merge card leads with, and what makes its approval a person's stated
-                        # decision rather than a click (decisions.transition, checks_failing.py).
-                        **({_checks_failing.KEY: {
-                            **card_checks,
-                            "draft": bool(checks_failing) and bool(
-                                getattr(self.github, "supports_draft_pull_requests", False)),
-                            "label": _checks_failing.LABEL}} if card_checks else {}),
-                        # The must-have table (acceptance_gate.py): per item met/partial/missing with
-                        # file evidence, from the latest acceptance check of this PR's lineage.
-                        **({_acceptance_gate.KEY: {
-                            "verdict": acceptance.get("verdict"), "counts": acceptance.get("counts"),
-                            "items": [{k: i.get(k) for k in ("n", "text", "status", "evidence",
-                                                             "source", "judgement")}
-                                      for i in acceptance.get("items") or []],
-                            # Judgement (taste) items answered PARTIAL: shown, never failing.
-                            "advisory": list(acceptance.get("advisory") or []),
-                            "stack": acceptance.get("stack") or {},
-                            "why": acceptance.get("why") or "",
-                            "items_dropped": int(acceptance.get("items_dropped") or 0),
-                            "table": _acceptance_gate.must_have_table(acceptance),
-                            # WORSE THAN ITS PARENT (BOSSAPP-1330): said, with the parent's verdict and
-                            # table beside this one — never quietly replaced by the worse check.
-                            **({"regressed_vs_parent": _acceptance_gate.regression_card(
-                                acceptance["regressed_vs_parent"])}
-                               if acceptance.get("regressed_vs_parent") else {})}}
-                           if isinstance(acceptance, dict) and acceptance.get("verdict")
-                           # Never checked against the root's must-haves: the card says so.
-                           else {_acceptance_gate.KEY: {"verdict": "not_checked", "items": []}}
-                           if run_id else {}),
-                        # The knowledge the card is "based on": facts matched to this change's symbols
-                        # (knowledge/runtime.remember_written_files). Empty when none matched.
-                        "cited_fact_ids": citations,
-                        # THE FOLLOW-UPS (quality_bar.merge_followups): what the card lists under its
-                        # normal Merge, P1 first, and whether BOSS's follow-up build is fixing them.
-                        **({_quality_bar.CARD_KEY: _followups} if _followups else {}),
-                        # THE PACKET the card and the change page render (SPEC §1.4, §1.5).
-                        **({_review_packet.KEY: _packet} if _packet else {}),
-                        # A follow-up after the merge of #N (pr_follow_up): named, with its reason.
-                        **({"follow_up_of": follow_up["after"],
-                            "follow_up_reason": follow_up.get("reason")} if follow_up else {}),
-                    },
-                    {},
-                    "merge_decision_required",
+            update_body_fn = getattr(self.github, "update_pull_request_body", None)
+            if callable(update_body_fn) and (te_record.get("download_url") or check_run_url):
+                updated_body = _test_evidence.assemble_pr_body(
+                    pr_body,
+                    replacement_section=_test_evidence.render_pr_section(te_record),
                 )
-        finally:
-            if _superseded_pending and hasattr(connection, "begin_nested"):
+                update_body_fn(pr.number, updated_body)
+        except Exception:  # noqa: BLE001 — best-effort link enrichment; initial section already present
+            pass
+
+        # ── Short Tx 2b: gate receipt, remaining artifacts, decision, change_set, settle, events ──
+        with _phase_tx(connection, db_engine, self.settings, writes_local=True) as c:
+            try:
+                if hasattr(c, "execute"):
+                    import json as _json
+
+                    _patch = {
+                        "download_url": te_record["download_url"],
+                        "test_evidence": te_record,
+                        **({"check_run_id": check_run_id, "check_run_url": check_run_url}
+                           if check_run_id or check_run_url else {}),
+                    }
+                    c.execute(
+                        sql(
+                            "UPDATE artifacts SET content = COALESCE(content, '{}'::jsonb) || CAST(:p AS JSONB) "
+                            "WHERE id = :a AND project_id = :proj"
+                        ),
+                        {"p": _json.dumps(_patch, default=str), "a": test_report_artifact_id,
+                         "proj": project_id},
+                    )
+            except Exception:  # noqa: BLE001 — non-DB test double
+                pass
+            gate_receipt_id: Optional[str] = None
+            try:
+                gate_receipt_id = _gate_integrity.record_gate_receipt(
+                    c,
+                    self.receipts,
+                    org_id=scope["org_id"],
+                    workspace_id=scope["workspace_id"],
+                    project_id=project_id,
+                    run_id=run_id,
+                    quality_gate_id=quality_gate_id,
+                    commit_sha=branch_head_sha,
+                    verified_tree_sha=verified_tree_sha,
+                    verified_changes_digest=_landing_integrity.get("landing_changes_digest"),
+                    tests_passed=(evidence.get("tests_passed") if isinstance(evidence, dict) else None),
+                    created_by_job_id=created_by_job_id,
+                )
+                _gate_integrity.stamp_verified_commit(
+                    c,
+                    project_id=project_id,
+                    run_id=run_id,
+                    quality_gate_id=quality_gate_id,
+                    commit_sha=branch_head_sha,
+                    verified_tree_sha=verified_tree_sha,
+                    verified_changes_digest=_landing_integrity.get("landing_changes_digest"),
+                    gate_receipt_id=gate_receipt_id,
+                )
+            except Exception:  # noqa: BLE001 — fake connection / test double
+                pass
+            release_go_no_go = self._build_release_go_no_go(
+                validation_status=validation_status,
+                validation_summary=validation_summary,
+                security_dependency_review=security_dependency_review,
+                browser_validation=browser_validation,
+                evidence_refs=[
+                    f"artifact:{diff_artifact_id}",
+                    f"artifact:{test_report_artifact_id}",
+                    f"artifact:{security_review_artifact_id}",
+                    f"receipt:{pr_receipt['id']}",
+                ],
+            )
+            release_go_no_go_artifact_id = create_artifact(
+                c,
+                self.settings,
+                project_id,
+                task_id,
+                "release_go_no_go",
+                f"Release go/no-go for {title}",
+                {
+                    "title": title,
+                    "branch_name": branch_name,
+                    "pull_request_url": pr.url,
+                    "decision_input": release_go_no_go,
+                    "rollback_plan": "Revert the sandbox PR branch or close the PR.",
+                    "manual_approval_required": True,
+                    "no_auto_merge": True,
+                    "evidence_refs": release_go_no_go["evidence_refs"],
+                    "data_boundary": self._data_boundary_for_task(c, task_id),
+                },
+                created_by_job_id=created_by_job_id,
+            )
+            artifact_id = create_artifact(
+                c,
+                self.settings,
+                project_id,
+                task_id,
+                "review_packet",
+                f"Review packet for {title}",
+                {
+                    "title": title,
+                    "summary": summary,
+                    "files_changed": [file.path for file in files],
+                    "tests_added_or_run": tests_added_or_run,
+                    "ci_validation_status": validation_status,
+                    "ci_validation_summary": validation_summary,
+                    "ci_checks": validation_checks,
+                    "local_validation": local_validation,
+                    "risk_hotspots": review_text,
+                    "rollback_plan": "Revert the sandbox PR branch or close the PR.",
+                    "security_dependency_review": security_dependency_review,
+                    "security_review_artifact_id": security_review_artifact_id,
+                    "browser_validation": browser_validation,
+                    "release_go_no_go": release_go_no_go,
+                    "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
+                    "confidence_score": self._review_confidence_for_status(validation_status),
+                    "recommendation": self._review_recommendation_for_status(
+                        validation_status
+                    ),
+                    "github_commits": commit_shas,
+                    "ci_changed": bool(ci_changed),
+                    "ci_changed_files": ci_changed.get("ci_changed_files") or [],
+                    "ci_findings": ci_changed.get("ci_findings") or [],
+                    "openai_response_id": review_provider_ref,
+                    "routing_log_id": route["route_decision_log_id"],
+                    "agent_module": self._module_descriptor(module_spec),
+                },
+                created_by_job_id=created_by_job_id,
+            )
+            sealed_evidence = attach_sealed_evidence(evidence)
+            citations: list[str] = []
+            try:
+                from .knowledge.capture import pull_request_source_id
+                from .knowledge.runtime import remember_written_files
+
+                remembered = remember_written_files(
+                    c,
+                    project_id=project_id,
+                    source_id=pull_request_source_id(
+                        getattr(self.github, "repository_full_name", "") or "", pr.number),
+                    title=title,
+                    body=summary,
+                    files=files,
+                    run_id=str(run_id or ""),
+                )
+                citations = [str(item) for item in (remembered.get("cited_fact_ids") or [])]
+            except Exception:
+                citations = []
+                try:
+                    self.events.emit(
+                        c,
+                        project_id,
+                        "knowledge.commit_capture_failed",
+                        "coding_worker",
+                        "task",
+                        task_id or project_id,
+                        {},
+                    )
+                except Exception:
+                    pass
+
+            from ..multirepo import change_sets as _change_sets
+
+            set_member = _change_sets.member_change_set(c, run_id) if run_id else None
+            from . import acceptance_gate as _acceptance_gate
+            from . import quality_bar as _quality_bar
+            from . import review_packet as _review_packet
+
+            card_checks, acceptance = _acceptance_gate.merge_card_checks(
+                c, run_id=run_id, evidence=evidence, checks_failing=checks_failing,
+                pr_url=pr.url)
+
+            _local = getattr(self.github, "kind", "") == "local"
+            _ref = f"change #{pr.number}" if _local else f"PR #{pr.number}"
+            _followups = (None if card_checks else
+                          _quality_bar.merge_followups(evidence if isinstance(evidence, dict) else {}))
+
+            _packet = None
+            if run_id:
+                try:
+                    with c.begin_nested():
+                        _review_packet.stamp_evidence_head(c, str(run_id), branch_head_sha)
+                        from .local_repo_host import is_local_pr_url as _is_local_pr
+
+                        if _is_local_pr(getattr(pr, "url", None)) and branch_head_sha:
+                            from .finding_overrides import on_head_moved
+
+                            on_head_moved(c, self.settings, project_id, int(pr.number),
+                                          branch_head_sha)
+                        _packet = _review_packet.for_run(
+                            c, str(run_id), head_sha=branch_head_sha, change=pr.number,
+                            project_id=project_id,
+                            followups=_followups or (_quality_bar.merge_followups(
+                                evidence if isinstance(evidence, dict) else {})))
+                except Exception:  # noqa: BLE001 — the card stands without it
+                    import logging
+
+                    logging.getLogger(__name__).warning("review packet not built for %s", run_id,
+                                                        exc_info=True)
+            _work_title = ((_packet or {}).get("work") or {}).get("title") \
+                or _review_packet.work_title(title)
+            _superseded_pending: list[str] = []
+            if not set_member and run_id and getattr(pr, "url", None) and hasattr(c, "begin_nested"):
                 try:
                     from sqlalchemy import bindparam as _bindparam
 
-                    with connection.begin_nested():
-                        connection.execute(
+                    from .run_decisions import normalize_pr_url as _norm_pr_url
+
+                    _want_pr = _norm_pr_url(pr.url)
+                    with c.begin_nested():
+                        _cand = c.execute(
                             sql(
-                                "UPDATE decisions SET status = 'pending' "
-                                "WHERE project_id = :p AND id IN :ids AND status = 'withdrawn'"
-                                + (" AND id <> :d" if decision_id else "")
-                            ).bindparams(_bindparam("ids", expanding=True)),
-                            {"p": project_id, "ids": _superseded_pending,
-                             **({"d": decision_id} if decision_id else {})},
-                        )
-                except Exception:  # noqa: BLE001
-                    pass
-        if decision_id:
-            # THE NEWEST BUILD'S CARD IS THE PR'S ONE CARD (BOSSAPP-1320): the older cards for
-            # this pull request are withdrawn, each with a note naming this one.
-            from .run_decisions import withdraw_superseded_merge_cards
-
+                                "SELECT id, recommendation->>'pull_request_url' AS u "
+                                "FROM decisions "
+                                "WHERE project_id = :p "
+                                "AND recommendation->>'action' = 'review_pull_request' "
+                                "AND recommendation->>'run_id' IS DISTINCT FROM :r "
+                                "AND status = 'pending'"
+                            ),
+                            {"p": project_id, "r": run_id},
+                        ).mappings().all()
+                        _superseded_pending = [
+                            str(row["id"])
+                            for row in _cand
+                            if row["u"] and _norm_pr_url(row["u"]) == _want_pr
+                        ]
+                        if _superseded_pending:
+                            c.execute(
+                                sql(
+                                    "UPDATE decisions SET status = 'withdrawn' "
+                                    "WHERE project_id = :p AND id IN :ids AND status = 'pending'"
+                                ).bindparams(_bindparam("ids", expanding=True)),
+                                {"p": project_id, "ids": _superseded_pending},
+                            )
+                except Exception:  # noqa: BLE001 — non-DB / fake connection test double
+                    _superseded_pending = []
+            decision_id = None
             try:
-                with connection.begin_nested():
-                    withdraw_superseded_merge_cards(connection, project_id, pr.url,
-                                                    decision_id, run_id=run_id)
-            except Exception:  # noqa: BLE001 — the new card stands; one_question_per_pull_request
-                import logging
+                if not set_member:
+                    decision_id = self.decisions.create_blocking(
+                        c,
+                        project_id,
+                        task_id,
+                        (f"Checks failing — decide the merge: {_work_title} ({_ref})"
+                         if card_checks else
+                         f"Approve follow-up fix after #{follow_up['after']}: "
+                         f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
+                         f"{_quality_bar.ready_words(_work_title, _followups)}"
+                         f" ({_ref})" if _followups else
+                         f"Approve code change: {_work_title} ({_ref})"),
+                        {
+                            **sealed_evidence,
+                            "action": "review_pull_request",
+                            "summary": (
+                                (_checks_failing.decision_summary(card_checks) + " "
+                                 if card_checks else "")
+                                + (f"Ready to merge — {_quality_bar.followup_words(_followups)}. "
+                                   f"{'They' if _followups['count'] != 1 else 'It'} did not block at the "
+                                   f"{_followups['bar']} quality bar and "
+                                   f"{'are' if _followups['count'] != 1 else 'is'} listed on the "
+                                   f"{'change' if _local else 'pull request'}. "
+                                   if _followups else "")
+                                + f"BOSS built “{title}” in a sandbox and opened "
+                                + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
+                                + (f"{_acceptance_gate.headline(acceptance)}. "
+                                   if _acceptance_gate.headline(acceptance) else "")
+                                + _acceptance_gate.card_words(card_checks, acceptance, validation_status)
+                                + (f" — {validation_summary}" if validation_summary else "")
+                                + (". Review the change in BOSS (it is on this machine), then approve to merge "
+                                   "into the default branch or reject to send back."
+                                   if getattr(self.github, "kind", "") == "local" else
+                                   ". Review the diff on GitHub, then approve to merge or reject to send back.")
+                                + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
+                            ),
+                            "head_sha": branch_head_sha,
+                            "verified_commit_sha": branch_head_sha,
+                            "gate_receipt_id": gate_receipt_id,
+                            "test_evidence_check_run_url": check_run_url,
+                            "ci_changed": bool(ci_changed),
+                            "ci_changed_files": ci_changed.get("ci_changed_files") or [],
+                            "ci_findings": ci_changed.get("ci_findings") or [],
+                            "requires_person_approval": bool(ci_changed),
+                            "artifact_id": artifact_id,
+                            "diff_artifact_id": diff_artifact_id,
+                            "test_report_artifact_id": test_report_artifact_id,
+                            "security_review_artifact_id": security_review_artifact_id,
+                            "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
+                            "receipt_id": pr_receipt["id"],
+                            "pull_request_url": pr.url,
+                            "branch_name": branch_name,
+                            "pr_base": pr_base,
+                            "title": _work_title,
+                            "validation_status": validation_status,
+                            "validation_summary": validation_summary,
+                            "validation_sources": validation_sources,
+                            "release_go_no_go_status": release_go_no_go["status"],
+                            "local_validation_receipt_id": local_validation_receipt_id,
+                            "agent_module_id": (
+                                module_spec.get("id") if isinstance(module_spec, dict) else None
+                            ),
+                            "quality_gate_id": quality_gate_id,
+                            "run_id": run_id,
+                            "no_auto_merge": True,
+                            **({_checks_failing.KEY: {
+                                **card_checks,
+                                "draft": bool(checks_failing) and bool(
+                                    getattr(self.github, "supports_draft_pull_requests", False)),
+                                "label": _checks_failing.LABEL}} if card_checks else {}),
+                            **({_acceptance_gate.KEY: {
+                                "verdict": acceptance.get("verdict"), "counts": acceptance.get("counts"),
+                                "items": [{k: i.get(k) for k in ("n", "text", "status", "evidence",
+                                                                 "source", "judgement")}
+                                          for i in acceptance.get("items") or []],
+                                "advisory": list(acceptance.get("advisory") or []),
+                                "stack": acceptance.get("stack") or {},
+                                "why": acceptance.get("why") or "",
+                                "items_dropped": int(acceptance.get("items_dropped") or 0),
+                                "table": _acceptance_gate.must_have_table(acceptance),
+                                **({"regressed_vs_parent": _acceptance_gate.regression_card(
+                                    acceptance["regressed_vs_parent"])}
+                                   if acceptance.get("regressed_vs_parent") else {})}}
+                               if isinstance(acceptance, dict) and acceptance.get("verdict")
+                               else {_acceptance_gate.KEY: {"verdict": "not_checked", "items": []}}
+                               if run_id else {}),
+                            "cited_fact_ids": citations,
+                            **({_quality_bar.CARD_KEY: _followups} if _followups else {}),
+                            **({_review_packet.KEY: _packet} if _packet else {}),
+                            **({"follow_up_of": follow_up["after"],
+                                "follow_up_reason": follow_up.get("reason")} if follow_up else {}),
+                        },
+                        {},
+                        "merge_decision_required",
+                    )
+            finally:
+                if _superseded_pending and hasattr(c, "begin_nested"):
+                    try:
+                        from sqlalchemy import bindparam as _bindparam
 
-                logging.getLogger(__name__).warning(
-                    "superseded merge cards not withdrawn for %s", pr.url)
-        if run_id and not set_member:
-            # A single-repo run is a one-PR change (observer only: its own approval and merge
-            # stay exactly as they are), so an app's Recent changes read one table.
-            _change_sets.record_single(
-                connection, run_id=run_id, project_id=project_id,
-                full_name=str(getattr(self.github, "repository_full_name", "") or ""),
-                pr_number=int(pr.number), pr_url=pr.url, branch=branch_name,
-                head_sha=branch_head_sha, decision_id=decision_id, title=title)
-        result = attach_sealed_receipt_result(
-            {
-                "artifact_id": artifact_id,
-                "diff_artifact_id": diff_artifact_id,
-                "test_report_artifact_id": test_report_artifact_id,
-                "security_review_artifact_id": security_review_artifact_id,
-                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
-                "decision_id": decision_id,
-                "pull_request_url": pr.url,
-                "pull_request_number": pr.number,
-                "branch_name": branch_name,
-                "validation_status": validation_status,
-                "validation_summary": validation_summary,
-                "validation_sources": validation_sources,
-                "local_validation_receipt_id": local_validation_receipt_id,
-                "receipt_id": pr_receipt["id"],
-            },
-            evidence=sealed_evidence,
-            decision_id=decision_id,
-            receipt_id=pr_receipt["id"],
-            quality_gate_id=quality_gate_id,
-            run_id=run_id,
-        )
-        self.receipts.mark_succeeded(connection, pr_receipt["id"], pr.url, result)
-        build_run = settle_run_id or run_id
-        if rescue_of_run:
-            pass  # the build's exit settles it (settle_or_release), once
-        elif build_run:
-            from .build_budget import settle_on_pull_request
+                        with c.begin_nested():
+                            c.execute(
+                                sql(
+                                    "UPDATE decisions SET status = 'pending' "
+                                    "WHERE project_id = :p AND id IN :ids AND status = 'withdrawn'"
+                                    + (" AND id <> :d" if decision_id else "")
+                                ).bindparams(_bindparam("ids", expanding=True)),
+                                {"p": project_id, "ids": _superseded_pending,
+                                 **({"d": decision_id} if decision_id else {})},
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
+            if decision_id:
+                from .run_decisions import withdraw_superseded_merge_cards
 
-            settle_on_pull_request(self.budget, connection, project_id, reservation_id,
-                                   pr_receipt["id"], int(reservation["amount_usd_micros"]),
-                                   build_run)
-        else:
-            self.budget.settle(
-                connection,
-                project_id,
-                reservation_id,
-                pr_receipt["id"],
-                "tool",
-                "github.pull_request.create",
-                int(reservation["amount_usd_micros"]),
-                actual_usd_micros,
+                try:
+                    with c.begin_nested():
+                        withdraw_superseded_merge_cards(c, project_id, pr.url,
+                                                        decision_id, run_id=run_id)
+                except Exception:  # noqa: BLE001 — the new card stands
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "superseded merge cards not withdrawn for %s", pr.url)
+            if run_id and not set_member:
+                _change_sets.record_single(
+                    c, run_id=run_id, project_id=project_id,
+                    full_name=str(getattr(self.github, "repository_full_name", "") or ""),
+                    pr_number=int(pr.number), pr_url=pr.url, branch=branch_name,
+                    head_sha=branch_head_sha, decision_id=decision_id, title=title)
+            result = attach_sealed_receipt_result(
+                {
+                    "artifact_id": artifact_id,
+                    "diff_artifact_id": diff_artifact_id,
+                    "test_report_artifact_id": test_report_artifact_id,
+                    "security_review_artifact_id": security_review_artifact_id,
+                    "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
+                    "decision_id": decision_id,
+                    "pull_request_url": pr.url,
+                    "pull_request_number": pr.number,
+                    "branch_name": branch_name,
+                    "validation_status": validation_status,
+                    "validation_summary": validation_summary,
+                    "validation_sources": validation_sources,
+                    "local_validation_receipt_id": local_validation_receipt_id,
+                    "receipt_id": pr_receipt["id"],
+                    "head_sha": branch_head_sha,
+                    "verified_commit_sha": branch_head_sha,
+                    "gate_receipt_id": gate_receipt_id,
+                    "check_run_id": check_run_id,
+                    "check_run_url": check_run_url,
+                },
+                evidence=sealed_evidence,
+                decision_id=decision_id,
+                receipt_id=pr_receipt["id"],
+                quality_gate_id=quality_gate_id,
+                run_id=run_id,
             )
-        self.events.emit(
-            connection,
-            project_id,
-            "software_factory.pull_request_proposed",
-            "coding_worker",
-            "decision" if decision_id else "code_task_run",
-            decision_id or run_id or pr_receipt["id"],
-            {
-                "receipt_id": pr_receipt["id"],
-                "pull_request_url": pr.url,
-                "routing_log_id": route["route_decision_log_id"],
-                "source_id": route["source_id"],
-                "model_id": route["model_id"],
-                "validation_sources": validation_sources,
-                "security_review_artifact_id": security_review_artifact_id,
-                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
-                "release_go_no_go_status": release_go_no_go["status"],
-                "local_validation_receipt_id": local_validation_receipt_id,
-                "agent_module_id": (
-                    module_spec.get("id") if isinstance(module_spec, dict) else None
-                ),
-            },
-        )
+            self.receipts.mark_succeeded(c, pr_receipt["id"], pr.url, result)
+            build_run = settle_run_id or run_id
+            if rescue_of_run:
+                pass
+            elif build_run:
+                from .build_budget import settle_on_pull_request
+
+                settle_on_pull_request(self.budget, c, project_id, reservation_id,
+                                       pr_receipt["id"], int(reservation["amount_usd_micros"]),
+                                       build_run)
+            else:
+                self.budget.settle(
+                    c,
+                    project_id,
+                    reservation_id,
+                    pr_receipt["id"],
+                    "tool",
+                    "github.pull_request.create",
+                    int(reservation["amount_usd_micros"]),
+                    actual_usd_micros,
+                )
+            self.events.emit(
+                c,
+                project_id,
+                "software_factory.pull_request_proposed",
+                "coding_worker",
+                "decision" if decision_id else "code_task_run",
+                decision_id or run_id or pr_receipt["id"],
+                {
+                    "receipt_id": pr_receipt["id"],
+                    "pull_request_url": pr.url,
+                    "routing_log_id": route["route_decision_log_id"],
+                    "source_id": route["source_id"],
+                    "model_id": route["model_id"],
+                    "validation_sources": validation_sources,
+                    "security_review_artifact_id": security_review_artifact_id,
+                    "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
+                    "release_go_no_go_status": release_go_no_go["status"],
+                    "local_validation_receipt_id": local_validation_receipt_id,
+                    "agent_module_id": (
+                        module_spec.get("id") if isinstance(module_spec, dict) else None
+                    ),
+                },
+            )
         return {
             "status": "created",
             "artifact_id": artifact_id,
@@ -3060,13 +3445,15 @@ class SoftwareFactoryService:
             "validation_summary": validation_summary,
             "validation_sources": validation_sources,
             "local_validation_receipt_id": local_validation_receipt_id,
+            "head_sha": branch_head_sha,
+            "verified_commit_sha": branch_head_sha,
+            "gate_receipt_id": gate_receipt_id,
+            "check_run_id": check_run_id,
+            "check_run_url": check_run_url,
             **plane_fields,
         }
 
-    def _flag_ci_changed(self, connection: Any, project_id: str, number: int, url: str,
-                         ci_changed: dict, receipt_id: str) -> None:
-        """Say "CI changed" ON the pull request (a label and a comment with the static checks)
-        and in BOSS's events. Best effort at GitHub: the gate itself is BOSS's, not the label."""
+    def _flag_ci_changed_external(self, number: int, ci_changed: dict) -> tuple[list[Any], dict[str, Any]]:
         from . import ci_gate
 
         posted: dict[str, Any] = {}
@@ -3084,10 +3471,38 @@ class SoftwareFactoryService:
             posted["label"] = True
         except Exception as error:  # noqa: BLE001
             posted["label_error"] = f"{type(error).__name__}: {error}"[:200]
+        return findings, posted
+
+    def _flag_ci_changed(self, connection: Any, project_id: str, number: int, url: str,
+                         ci_changed: dict, receipt_id: str) -> None:
+        """Say "CI changed" ON the pull request (a label and a comment with the static checks)
+        and in BOSS's events. Best effort at GitHub: the gate itself is BOSS's, not the label."""
+        findings, posted = self._flag_ci_changed_external(number, ci_changed)
         self.events.emit(connection, project_id, "software_factory.ci_changed", "coding_worker",
                          "receipt", receipt_id,
                          {"pull_request_url": url, "files": ci_changed["ci_changed_files"],
                           "findings": len(findings), **posted})
+
+    def _needs_draft_ready(self, connection: Any, project_id: str, decision_id: str,
+                           *, pull_request_url: str = "") -> bool:
+        from . import checks_failing as _checks_failing
+
+        rows = connection.execute(
+            sql("SELECT recommendation FROM decisions WHERE project_id = :p AND (id = :d "
+                "OR (CAST(:u AS text) <> '' AND recommendation->>'pull_request_url' = :u "
+                "AND recommendation ? 'checks_failing'))"),
+            {"d": decision_id, "p": project_id, "u": pull_request_url or ""}).mappings().all()
+        records = [_checks_failing.of_decision(dict(r)) for r in rows]
+        return any(r and r.get("draft") for r in records)
+
+    def _mark_draft_ready_external(self, number: int) -> tuple[bool, Optional[str]]:
+        ready = getattr(self.github, "mark_ready_for_review", None)
+        if ready is None:
+            return False, None
+        try:
+            return bool(ready(number)), None
+        except Exception as error:  # noqa: BLE001 — the merge then says GitHub's refusal
+            return False, f"{type(error).__name__}: {error}"[:200]
 
     def _ready_a_checks_failing_draft(self, connection: Any, project_id: str, decision_id: str,
                                       number: int, receipt_id: str, *,
@@ -3097,30 +3512,17 @@ class SoftwareFactoryService:
         accepts the merge they decided. The same holds when a later build of the lineage made
         the checks pass on that PR (its new card carries no failing checks, the PR is still the
         draft BOSS opened). Any other draft is left as it is."""
-        from . import checks_failing as _checks_failing
-
-        rows = connection.execute(
-            sql("SELECT recommendation FROM decisions WHERE project_id = :p AND (id = :d "
-                "OR (CAST(:u AS text) <> '' AND recommendation->>'pull_request_url' = :u "
-                "AND recommendation ? 'checks_failing'))"),
-            {"d": decision_id, "p": project_id, "u": pull_request_url or ""}).mappings().all()
-        records = [_checks_failing.of_decision(dict(r)) for r in rows]
-        if not any(r and r.get("draft") for r in records):
-            return
-        ready = getattr(self.github, "mark_ready_for_review", None)
-        if ready is None:
+        if not self._needs_draft_ready(connection, project_id, decision_id,
+                                       pull_request_url=pull_request_url):
             return
         from . import local_repo_host
 
-        try:
-            with local_repo_host.writes_on(connection):
-                done = ready(number)
-        except Exception as error:  # noqa: BLE001 — the merge then says GitHub's refusal
-            done = False
+        with local_repo_host.writes_on(connection):
+            done, err = self._mark_draft_ready_external(number)
+        if err is not None:
             self.events.emit(connection, project_id, "software_factory.draft_ready_failed",
                              "release_manager", "receipt", receipt_id,
-                             {"pull_request_number": number,
-                              "error": f"{type(error).__name__}: {error}"[:200]})
+                             {"pull_request_number": number, "error": err})
         if done:
             self.events.emit(connection, project_id, "software_factory.draft_marked_ready",
                              "release_manager", "receipt", receipt_id,
@@ -3151,10 +3553,7 @@ class SoftwareFactoryService:
         if reservation_id:
             self.budget.release(connection, project_id, reservation_id, note)
 
-    def _flag_checks_failing(self, connection: Any, project_id: str, number: int, url: str,
-                             checks_failing: dict, receipt_id: str) -> None:
-        """The `checks failing` label on the pull request (checks_failing.LABEL). Best effort at
-        GitHub: what refuses a silent merge is BOSS's own decision, not the label."""
+    def _flag_checks_failing_external(self, number: int) -> dict[str, Any]:
         from . import checks_failing as _checks_failing
 
         posted: dict[str, Any] = {}
@@ -3167,6 +3566,15 @@ class SoftwareFactoryService:
                 posted["label"] = True
         except Exception as error:  # noqa: BLE001
             posted["label_error"] = f"{type(error).__name__}: {error}"[:200]
+        return posted
+
+    def _flag_checks_failing(self, connection: Any, project_id: str, number: int, url: str,
+                             checks_failing: dict, receipt_id: str) -> None:
+        """The `checks failing` label on the pull request (checks_failing.LABEL). Best effort at
+        GitHub: what refuses a silent merge is BOSS's own decision, not the label."""
+        from . import checks_failing as _checks_failing
+
+        posted = self._flag_checks_failing_external(number)
         self.events.emit(connection, project_id, "software_factory.checks_failing_flagged",
                          "coding_worker", "receipt", receipt_id,
                          {"pull_request_url": url,
@@ -3186,139 +3594,163 @@ class SoftwareFactoryService:
         title: str,
         branch_name: Optional[str],
         created_by_job_id: Optional[str] = None,
+        *,
+        db_engine: Any = None,
     ) -> dict:
-        # THE PULL REQUEST'S OWN REPOSITORY. The merge ran on the factory's default adapter,
-        # bound to no repository, and failed "No GitHub credentials for /" — while the job said
-        # it succeeded (helpdesk-ai-demo PR #1, 2026-11-06). Bind to the repo the URL names.
         from .ci_gate import parse_pr_url
 
-        owner_repo = (parse_pr_url(str(pull_request_url or "")) or (None, None))[0] or ""
-        if "/" in owner_repo:
-            owner, repo = owner_repo.split("/", 1)
-            self.bind_project_github(connection, project_id, owner=owner, repo=repo)
-        if task_id is None:
-            task_id = connection.execute(
-                sql(
-                    """
-                    SELECT task_id
-                    FROM decisions
-                    WHERE id = :decision_id AND project_id = :project_id
-                    """
-                ),
-                {"decision_id": decision_id, "project_id": project_id},
-            ).scalar_one_or_none()
+        # ── Short Tx 1: bind, receipt, approved decision guard, draft check, approved SHA ───────
+        with _phase_tx(connection, db_engine, self.settings) as c:
+            owner_repo = (parse_pr_url(str(pull_request_url or "")) or (None, None))[0] or ""
+            if "/" in owner_repo:
+                owner, repo = owner_repo.split("/", 1)
+                self.bind_project_github(c, project_id, owner=owner, repo=repo)
+            if task_id is None:
+                task_id = c.execute(
+                    sql(
+                        """
+                        SELECT task_id
+                        FROM decisions
+                        WHERE id = :decision_id AND project_id = :project_id
+                        """
+                    ),
+                    {"decision_id": decision_id, "project_id": project_id},
+                ).scalar_one_or_none()
 
-        boundary_block = self._block_github_effect_for_data_boundary(
-            connection,
-            project_id,
-            task_id,
-            "github.pull_request.merge",
-            "release_manager",
-        )
-        if boundary_block:
-            return boundary_block
-
-        scope = self._scope(connection, project_id)
-        merge_receipt, created = self.receipts.create_or_reuse(
-            connection,
-            scope["org_id"],
-            scope["workspace_id"],
-            project_id,
-            dedupe_key,
-            "github.pull_request.merge",
-            {
-                "repository": self.github.repository_full_name,
-                "pull_request_number": pull_request_number,
-            },
-            {
-                "decision_id": decision_id,
-                "title": title,
-                "pull_request_url": pull_request_url,
-                "branch_name": branch_name,
-            },
-            created_by_job_id=created_by_job_id,
-        )
-        if not created and merge_receipt["status"] == "succeeded":
-            follow_on_decision_id = self._mark_merge_completed(
-                connection,
+            boundary_block = self._block_github_effect_for_data_boundary(
+                c,
                 project_id,
                 task_id,
-                decision_id,
+                "github.pull_request.merge",
                 "release_manager",
-                title=title,
-                pull_request_url=pull_request_url,
-                branch_name=branch_name,
-                merged_sha=(merge_receipt.get("result") or {}).get("merged_sha") or "",
             )
-            result = merge_receipt["result"] or {}
-            return {
-                "status": "reused",
-                "artifact_id": result.get("artifact_id"),
-                "receipt_id": merge_receipt["id"],
-                "decision_id": decision_id,
-                "deployment_decision_id": result.get("deployment_decision_id")
-                or follow_on_decision_id,
-                "pull_request_url": pull_request_url,
-                "branch_name": branch_name,
-                "merged_sha": result.get("merged_sha"),
-            }
+            if boundary_block:
+                return boundary_block
 
-        self._require_approved_effect_decision(
-            connection, project_id, decision_id, "review_pull_request",
-            pull_request_url=pull_request_url,
-        )
-        if not pull_request_url.rstrip("/").endswith(f"/pull/{pull_request_number}"):
-            raise ValueError("The pull request number does not match the approved URL.")
-        self._ready_a_checks_failing_draft(connection, project_id, decision_id,
-                                           pull_request_number, merge_receipt["id"],
-                                           pull_request_url=pull_request_url)
+            scope = self._scope(c, project_id)
+            merge_receipt, created = self.receipts.create_or_reuse(
+                c,
+                scope["org_id"],
+                scope["workspace_id"],
+                project_id,
+                dedupe_key,
+                "github.pull_request.merge",
+                {
+                    "repository": self.github.repository_full_name,
+                    "pull_request_number": pull_request_number,
+                },
+                {
+                    "decision_id": decision_id,
+                    "title": title,
+                    "pull_request_url": pull_request_url,
+                    "branch_name": branch_name,
+                },
+                created_by_job_id=created_by_job_id,
+            )
+            if not created and merge_receipt["status"] == "succeeded":
+                follow_on_decision_id = self._mark_merge_completed(
+                    c,
+                    project_id,
+                    task_id,
+                    decision_id,
+                    "release_manager",
+                    title=title,
+                    pull_request_url=pull_request_url,
+                    branch_name=branch_name,
+                    merged_sha=(merge_receipt.get("result") or {}).get("merged_sha") or "",
+                )
+                result = merge_receipt["result"] or {}
+                return {
+                    "status": "reused",
+                    "artifact_id": result.get("artifact_id"),
+                    "receipt_id": merge_receipt["id"],
+                    "decision_id": decision_id,
+                    "deployment_decision_id": result.get("deployment_decision_id")
+                    or follow_on_decision_id,
+                    "pull_request_url": pull_request_url,
+                    "branch_name": branch_name,
+                    "merged_sha": result.get("merged_sha"),
+                }
+
+            self._require_approved_effect_decision(
+                c, project_id, decision_id, "review_pull_request",
+                pull_request_url=pull_request_url,
+            )
+            if not pull_request_url.rstrip("/").endswith(f"/pull/{pull_request_number}"):
+                raise ValueError("The pull request number does not match the approved URL.")
+            needs_draft_ready = self._needs_draft_ready(
+                c, project_id, decision_id, pull_request_url=pull_request_url
+            )
+            if connection is not None and needs_draft_ready:
+                self._ready_a_checks_failing_draft(
+                    c, project_id, decision_id, pull_request_number, merge_receipt["id"],
+                    pull_request_url=pull_request_url,
+                )
+            approved_head = self._approved_head_sha(c, project_id, decision_id)
+            if approved_head is None and decision_id:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "software_factory: merge head pin dropped for decision %s (%s)",
+                    decision_id, pull_request_url,
+                )
+                self.events.emit(
+                    c,
+                    project_id,
+                    "software_factory.merge_head_pin_dropped",
+                    "release_manager",
+                    "decision",
+                    decision_id,
+                    {
+                        "pull_request_url": pull_request_url,
+                        "reason": "head_sha_unreadable_or_missing",
+                    },
+                )
+
+        # ── No Tx: draft-ready external, settled check, merge + Tier 1/1b conflict recovery ─────
+        pre_events: list[tuple[str, str, str, str, dict]] = []
+        if connection is None and needs_draft_ready:
+            done, err = self._mark_draft_ready_external(pull_request_number)
+            if err is not None:
+                pre_events.append((
+                    "software_factory.draft_ready_failed",
+                    "release_manager",
+                    "receipt",
+                    merge_receipt["id"],
+                    {"pull_request_number": pull_request_number, "error": err},
+                ))
+            if done:
+                pre_events.append((
+                    "software_factory.draft_marked_ready",
+                    "release_manager",
+                    "receipt",
+                    merge_receipt["id"],
+                    {"pull_request_number": pull_request_number, "decision_id": decision_id,
+                     "why": "a person decided to merge it with its checks failing"},
+                ))
+
         recovered_from_stale_base = False
-        # MERGING TWICE IS A NO-OP (pr_follow_up): a pull request already merged — by an earlier
-        # job, a person in GitHub, or a second press — completes with GitHub's own merge sha and
-        # never asks GitHub to merge again; one closed unmerged says so and does nothing.
         settled = self._pull_request_settled(pull_request_number)
         if settled and settled.get("state") == "closed":
-            self.receipts.mark_failed(
-                connection, merge_receipt["id"],
-                {"message": f"PR #{pull_request_number} was closed without merging; nothing "
-                            "was merged."})
-            from .cleared_causes import on_pull_request_settled as _settled_hook
+            with _phase_tx(connection, db_engine, self.settings, writes_local=True) as c:
+                for etype, eactor, entity_type, entity_id, data in pre_events:
+                    self.events.emit(c, project_id, etype, eactor, entity_type, entity_id, data)
+                self.receipts.mark_failed(
+                    c, merge_receipt["id"],
+                    {"message": f"PR #{pull_request_number} was closed without merging; nothing "
+                                "was merged."})
+                from .cleared_causes import on_pull_request_settled as _settled_hook
 
-            for _rid in connection.execute(
-                    sql("SELECT id FROM code_task_runs WHERE project_id = :p AND "
-                        "pull_request_url = :u"),
-                    {"p": project_id, "u": pull_request_url}).scalars().all():
-                _settled_hook(connection, str(_rid), "closed")
+                for _rid in c.execute(
+                        sql("SELECT id FROM code_task_runs WHERE project_id = :p AND "
+                            "pull_request_url = :u"),
+                        {"p": project_id, "u": pull_request_url}).scalars().all():
+                    _settled_hook(c, str(_rid), "closed")
             return {"status": "closed", "receipt_id": merge_receipt["id"],
                     "decision_id": decision_id, "pull_request_url": pull_request_url,
                     "message": f"PR #{pull_request_number} was closed without merging, so "
                                "there is nothing to merge."}
-        # MERGE WHAT WAS APPROVED (neighborhood-board change #1, 2026-11-19). The merge card
-        # names the head the person reviewed; a follow-up build kept committing to the same
-        # branch, and merging the branch TIP swept its unreviewed checkpoint into the base —
-        # the follow-up then finished with no change of its own. A host that can merge an exact
-        # commit (the local repo host) merges that head; later commits stay on the branch and
-        # open their own change (pr_follow_up.prepare_branch restacks them onto the base).
-        approved_head = self._approved_head_sha(connection, project_id, decision_id)
-        if approved_head is None and decision_id:
-            import logging
 
-            logging.getLogger(__name__).warning(
-                "software_factory: merge head pin dropped for decision %s (%s)",
-                decision_id, pull_request_url,
-            )
-            self.events.emit(
-                connection,
-                project_id,
-                "software_factory.merge_head_pin_dropped",
-                "release_manager",
-                "decision",
-                decision_id,
-                {
-                    "pull_request_url": pull_request_url,
-                    "reason": "head_sha_unreadable_or_missing",
-                },
-            )
         pin = ({"head_sha": approved_head}
                if approved_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
                else {})
@@ -3360,43 +3792,31 @@ class SoftwareFactoryService:
             return {"status": "blocked", "decision_id": ask, "message": str(error),
                     "receipt_id": merge_receipt["id"], "pull_request_url": pull_request_url}
         except IntegrationConfigurationError as error:
-            self.receipts.mark_failed(
-                connection, merge_receipt["id"], {"message": str(error)}
-            )
-            decision_id_block = self.decisions.create_blocking(
-                connection,
-                project_id,
-                task_id,
-                "GitHub integration is not configured",
-                # WHAT CLEARS IT (cleared_causes): a GitHub effect that succeeds later, or
-                # this pull request merging some other way.
-                {**_failed_effect_cause("github.pull_request.merge",
-                                        repository=_repo_name(self.github),
-                                        pull_request_url=pull_request_url,
-                                        pull_request_number=pull_request_number),
-                 "action": "provide_github_token"},
-                {},
-                "missing_github_credentials",
-            )
+            with _phase_tx(connection, db_engine, self.settings) as c:
+                for etype, eactor, entity_type, entity_id, data in pre_events:
+                    self.events.emit(c, project_id, etype, eactor, entity_type, entity_id, data)
+                self.receipts.mark_failed(
+                    c, merge_receipt["id"], {"message": str(error)}
+                )
+                decision_id_block = self.decisions.create_blocking(
+                    c,
+                    project_id,
+                    task_id,
+                    "GitHub integration is not configured",
+                    {**_failed_effect_cause("github.pull_request.merge",
+                                            repository=_repo_name(self.github),
+                                            pull_request_url=pull_request_url,
+                                            pull_request_number=pull_request_number),
+                     "action": "provide_github_token"},
+                    {},
+                    "missing_github_credentials",
+                )
             return {
                 "status": "blocked",
                 "decision_id": decision_id_block,
                 "message": str(error),
             }
         except Exception as error:
-            # CONFLICT RECOVERY, TIER 1: the base branch moved under us.
-            # When a batch of PRs share a base and one merges, the rest go CONFLICTING and
-            # GitHub answers this endpoint with 405 Method Not Allowed. Recording the failure
-            # and stopping meant only the FIRST PR of any batch could ever land — exactly what
-            # happened to PRs #67 and #68 the moment #66 merged.
-            # Ask GitHub to merge the base INTO the head branch and try once more. That
-            # resolves ordinary drift unattended; a genuine textual conflict is refused, and
-            # falls through to the failure path below where an agent is needed.
-            #
-            # On a successful retry we MUST fall through to the same completion path as a
-            # clean merge (artifact, _mark_merge_completed, mark_succeeded arity). An early
-            # return after GitHub already merged left BOSS recording failure / skipping
-            # deploy follow-on — merge succeeded on GitHub, BOSS said it failed.
             _msg = str(error)
             if isinstance(error, httpx.HTTPStatusError) and error.response is not None and error.response.status_code == 409:
                 try:
@@ -3408,16 +3828,8 @@ class SoftwareFactoryService:
                 except Exception:  # noqa: BLE001
                     pass
             merge = None
-            # ONE classifier decides what counts as a conflict (merge_failures.classify):
-            # GitHub says "405"/"not mergeable", a LOCAL change set says "does not merge
-            # cleanly" (local_repo.LocalMergeConflict) — the same state, the same recovery
-            # (BOSSAPP-980: helpdesk-laptop change #2 after #1 squash-merged could never
-            # merge, and nothing here even tried).
             from . import merge_failures as _mf
 
-            # A PINNED merge whose branch MOVED past the approval never recovers by merging
-            # the tip: both tiers below merge whatever the branch holds, which is exactly what
-            # the pin keeps out. Its conflict goes to the failure path (a new approval).
             moved = bool(pin) and self._head_moved_past(pull_request_number, approved_head)
             if moved:
                 _msg = "The change moved after approval; nothing was merged."
@@ -3425,13 +3837,12 @@ class SoftwareFactoryService:
                     self.github, "update_pull_request_branch"):
                 try:
                     if self.github.update_pull_request_branch(pull_request_number):
-                        self.events.emit(
-                            connection, project_id,
+                        pre_events.append((
                             "software_factory.pull_request_branch_updated",
                             "release_manager", "receipt", merge_receipt["id"],
                             {"pull_request_url": pull_request_url,
                              "why": "base branch had moved; merged base into head and retrying"},
-                        )
+                        ))
                         tier1_pin: dict[str, Any] = {}
                         tier1_valid = True
                         if pin:
@@ -3470,138 +3881,150 @@ class SoftwareFactoryService:
                     _msg = f"{_msg} | retry after branch update: {retry_error}"
                     merge = None
             if not moved and merge is None and _mf.classify(_msg) == _mf.NOT_MERGEABLE:
-                # TIER 1b: the branch still carries an EARLIER pull request's commits that a
-                # squash merge left off the base (PR #237 after #236). Put it back on the base
-                # holding only what changed after that merge, then merge once more.
-                merge = self._merge_after_restack(connection, project_id, pull_request_number,
-                                                  title, branch_name, merge_receipt["id"],
-                                                  pull_request_url,
-                                                  approved_head=approved_head)
+                merge = self._merge_after_restack(
+                    None, project_id, pull_request_number,
+                    title, branch_name, merge_receipt["id"],
+                    pull_request_url, pre_events=pre_events,
+                    approved_head=approved_head)
                 if merge is not None:
                     recovered_from_stale_base = True
                 else:
                     _msg = f"{_msg} | the branch could not be put back on its base"
 
             if merge is None:
-                self.receipts.mark_failed(
-                    connection, merge_receipt["id"], {"message": _msg}
-                )
-                self.events.emit(
-                    connection,
-                    project_id,
-                    "software_factory.pull_request_merge_failed",
-                    "release_manager",
-                    "receipt",
-                    merge_receipt["id"],
-                    {"message": _msg, "pull_request_url": pull_request_url,
-                     # TIER 2 lives with the caller: a real conflict needs an agent to resolve it,
-                     # which is a coding task, not a git call. Flagged so the caller can route it.
-                     "needs_conflict_resolution": ("405" in _msg
-                                                   or "conflict" in _msg.lower())},
-                )
-                # A MERGE THAT FAILED IS NEVER SILENT (merge_failures): classified, said in
-                # words on the decision and the run, and acted on — superseded closes, a real
-                # conflict goes to the build agent, a moved head or a GitHub hiccup retries.
-                return self._after_merge_failure(
-                    connection, project_id, decision_id, pull_request_number,
-                    pull_request_url, branch_name, merge_receipt["id"], _msg,
-                    pinned=bool(pin))
+                with _phase_tx(connection, db_engine, self.settings, writes_local=True) as c:
+                    for etype, eactor, entity_type, entity_id, data in pre_events:
+                        self.events.emit(c, project_id, etype, eactor, entity_type, entity_id, data)
+                    self.receipts.mark_failed(
+                        c, merge_receipt["id"], {"message": _msg}
+                    )
+                    self.events.emit(
+                        c,
+                        project_id,
+                        "software_factory.pull_request_merge_failed",
+                        "release_manager",
+                        "receipt",
+                        merge_receipt["id"],
+                        {"message": _msg, "pull_request_url": pull_request_url,
+                         "needs_conflict_resolution": ("405" in _msg
+                                                       or "conflict" in _msg.lower())},
+                    )
+                    return self._after_merge_failure(
+                        c, project_id, decision_id, pull_request_number,
+                        pull_request_url, branch_name, merge_receipt["id"], _msg,
+                        pinned=bool(pin))
 
-        artifact_id = create_artifact(
-            connection,
-            self.settings,
-            project_id,
-            task_id,
-            "merge_result",
-            f"Merge result for {title}",
-            {
-                "decision_id": decision_id,
-                "pull_request_number": pull_request_number,
+        delivery_result: Any = None
+        if connection is None:
+            try:
+                from ..db import get_engine as _get_engine
+                from .delivery_pipeline import on_pull_request_merged
+
+                _run_id = ""
+                if branch_name and branch_name.startswith("boss/code/"):
+                    _run_id = branch_name.rsplit("/", 1)[-1]
+                delivery_result = on_pull_request_merged(
+                    db_engine or _get_engine(self.settings),
+                    self.settings, project_id=project_id, run_id=_run_id,
+                    repo=self.settings.target_github_repo, commit_ref=merge.sha,
+                    decision_id=None, actor="release_manager")
+            except Exception:  # noqa: BLE001 — delivery must never un-ship a merge
+                delivery_result = None
+
+        # ── Short Tx 2: artifact, change_sets, merge record, decision executed, receipt ─────────
+        with _phase_tx(connection, db_engine, self.settings, writes_local=True) as c:
+            for etype, eactor, entity_type, entity_id, data in pre_events:
+                self.events.emit(c, project_id, etype, eactor, entity_type, entity_id, data)
+            artifact_id = create_artifact(
+                c,
+                self.settings,
+                project_id,
+                task_id,
+                "merge_result",
+                f"Merge result for {title}",
+                {
+                    "decision_id": decision_id,
+                    "pull_request_number": pull_request_number,
+                    "pull_request_url": pull_request_url,
+                    "branch_name": branch_name,
+                    "merged_sha": merge.sha,
+                    "merged": merge.merged,
+                    "message": merge.message,
+                    "merge_method": self.settings.sandbox_merge_method,
+                    **({"recovered_from": "stale_base"} if recovered_from_stale_base else {}),
+                },
+                created_by_job_id=created_by_job_id,
+            )
+            result = {
+                "artifact_id": artifact_id,
+                "merged_sha": merge.sha,
                 "pull_request_url": pull_request_url,
                 "branch_name": branch_name,
-                "merged_sha": merge.sha,
-                "merged": merge.merged,
-                "message": merge.message,
-                "merge_method": self.settings.sandbox_merge_method,
-                **({"recovered_from": "stale_base"} if recovered_from_stale_base else {}),
-            },
-            created_by_job_id=created_by_job_id,
-        )
-        result = {
-            "artifact_id": artifact_id,
-            "merged_sha": merge.sha,
-            "pull_request_url": pull_request_url,
-            "branch_name": branch_name,
-        }
-        if recovered_from_stale_base:
-            result["recovered_from"] = "stale_base"
+            }
+            if recovered_from_stale_base:
+                result["recovered_from"] = "stale_base"
 
-        # THE SEAM: a merged PR becomes a deployment.
-        # BOSS already had the whole delivery apparatus — plan_deployment_run, the rollout
-        # engine, promotion, telemetry connectors, nine tables — and every table was empty
-        # because nothing ever observed a merge. This is the one line that was missing.
-        # Best-effort and non-fatal by construction: the PR has ALREADY merged by the time we
-        # get here, and an exception would turn shipped work into a failure report.
-        try:
-            from .delivery_pipeline import on_pull_request_merged
+            if connection is not None:
+                try:
+                    from .delivery_pipeline import on_pull_request_merged
 
-            _run_id = ""
+                    _run_id = ""
+                    if branch_name and branch_name.startswith("boss/code/"):
+                        _run_id = branch_name.rsplit("/", 1)[-1]
+                    result["delivery"] = on_pull_request_merged(
+                        c.engine if hasattr(c, "engine") else None,
+                        self.settings, project_id=project_id, run_id=_run_id,
+                        repo=self.settings.target_github_repo, commit_ref=merge.sha,
+                        decision_id=None, actor="release_manager")
+                except Exception:  # noqa: BLE001 — delivery must never un-ship a merge
+                    pass
+            elif delivery_result is not None:
+                result["delivery"] = delivery_result
+
             if branch_name and branch_name.startswith("boss/code/"):
-                _run_id = branch_name.rsplit("/", 1)[-1]
-            result["delivery"] = on_pull_request_merged(
-                connection.engine if hasattr(connection, "engine") else None,
-                self.settings, project_id=project_id, run_id=_run_id,
-                repo=self.settings.target_github_repo, commit_ref=merge.sha,
-                decision_id=None, actor="release_manager")
-        except Exception:  # noqa: BLE001 — delivery must never un-ship a merge
-            pass
-        if branch_name and branch_name.startswith("boss/code/"):
-            # The one-PR change set this run is recorded as (multirepo/change_sets.py) says merged.
-            from ..multirepo import change_sets as _change_sets
+                from ..multirepo import change_sets as _change_sets
 
-            _change_sets.mark_single(connection, branch_name.rsplit("/", 1)[-1], "merged")
-        # THE BUILD'S OWN RECORD OF ITS MERGE (pr_merge): the sha, so every reader says "merged"
-        # from the merge itself, never from the approval that asked for it.
-        from .pr_merge import record_for_pull_request as _record_merge
+                _change_sets.mark_single(c, branch_name.rsplit("/", 1)[-1], "merged")
+            from .pr_merge import record_for_pull_request as _record_merge
 
-        try:
-            with connection.begin_nested():
-                _record_merge(connection, project_id, pull_request_url, merge.sha, source="boss")
-        except Exception:  # noqa: BLE001 — the merge_result artifact still records it
-            pass
-        follow_on_decision_id = self._mark_merge_completed(
-            connection,
-            project_id,
-            task_id,
-            decision_id,
-            "release_manager",
-            title=title,
-            pull_request_url=pull_request_url,
-            branch_name=branch_name,
-            merged_sha=merge.sha,
-        )
-        if follow_on_decision_id:
-            result["deployment_decision_id"] = follow_on_decision_id
-        self.receipts.mark_succeeded(
-            connection,
-            merge_receipt["id"],
-            pull_request_url,
-            result,
-        )
-        self.events.emit(
-            connection,
-            project_id,
-            "software_factory.pull_request_merged",
-            "release_manager",
-            "artifact",
-            artifact_id,
-            {
-                "receipt_id": merge_receipt["id"],
-                "pull_request_url": pull_request_url,
-                "merged_sha": merge.sha,
-                **({"recovered_from": "stale_base"} if recovered_from_stale_base else {}),
-            },
-        )
+            try:
+                with c.begin_nested():
+                    _record_merge(c, project_id, pull_request_url, merge.sha, source="boss")
+            except Exception:  # noqa: BLE001 — the merge_result artifact still records it
+                pass
+            follow_on_decision_id = self._mark_merge_completed(
+                c,
+                project_id,
+                task_id,
+                decision_id,
+                "release_manager",
+                title=title,
+                pull_request_url=pull_request_url,
+                branch_name=branch_name,
+                merged_sha=merge.sha,
+            )
+            if follow_on_decision_id:
+                result["deployment_decision_id"] = follow_on_decision_id
+            self.receipts.mark_succeeded(
+                c,
+                merge_receipt["id"],
+                pull_request_url,
+                result,
+            )
+            self.events.emit(
+                c,
+                project_id,
+                "software_factory.pull_request_merged",
+                "release_manager",
+                "artifact",
+                artifact_id,
+                {
+                    "receipt_id": merge_receipt["id"],
+                    "pull_request_url": pull_request_url,
+                    "merged_sha": merge.sha,
+                    **({"recovered_from": "stale_base"} if recovered_from_stale_base else {}),
+                },
+            )
         out = {
             "status": "created",
             "artifact_id": artifact_id,

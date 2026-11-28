@@ -23,26 +23,33 @@ import { FormError } from "../../components/form-kit";
 import { usd } from "../../lib/money";
 import {
   IDENTITY_WORDS, createRule, deleteRule, envOf, parsePreview, parseRule, previewMatch, readCatalog, readRouteBudgets, readRules,
-  removeRuleBudget, setRuleBudget, setRulePaused, updateRule, type Agent, type Connection, type Preview, type Rule, type RuleBody,
+  removeRuleBudget, setRuleBudget, setRulePaused, updateRule, type Agent, type Connection, type Preview, type RouteBudget, type Rule, type RuleBody,
 } from "../../lib/intake";
 import {
-  CHAT_KINDS, CHAT_WHEN, FIELDS, OPS, emptyDraft, fromMatch, limitDefaults, ruleWords, toMatch, typeWords, type Cond, type Draft, type Op,
+  CHAT_KINDS, CHAT_WHEN, FIELDS, OPS, emptyDraft, formatChannelsInput, fromMatch, limitDefaults, parseChannelsInput, ruleWords, toMatch, typeWords, type Cond, type Draft, type Op,
 } from "../../lib/intake-rules";
 import { EvFrame, useConnPick, useEv } from "./frame";
 import { AgentName, Chip, Empty, Face, ReadState, Said, SourceMark, goEvents, useRead } from "./parts";
 
-type Editing = { rule: Rule | null; agent: string; name: string; draft: Draft; identity: string; perEntity: string; windowS: number; storm: string;
+type Editing = { rule: Rule | null; agent: string; name: string; draft: Draft; identity: string;
+  perThread: string; threadWindowS: number; perRecord: string; recordWindowS: number; storm: string;
   budget: string; quiet: "answer" | "ack_and_defer" | "defer"; qStart: string; qEnd: string; qTz: string; triage: boolean; triageCap: string; json: string; showJson: boolean };
 
 function editingOf(rule: Rule | null, chat: boolean, agents: Agent[], budget: number | null): Editing {
-  const d = limitDefaults(chat);
+  const dt = limitDefaults(true);
+  const dr = limitDefaults(false);
   const draft = rule ? fromMatch(rule.match, rule.addressing, chat) : emptyDraft(chat);
   const q = rule?.quiet_hours;
+  const lim = rule?.limits;
+  const perThread = lim?.per_thread ?? (chat ? lim?.per_entity : null) ?? dt.per_entity;
+  const threadWindowS = lim?.per_thread_window_seconds ?? (chat ? lim?.per_entity_window_seconds : null) ?? dt.window;
+  const perRecord = lim?.per_record ?? (!chat ? lim?.per_entity : null) ?? dr.per_entity;
+  const recordWindowS = lim?.per_record_window_seconds ?? (!chat ? lim?.per_entity_window_seconds : null) ?? dr.window;
   return {
     rule, agent: rule?.agent_key || agents[0]?.key || "", name: rule?.name || "", draft,
     identity: rule?.identity_mode || (chat ? "person" : "owner"),
-    perEntity: String(rule?.limits.per_entity ?? d.per_entity), windowS: rule?.limits.per_entity_window_seconds ?? d.window,
-    storm: String(rule?.limits.storm_per_min ?? 60), budget: budget === null ? "" : budget.toFixed(2),
+    perThread: String(perThread), threadWindowS, perRecord: String(perRecord), recordWindowS,
+    storm: String(lim?.storm_per_min ?? 60), budget: budget === null ? "" : budget.toFixed(2),
     quiet: q?.mode === "defer" || q?.mode === "ack_and_defer" ? (q.mode as "defer" | "ack_and_defer") : "answer",
     qStart: q?.start || "22:00", qEnd: q?.end || "08:00", qTz: q?.timezone || browserZone(),
     triage: rule?.triage.mode === "model", triageCap: String(rule?.triage.daily_usd_cap ?? 5),
@@ -159,7 +166,7 @@ export function RulesTab() {
             {rules.read?.ok && !items.length ? <span className="ev-faint" data-testid="ev-rules-empty">No rule yet: nothing on {picked.label} wakes an agent.</span> : null}
             <div className="ev-rules">
               {items.map((r, i) => {
-                const words = ruleWords(fromMatch(r.match, r.addressing, chat), chat);
+                const words = ruleWords(fromMatch(r.match, r.addressing, chat), chat, picked.channel_names);
                 return (
                   <div key={r.id} className="ev-rule-row" data-testid={`ev-rule-${r.id}`}>
                     <span className="ev-rule-move">
@@ -183,7 +190,9 @@ export function RulesTab() {
           </section>
           {editing ? (
             <RuleEditor key={editing.rule?.id || "new"} start={editing} conn={picked} chat={chat} agents={agentList} rules={items}
-                        eventTypes={source?.event_types ?? []} canEdit={deploy.allowed} budgetId={editing.rule ? budgetOf(editing.rule.id)?.id || "" : ""}
+                        eventTypes={source?.event_types ?? []} canEdit={deploy.allowed}
+                        budgetId={editing.rule ? budgetOf(editing.rule.id)?.id || "" : ""}
+                        budgetInfo={editing.rule ? budgetOf(editing.rule.id) : null}
                         said={said}
                         onSaved={(words, rule, budget, partly) => { setSaid({ text: words, tone: partly ? "red" : "green" }); rules.reload(); budgets.reload(); if (rule) setEditing(editingOf(rule, chat, agentList, budget)); }}
                         onRemoved={(words) => { setSaid({ text: words, tone: "green" }); setEditing(null); rules.reload(); }}
@@ -196,8 +205,9 @@ export function RulesTab() {
 }
 function SourceMarkIcon() { return <ShieldCheck size={30} aria-hidden />; }
 
-function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, budgetId, said, onSaved, onRemoved, onError }: {
+function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, budgetId, budgetInfo, said, onSaved, onRemoved, onError }: {
   start: Editing; conn: Connection; chat: boolean; agents: Agent[]; rules: Rule[]; eventTypes: string[]; canEdit: boolean; budgetId: string;
+  budgetInfo: RouteBudget | null;
   said: { text: string; tone: "green" | "red" | "amber" } | null;
   onSaved: (words: string, rule: Rule | null, budget: number | null, partly: boolean) => void; onRemoved: (words: string) => void; onError: (t: string) => void;
 }) {
@@ -221,8 +231,8 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
   let jsonError = "";
   if (e.showJson) {
     try { match = JSON.parse(e.json || "null"); } catch { jsonError = "That is not valid JSON."; }
-  } else match = toMatch(e.draft, chat).match;
-  const addressing = e.showJson ? rule?.addressing : toMatch(e.draft, chat).addressing;
+  } else match = toMatch(e.draft, chat, conn.kind).match;
+  const addressing = e.showJson ? rule?.addressing : toMatch(e.draft, chat, conn.kind).addressing;
   const key = JSON.stringify(match);
 
   useEffect(() => {
@@ -244,8 +254,12 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
   const save = async () => {
     setBusy(true); setError("");
     const limits: Record<string, number> = {};
-    const pe = Number(e.perEntity), st = Number(e.storm);
-    if (Number.isInteger(pe) && pe > 0) { limits.per_entity = pe; limits.per_entity_window_seconds = e.windowS; }
+    const pt = Number(e.perThread), pr = Number(e.perRecord), st = Number(e.storm);
+    if (Number.isInteger(pt) && pt > 0) { limits.per_thread = pt; limits.per_thread_window_seconds = e.threadWindowS; }
+    if (Number.isInteger(pr) && pr > 0) { limits.per_record = pr; limits.per_record_window_seconds = e.recordWindowS; }
+    const activeLim = chat ? pt : pr;
+    const activeWin = chat ? e.threadWindowS : e.recordWindowS;
+    if (Number.isInteger(activeLim) && activeLim > 0) { limits.per_entity = activeLim; limits.per_entity_window_seconds = activeWin; }
     if (Number.isInteger(st) && st > 0) limits.storm_per_min = st;
     const others = rules.filter((r) => r.id !== rule?.id).map((r) => r.id);
     const cap = Number(e.triageCap);
@@ -254,7 +268,7 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
       triage: e.triage ? { mode: "model", candidates: [...(rule ? [rule.id] : []), ...others, "none"], daily_usd_cap: cap > 0 ? cap : 5, max_usd_per_event: 0.002 } : { mode: "off" },
     };
     const body: RuleBody = {
-      name: e.name.trim() || ruleWords(e.draft, chat).slice(0, 80), priority: rule?.priority ?? ((rules[rules.length - 1]?.priority ?? 90) + 10),
+      name: e.name.trim() || ruleWords(e.draft, chat, conn.channel_names).slice(0, 80), priority: rule?.priority ?? ((rules[rules.length - 1]?.priority ?? 90) + 10),
       identity_mode: e.identity, config, limits,
       quiet_hours: e.quiet === "answer" ? {} : { start: e.qStart, end: e.qEnd, timezone: e.qTz, mode: e.quiet },
     };
@@ -319,8 +333,8 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
           {chat && e.draft.when !== "dm" ? (
             <>
               <span>in</span>
-              <input value={e.draft.channels.join(", ")} placeholder="any channel" aria-label="Channels" title="Channels this rule listens to (channel ids, comma-separated)"
-                     onChange={(x) => draft({ channels: x.target.value.split(",").map((c) => c.trim()).filter((c, i, all) => c || i === all.length - 1) })} data-testid="ev-channels" />
+              <input value={formatChannelsInput(e.draft.channels, conn.channel_names)} placeholder="#support, #ops (or any channel)" aria-label="Channels" title="Channels this rule listens to (#names or channel ids, comma-separated)"
+                     onChange={(x) => draft({ channels: parseChannelsInput(x.target.value, conn.channel_names) })} data-testid="ev-channels" />
             </>
           ) : null}
           <span>→</span>
@@ -416,11 +430,20 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
         <div className="ev-guard">
           <span className="ev-guard-label" title="Past the limit, BOSS holds the event and tells the owner once">Limits</span>
           <div className="ev-guard-body">
-            <input type="number" min={1} value={e.perEntity} onChange={(x) => patch({ perEntity: x.target.value })} aria-label="Runs" data-testid="ev-limit" />
-            <span>per {chat ? "thread" : "record"} per</span>
-            <select value={e.windowS} onChange={(x) => patch({ windowS: Number(x.target.value) })} aria-label="Window"><option value={3600}>hour</option><option value={86400}>day</option></select>
-            <span className="ev-faint" title="More than this a minute and the rule runs once every 5 minutes with a summary">· storm at</span>
-            <input type="number" min={1} value={e.storm} onChange={(x) => patch({ storm: x.target.value })} aria-label="Storm per minute" /><span className="ev-faint">/min</span>
+            <span className="ev-limit-row">
+              <input type="number" min={1} value={e.perThread} onChange={(x) => patch({ perThread: x.target.value })} aria-label="Runs per thread" data-testid={chat ? "ev-limit" : "ev-limit-thread"} />
+              <span>per thread per</span>
+              <select value={e.threadWindowS} onChange={(x) => patch({ threadWindowS: Number(x.target.value) })} aria-label="Thread window"><option value={3600}>hour</option><option value={86400}>day</option></select>
+            </span>
+            <span className="ev-limit-row">
+              <input type="number" min={1} value={e.perRecord} onChange={(x) => patch({ perRecord: x.target.value })} aria-label="Runs per record" data-testid={chat ? "ev-limit-record" : "ev-limit"} />
+              <span>per record per</span>
+              <select value={e.recordWindowS} onChange={(x) => patch({ recordWindowS: Number(x.target.value) })} aria-label="Record window"><option value={3600}>hour</option><option value={86400}>day</option></select>
+            </span>
+            <span className="ev-limit-row">
+              <span className="ev-faint" title="More than this a minute and the rule runs once every 5 minutes with a summary">· storm at</span>
+              <input type="number" min={1} value={e.storm} onChange={(x) => patch({ storm: x.target.value })} aria-label="Storm per minute" /><span className="ev-faint">/min</span>
+            </span>
           </div>
         </div>
         <div className="ev-guard">
@@ -430,6 +453,19 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
             <input type="number" min={0} step="0.5" value={e.budget} placeholder="none" onChange={(x) => patch({ budget: x.target.value })} aria-label="Daily budget in dollars"
                    disabled={!budgetGate.allowed} title={budgetGate.allowed ? undefined : budgetGate.reason} data-testid="ev-budget" />
             <span className="ev-faint" title="From this agent's spend over the last 7 days">≈ {usd(perDay)}/day{agent ? ` · ${agent.name}, last 7 days` : ""}</span>
+            {(() => {
+              const capNum = Number(e.budget) > 0 ? Number(e.budget) : (budgetInfo?.cap_usd || 0);
+              const spentNum = budgetInfo?.spent_usd || 0;
+              if (capNum <= 0) return null;
+              const pct = Math.min(100, Math.round((spentNum / capNum) * 100));
+              const tone = pct >= 95 ? "red" : pct >= 75 ? "amber" : "green";
+              return (
+                <div className="ev-budget-bar" data-tone={tone} data-testid="ev-budget-bar">
+                  <progress className="ev-bar" value={Math.min(spentNum, capNum)} max={capNum} aria-label="Daily budget used" />
+                  <span className="ev-faint" data-testid="ev-budget-used">{usd(spentNum)} of {usd(capNum)} today ({pct}%)</span>
+                </div>
+              );
+            })()}
           </div>
         </div>
         <div className="ev-guard">
@@ -441,7 +477,7 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
                         title={k === "answer" ? "No quiet hours" : k === "ack_and_defer" ? "The person hears “I'll pick this up at 08:00”" : "Held until quiet hours end"}>{w}</button>
               ))}
             </div>
-            {e.quiet === "answer" ? <span className="ev-faint">{chat ? "Always answer people" : "Runs any time"}</span> : (
+            {e.quiet === "answer" ? (chat ? null : <span className="ev-faint">Runs any time</span>) : (
               <>
                 <input type="time" value={e.qStart} onChange={(x) => patch({ qStart: x.target.value })} aria-label="Quiet from" />
                 <span>to</span>

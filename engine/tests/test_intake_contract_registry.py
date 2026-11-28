@@ -33,7 +33,10 @@ GITHUB_MANIFEST = yaml.safe_load((ROOT / "github" / "manifest.yaml").read_text()
 
 def test_every_shipped_folder_loads_and_is_registered():
     folders = {p.name for p in ROOT.iterdir() if (p / "manifest.yaml").is_file()}
-    assert folders == {"webhook", "github", "slack", "jira", "plane"} <= set(REGISTRY.adapters)
+    assert folders == {
+        "webhook", "github", "slack", "jira", "plane",
+        "teams", "servicenow", "gmail", "outlook", "salesforce",
+    } <= set(REGISTRY.adapters)
     for key in folders:
         adapter = get_intake_adapter(key)
         assert isinstance(adapter, IntakeAdapterBase) and adapter.key == key

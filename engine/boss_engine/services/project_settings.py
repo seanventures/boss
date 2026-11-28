@@ -385,9 +385,10 @@ KNOBS: dict[str, dict[str, Any]] = {
     "model_routing_mode": {
         "attr": "model_routing_mode",
         "label": "Model routing",
-        "help": "Fixed routes as configured per job; Smart picks a tier per step from the task "
-                "and a source with headroom (docs/product/MODEL_ROUTER.md).",
-        "kind": "choice", "choices": ("fixed", "smart"),
+        "help": "Fixed routes as configured per job; Shadow logs Smart decisions beside Fixed "
+                "without acting; Smart picks a tier per step from the task and a source with "
+                "headroom (docs/product/MODEL_ROUTER.md).",
+        "kind": "choice", "choices": ("fixed", "shadow", "smart"),
     },
     "decision_backend": {
         "attr": "decision_backend",

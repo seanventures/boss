@@ -89,3 +89,36 @@ def test_the_pipeline_runs_one_design_session_and_falls_back_per_part():
     # … and the separate review session remains ONLY as the fallback for a skipped section.
     fallback = design[design.index('if not str(d4.get("summary") or "").strip()'):]
     assert '_review_plan_prompt(title, d3.get("summary", ""),' in fallback
+
+
+def test_assumptions_section_splits_cleanly_without_breaking_five_key_contract():
+    from boss_engine.services import approved_prd_design
+
+    text_with_assumptions = JOINT + "\n=== ASSUMPTIONS ===\n- Defaulted page size to 50\n- Used UTC timestamps\n"
+    parts = g._split_design(text_with_assumptions)
+    assert list(parts.keys()) == ["standards", "spec", "plan", "plan_review", "packages"]
+    assert "ASSUMPTIONS" not in parts["plan_review"]
+    assert g._extract_assumptions(text_with_assumptions) == [
+        "Defaulted page size to 50",
+        "Used UTC timestamps",
+    ]
+    assert g._extract_assumptions("=== ASSUMPTIONS ===\nNONE\n") == []
+    assert g._extract_assumptions("=== SPEC ===\n### Assumptions\n* Picked JSON response") == [
+        "Picked JSON response",
+    ]
+    for prompt in (
+        g._design_prompt("t", "b", []),
+        g._spec_prompt("t", "b", []),
+        g._impl_prompt("t", "b", [], "pytest"),
+        g._solo_prompt("t", "b", [], "pytest"),
+        approved_prd_design.prompt("t\n", "solution text"),
+    ):
+        assert "never ask" in prompt.lower()
+    prd = {"decision_id": "dec_1", "markdown": "# PRD\n## Solution\n" + "x" * 220}
+    ans = (
+        "=== STANDARDS ===\n- py\n=== PLAN ===\n- app/a.py\ndatabase: none\n"
+        "=== CONTRADICTIONS ===\nNONE\n=== ASSUMPTIONS ===\n- Defaulted sort to desc\n"
+    )
+    design, err = approved_prd_design.design_from_answer(prd, "sol", ans)
+    assert err == "" and design is not None
+    assert design["assumptions"] == ["Defaulted sort to desc"]
