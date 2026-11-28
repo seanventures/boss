@@ -507,6 +507,7 @@ from sqlalchemy import text  # noqa: E402
 
 from . import seat_policy as _seat_policy  # noqa: E402
 from .build_detail import kept_stations, kept_word, now_summary  # noqa: E402
+from .run_payload import lean_finalize_ctx  # noqa: E402
 
 CORE_STATIONS: tuple[str, ...] = ("plan", "tests", "build", "check", "review", "pr", "ship")
 #: Stations where an agent stands. The rest are BOSS's machinery (Check when no qa act ran it).
@@ -1450,8 +1451,8 @@ def build_attention_rows(connection: Any, project_id: str,
     blocked = [dict(r) for r in connection.execute(
         text(
             """
-            SELECT r.id, r.title, r.status, r.phase, r.spec, r.state, r.finalize_ctx, r.error,
-                   r.created_at, r.updated_at, r.pull_request_url, r.pull_request_number,
+            SELECT r.id, r.title, r.status, r.phase, r.spec, r.state, """ + lean_finalize_ctx("r") + """,
+                   r.error, r.created_at, r.updated_at, r.pull_request_url, r.pull_request_number,
                    r.decision_id
             FROM code_task_runs r
             WHERE r.project_id = :p AND r.status = 'blocked'
@@ -1509,7 +1510,7 @@ def build_attention_rows(connection: Any, project_id: str,
     plan_runs.pop("", None)
     if ids:
         for r in connection.execute(
-            text("SELECT r.id, r.title, r.spec, r.finalize_ctx, r.decision_id, r.pull_request_url, "
+            text("SELECT r.id, r.title, r.spec, " + lean_finalize_ctx("r") + ", r.decision_id, r.pull_request_url, "
                  "r.pull_request_number, r.status, r.phase, "
                  "(SELECT id FROM app_previews p WHERE p.run_id = r.id AND p.status = 'running' "
                  " ORDER BY p.created_at DESC LIMIT 1) AS preview_id "
@@ -2039,8 +2040,8 @@ def _lineage(connection: Any, project_id: str, run: Mapping[str, Any], now: date
     except Exception:  # noqa: BLE001 — a missing sibling list is not a missing build
         siblings = [str(run["id"])]
     rows = [dict(r) for r in connection.execute(
-        text("SELECT id, project_id, status, phase, title, spec, state, finalize_ctx, error, "
-             "decision_id, pull_request_url, pull_request_number, created_at, updated_at "
+        text("SELECT id, project_id, status, phase, title, spec, state, " + lean_finalize_ctx() + ", "
+             "error, decision_id, pull_request_url, pull_request_number, created_at, updated_at "
              "FROM code_task_runs WHERE project_id = :p "
              "AND (id = :root OR finalize_ctx->>'root_run_id' = :root OR id = ANY(:ids)) "
              "ORDER BY created_at DESC LIMIT :n"),

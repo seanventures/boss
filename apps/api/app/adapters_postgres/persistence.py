@@ -60,11 +60,13 @@ class PostgresPersistence:
         return _row_to_run(row) if row else None
 
     def list_runs(self, project_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        from boss_engine.services.run_payload import lean_finalize_ctx  # a list: no build files
+
         with begin(self.engine) as connection:
             rows = connection.execute(
                 text(
                     "SELECT id, project_id, task_id, status, phase, title, spec, "
-                    "state, usage, finalize_ctx, reservation_id, pull_request_url, "
+                    "state, usage, " + lean_finalize_ctx() + ", reservation_id, pull_request_url, "
                     "pull_request_number, decision_id, error FROM code_task_runs "
                     "WHERE project_id = :project_id ORDER BY created_at DESC LIMIT :limit"
                 ),

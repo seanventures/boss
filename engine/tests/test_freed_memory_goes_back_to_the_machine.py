@@ -9,6 +9,7 @@ from __future__ import annotations
 import pathlib
 import re
 import sys
+import threading
 
 import pytest
 
@@ -31,16 +32,26 @@ def test_the_trim_thread_is_one_of_the_api_system_services():
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="glibc only")
-def test_a_trim_pass_returns_freed_pages_on_glibc():
-    # Hold ~200 MB in medium blocks, free them, trim: the resident set comes back down.
+def test_a_trim_pass_returns_what_free_alone_keeps():
+    """The install's shape: a pool thread (its own arena) builds ~200 MB, keeps a few blocks
+    (every 50th, as a response keeps a few strings of a big read) and frees the rest. free()
+    alone hands back nothing: the holes sit below live blocks. malloc_trim(0) hands them back."""
+    pinned: list[bytearray] = []
+
+    def pool_call() -> None:
+        blocks = [bytearray(64 * 1024) for _ in range(3200)]
+        pinned.extend(blocks[::50])
+
     before = memory_trim.rss_kb()
-    blocks = [bytearray(64 * 1024) for _ in range(3200)]
-    held = memory_trim.rss_kb()
-    del blocks
+    worker = threading.Thread(target=pool_call)
+    worker.start()
+    worker.join()
+    after_free = memory_trim.rss_kb()
+    assert after_free - before > 150_000, (before, after_free)   # free() alone kept it
     out = memory_trim.trim()
     assert out is not None and out["rss_after_kb"] is not None
-    assert held - before > 150_000
-    assert out["rss_after_kb"] < held - 100_000, out
+    assert out["rss_after_kb"] < after_free - 120_000, (before, after_free, out)
+    assert len(pinned) == 64
 
 
 def test_off_or_without_glibc_nothing_starts(monkeypatch):

@@ -37,38 +37,39 @@ ALLOWED = {
     "apps/api/app/main.py::_warm",
     # One sandbox's runs, read to find its stored plan when it is destroyed.
     "apps/api/app/main.py::sandbox_destroy_endpoint",
-    # Consumers of the files themselves (resume, repair, re-apply, scrub, secret scan).
-    "apps/api/app/adapters_postgres/persistence.py",
-    "engine/boss_engine/services/code_task_service.py",
+    # They need the files themselves: the app's written files
+    # and held diffs (app_root), the verifier ratchet's re-apply, template apply/secret scan of
+    # what builds wrote, and the share scrubber (it must see every byte it scrubs).
     "engine/boss_engine/services/app_root.py",
     "engine/boss_engine/services/verifier_ratchet.py",
     "engine/boss_engine/templates/apply.py",
     "engine/boss_engine/templates/secrets.py",
     "engine/boss_engine/services/share_scrub.py",
-    # Not on a tick or a polled screen; bounded small (LIMIT <= 30 or one app / one PR / one task).
+    # One subject's few runs, on a person's click (not a tick, not a polled list): one change set,
+    # one app's security scope, one review URL, one PR's findings, one task's completed run, one
+    # PR's re-review, one release's ids, one Shepherd escalation set, the newest completed run.
     "engine/boss_engine/multirepo/change_sets.py",
     "engine/boss_engine/security_scan/scope.py",
     "engine/boss_engine/services/change_review.py",
-    "engine/boss_engine/services/command_center_view.py",
-    "engine/boss_engine/services/factory_view.py",
     "engine/boss_engine/services/finding_overrides.py",
     "engine/boss_engine/services/intent_router.py",
-    "engine/boss_engine/services/metatron_captain.py",
     "engine/boss_engine/services/pr_review_again.py",
+    "engine/boss_engine/services/release_scope.py",
+    "engine/boss_engine/services/shepherd_service.py",
+    "engine/boss_engine/services/metatron_captain.py",
+    # Not yet reviewed for which keys they read: project pages and a precheck, LIMIT <= 50.
+    # Each is a follow-up to move onto lean_finalize_ctx (BOSSAPP-1506), not a reason to add more.
     "engine/boss_engine/services/project_experience/work.py",
     "engine/boss_engine/services/project_experience/work_story.py",
     "engine/boss_engine/services/project_experience/your_app.py",
-    "engine/boss_engine/services/project_scope.py",
-    "engine/boss_engine/services/qa_ledger.py",
-    "engine/boss_engine/services/release_scope.py",
-    "engine/boss_engine/services/shepherd_service.py",
     "engine/boss_engine/services/workflow_precheck_behaviour.py",
     "engine/boss_engine/tools/builtin.py",
 }
 
-_WHOLE = re.compile(r"(?:(?:^|[\s,(])(?:[a-z]\.)?finalize_ctx\s*(?:,|$|\)|\s+AS\b)"
-                    r"|(?:^|[\s,])(?:[a-z]\.)?\*\s*(?:,|$))", re.I)
-_ONE_RUN = re.compile(r"\bWHERE\s+(?:[a-z]\.)?id\s*=\s*(?::|%\()", re.I)
+# `finalize_ctx` as a selected column (not `… AS finalize_ctx`, a projection named like it), or `*`.
+_WHOLE = re.compile(r"(?:(?:^|[\s,(])(?<!AS )(?:\w+\.)?finalize_ctx\s*(?:,|$|\)|\s+AS\b)"
+                    r"|(?:^|[\s,])(?:\w+\.)?\*\s*(?:,|$))", re.I)
+_ONE_RUN = re.compile(r"\bWHERE\s+(?:\w+\.)?id\s*=\s*(?::|%\()", re.I)
 
 
 def _sql_text(node: ast.AST) -> str:
@@ -89,7 +90,10 @@ def whole_column_readers() -> list[str]:
         if "/tests/" in rel:
             continue
         tree = ast.parse(path.read_text())
-        owner: dict[int, str] = {}      # each string node -> its innermost function (BFS order)
+        # each string node -> its innermost function (BFS order); module-level SQL constants
+        # (a query kept in a NAME = "SELECT …" at the top of a module) belong to "<module>"
+        owner: dict[int, str] = {id(n): "<module>" for n in ast.walk(tree)
+                                 if isinstance(n, (ast.Constant, ast.JoinedStr, ast.BinOp))}
         for fn in ast.walk(tree):
             if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for node in ast.walk(fn):
@@ -158,7 +162,7 @@ def _seed_builds(engine, project: str, runs: int) -> list[str]:
             ids.append(run_id)
             ctx = {"saved_workspace": {"after": "abc", "file_count": 100,
                                        "files": [{"path": f"src/f{j}.tsx", "content": body} for j in range(100)]},
-                   "pending_diff": [{"path": "src/a.tsx", "diff": body}] * 5,
+                   "pending_diff": [{"path": "src/a.tsx", "content": body}] * 5,
                    "inherited_design": {"doc": body},
                    "diagnosis": {"at": "2026-11-27T00:00:00+00:00", "cause_code": "x"} if i % 3 == 0 else None,
                    "app_id": f"app{i % 6}"}
@@ -172,6 +176,7 @@ def _seed_builds(engine, project: str, runs: int) -> list[str]:
 
 
 HOT = [
+    ("get", "/v1/code-tasks?project_id=boss-dogfood&limit=200&exclude_internal=true", None),
     ("get", "/v1/console/v2/overview?project_id=boss-dogfood", None),
     ("post", "/v1/monitoring/tick", None),
     ("post", "/v1/factory/flow/tick", {"project_id": "boss-dogfood", "actor": "system"}),

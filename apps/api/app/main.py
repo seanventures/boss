@@ -12729,6 +12729,8 @@ def without_internal_bulk(run: dict) -> dict:
     if not isinstance(pending, list):
         return run
     summarised = [
+        # A list read already summarised it in SQL (run_payload.lean_finalize_ctx): keep that.
+        f if isinstance(f, dict) and "content" not in f and "bytes" in f else
         {"path": f.get("path"), "bytes": len(f.get("content") or "")}
         if isinstance(f, dict) else f
         for f in pending
