@@ -32,6 +32,8 @@ from typing import Any, Mapping, Optional
 
 from sqlalchemy import text
 
+from .run_payload import lean_finalize_ctx, run_columns
+
 log = logging.getLogger("boss.stuck_work")
 
 #: A build that has not left the queue, or not moved, for this long is investigated.
@@ -1400,7 +1402,7 @@ def clear_recovered(connection: Any, *, now: Optional[datetime] = None) -> list[
 
     now = now or _now()
     rows = connection.execute(text(
-        "SELECT id, project_id, status, phase, created_at, finalize_ctx FROM code_task_runs "
+        "SELECT id, project_id, status, phase, created_at, " + lean_finalize_ctx() + " FROM code_task_runs "
         "WHERE finalize_ctx ? 'diagnosis' AND status IN ('running', 'queued', 'repairing', "
         "'completed') ORDER BY updated_at DESC LIMIT 200")).mappings().all()
     out: list[str] = []
@@ -1448,7 +1450,7 @@ def runs_of_item(connection: Any, work_item_id: str) -> list[dict[str, Any]]:
     """The builds an always-on agent's work item started (directly, or through a workflow run it
     launched), newest first."""
     rows = connection.execute(text(
-        "SELECT c.* FROM code_task_runs c WHERE c.id IN (SELECT ref FROM work_item_links "
+        "SELECT " + run_columns("c") + " FROM code_task_runs c WHERE c.id IN (SELECT ref FROM work_item_links "
         "WHERE work_item_id = :w AND kind IN ('code_task', 'code_task_run', 'build')) "
         "OR c.finalize_ctx->>'workflow_run_id' IN (SELECT ref FROM work_item_links "
         "WHERE work_item_id = :w AND kind = 'workflow_run') ORDER BY c.created_at DESC LIMIT 10"),
@@ -1522,7 +1524,7 @@ def board(connection: Any, project_id: Optional[str] = None, *,
     or every project when `project_id` is None (the Shepherd scans them all)."""
     now = now or _now()
     rows = connection.execute(text(
-        "SELECT * FROM code_task_runs WHERE (finalize_ctx->'diagnosis' IS NOT NULL "
+        "SELECT " + run_columns() + " FROM code_task_runs WHERE (finalize_ctx->'diagnosis' IS NOT NULL "
         "OR finalize_ctx->'last_diagnosis' IS NOT NULL) AND (CAST(:p AS TEXT) IS NULL OR project_id = :p) AND updated_at > :since "
         "ORDER BY updated_at DESC LIMIT 200"),
         {"p": project_id, "since": now - timedelta(days=BOARD_DAYS)}).mappings().all()

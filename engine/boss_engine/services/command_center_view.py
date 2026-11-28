@@ -46,6 +46,8 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
+from .run_payload import lean_finalize_ctx
+
 from .included_spend import INCLUDED_SQL, MONEY_SQL
 
 #: THE PULSE (Command Center v2): the team's last 14 weeks of finished agent steps, by day.
@@ -430,7 +432,7 @@ def pulse(connection: Any, project_id: str, tz: str, now: datetime) -> dict[str,
     builds: dict[str, dict[str, Any]] = {}
     if builds_ids:
         builds = {str(r["id"]): dict(r) for r in connection.execute(
-            text("SELECT id, title, spec, state, finalize_ctx FROM code_task_runs "
+            text("SELECT id, title, spec, state, " + lean_finalize_ctx() + " FROM code_task_runs "
                  "WHERE id = ANY(:ids)"),
             {"ids": builds_ids}).mappings()}
     runs: dict[str, dict[str, Any]] = {}

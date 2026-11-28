@@ -36,6 +36,8 @@ from typing import Any, Iterable, Optional
 
 from sqlalchemy import text
 
+from .run_payload import lean_finalize_ctx
+
 #: The fault kit's branch, with its case (scripts/install/qa_fault.py BRANCH_PREFIX).
 FAULT_BRANCH = re.compile(r"test/fault-(rec-\d{2})(?!\d)", re.IGNORECASE)
 #: The case named in the work itself ("REC-01: …", "ENT-REC-01 …").
@@ -135,8 +137,8 @@ def ledger(connection: Any, project_id: str, *, since: Optional[datetime] = None
     """{rows: [...], masked: {label: n}} — newest lineage first (see the module docstring)."""
     case = normal_case(case)
     runs = [dict(r) for r in connection.execute(text(
-        "SELECT id, status, phase, title, spec, finalize_ctx, error, pull_request_url, "
-        "decision_id, created_at, updated_at FROM code_task_runs WHERE project_id = :p "
+        "SELECT id, status, phase, title, spec, " + lean_finalize_ctx() + ", error, "
+        "pull_request_url, decision_id, created_at, updated_at FROM code_task_runs WHERE project_id = :p "
         "AND (CAST(:since AS timestamptz) IS NULL OR created_at >= CAST(:since AS timestamptz)) "
         "ORDER BY created_at DESC LIMIT :n"),
         {"p": project_id, "since": since, "n": int(limit) * 4}).mappings()]

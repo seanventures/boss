@@ -52,6 +52,7 @@ MAX_TREE_FILES = 600
 # ---------------------------------------------------------------------------------------------
 
 from .acceptance import contract as _contract  # noqa: E402
+from .run_payload import lean_finalize_ctx  # noqa: E402
 from .acceptance.contract import (  # noqa: E402,F401 — re-exported (#136's names)
     MAX_ITEM_CHARS, MAX_TOTAL_ITEMS, UNION_KEY, _BOLD_HEADING, _HEADING, _ITEM_LINE,
     _NOT_GATING, _items_and_dropped, _items_of, _norm, _raw_items, _sections, _spec_of,
@@ -700,7 +701,8 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
         return {"gates": gates, "acceptance": acc}
     project_id, root, parent_run = row[0], row[1], row[2]
     rows = connection.execute(text(
-        "SELECT r.id, r.status, r.pull_request_url, r.finalize_ctx, r.state->'acceptance' AS acc, "
+        "SELECT r.id, r.status, r.pull_request_url, " + lean_finalize_ctx("r") + ", "
+        "r.state->'acceptance' AS acc, "
         "q.gates_passed FROM code_task_runs r LEFT JOIN quality_gates q "
         "ON q.code_task_run_id = r.id AND q.project_id = r.project_id "
         "WHERE r.project_id = :p AND (r.id = :root OR r.finalize_ctx->>'root_run_id' = :root) "

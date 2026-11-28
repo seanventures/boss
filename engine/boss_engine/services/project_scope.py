@@ -28,6 +28,8 @@ from typing import Any, Iterable, Optional
 
 from sqlalchemy import text
 
+from .run_payload import lean_finalize_ctx
+
 #: Top-level folders that are never an app of their own.
 NOT_APPS = frozenset({"tests", "test", "__tests__", "spec", "docs", "doc", ".github", ".circleci",
                       "scripts", "script", "tools", "bin", "ci", ".vscode", ".idea", "node_modules",
@@ -66,8 +68,9 @@ def _run_paths(connection, project_id: str, repo_name: str) -> tuple[list[str], 
     recorded: list[str] = []
     files: list[str] = []
     rows = connection.execute(text(
-        "SELECT state, finalize_ctx FROM code_task_runs WHERE project_id = :p "
-        "AND lower(COALESCE(spec->>'repo', '')) = lower(:r) ORDER BY created_at DESC LIMIT 200"),
+        "SELECT state, " + lean_finalize_ctx(workspace_paths=True) + " FROM code_task_runs "
+        "WHERE project_id = :p AND lower(COALESCE(spec->>'repo', '')) = lower(:r) "
+        "ORDER BY created_at DESC LIMIT 200"),
         {"p": project_id, "r": repo_name}).mappings().all()
     from .app_root import _paths_of  # noqa: PLC2701 — the one reader of a run's written files
 

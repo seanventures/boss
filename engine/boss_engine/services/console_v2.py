@@ -39,6 +39,7 @@ from typing import Any, Optional
 from sqlalchemy import text as sql
 
 from . import decision_actions
+from .run_payload import lean_finalize_ctx
 
 def _meeting_title(title, directive=None) -> str:
     """meeting_service.meeting_title, imported on first use: that module pulls in the model
@@ -335,7 +336,7 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
     rows = [dict(r) for r in connection.execute(
         sql(
             """
-            SELECT id, title, status, phase, spec, state, usage, finalize_ctx,
+            SELECT id, title, status, phase, spec, state, usage, """ + lean_finalize_ctx() + """,
                    pull_request_url, pull_request_number, created_at, updated_at
             FROM code_task_runs
             WHERE project_id = :p
@@ -789,7 +790,7 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
     rows = [dict(r) for r in connection.execute(
         sql(
             """
-            SELECT id, title, status, phase, spec, state, usage, finalize_ctx,
+            SELECT id, title, status, phase, spec, state, usage, """ + lean_finalize_ctx() + """,
                    pull_request_url, pull_request_number, error, created_at, updated_at
             FROM code_task_runs
             WHERE project_id = :p

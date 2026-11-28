@@ -33,6 +33,7 @@ from ..config import Settings
 from ..ports import get_engine_ports, sql
 from .code_agent import CodeTaskSpec, RepoContext, make_code_agent
 from . import build_budget as _build_budget
+from .run_payload import lean_finalize_ctx
 from .run_terminal import on_status_written
 from .jobs import JOB_PRIORITY_BACKGROUND, JOB_PRIORITY_REQUESTED
 from .core import emit_event
@@ -173,6 +174,9 @@ def list_code_task_runs(connection, project_id: str, limit: int = 50,
 
     Raising the limit again does not fix it; it only moves it, and this response is already
     1.41 MB at 200. Filtering before the LIMIT means the window holds real work by construction.
+
+    A list row never carries the builds' files (run_payload.lean_finalize_ctx, BOSSAPP-1506):
+    with them this read moved 23.8 MB per poll on the laptop install, 1.26 MB without.
     """
     if hasattr(connection, "list_runs"):
         return connection.list_runs(project_id, limit)
@@ -188,8 +192,8 @@ def list_code_task_runs(connection, project_id: str, limit: int = 50,
         where += " AND " + " AND ".join(clauses)
     rows = connection.execute(
         sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
-            "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error, "
-             "created_at, updated_at "
+            + lean_finalize_ctx() + ", reservation_id, pull_request_url, pull_request_number, "
+            "decision_id, error, created_at, updated_at "
             f"FROM code_task_runs WHERE {where} ORDER BY created_at DESC LIMIT :lim"),
         params,
     ).mappings().all()
@@ -214,8 +218,8 @@ def list_internal_code_task_runs(connection, project_id: str, limit: int = 10) -
         params[f"pre{i}"] = f"{prefix}%"
     rows = connection.execute(
         sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
-            "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, "
-            "error, created_at, updated_at "
+            + lean_finalize_ctx() + ", reservation_id, pull_request_url, pull_request_number, "
+            "decision_id, error, created_at, updated_at "
             f"FROM code_task_runs WHERE project_id = :p AND ({' OR '.join(clauses)}) "
             "ORDER BY created_at DESC LIMIT :lim"),
         params,
