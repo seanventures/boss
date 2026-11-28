@@ -15868,11 +15868,12 @@ CREATE TABLE IF NOT EXISTS acceptance_checks (
   code_task_run_id     TEXT,
   workflow_run_id      TEXT,
   step_id              TEXT,
-  layer                TEXT NOT NULL CHECK (layer IN ('build_gate', 'step')),
-  mode                 TEXT NOT NULL CHECK (mode IN ('static', 'exercise', 'environment')),
+  layer                TEXT NOT NULL DEFAULT 'step' CHECK (layer IN ('build_gate', 'step')),
+  mode                 TEXT NOT NULL DEFAULT 'exercise' CHECK (mode IN ('static', 'exercise', 'environment')),
   head_sha             TEXT,
   pr_url               TEXT,
-  verdict              TEXT NOT NULL CHECK (verdict IN ('met', 'not_met', 'not_run', 'no_items')),
+  verdict              TEXT NOT NULL DEFAULT 'not_run' CHECK (verdict IN ('met', 'not_met', 'not_run', 'no_items')),
+  status               TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
   why                  TEXT NOT NULL DEFAULT '',
   counts               JSONB NOT NULL DEFAULT '{}'::jsonb,
   items                JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -15888,6 +15889,11 @@ CREATE TABLE IF NOT EXISTS acceptance_checks (
   budget               JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE acceptance_checks ALTER COLUMN layer SET DEFAULT 'step';
+ALTER TABLE acceptance_checks ALTER COLUMN mode SET DEFAULT 'exercise';
+ALTER TABLE acceptance_checks ALTER COLUMN verdict SET DEFAULT 'not_run';
+ALTER TABLE acceptance_checks ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'
+  CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled'));
 CREATE INDEX IF NOT EXISTS ix_acceptance_checks_lineage
   ON acceptance_checks (project_id, lineage_root_run_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_acceptance_checks_pr

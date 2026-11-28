@@ -8,6 +8,10 @@
 `checks`   — every acceptance check as a row; `ledger` — the findings ledger: every gap and
              finding, deduplicated, fixed only on proof, follow-ups built from it (AA-B,
              BOSSAPP-1216).
-The step, policy, filing and report modules arrive with later tickets
-(boss-acceptance-agent-lld.md §1).
+`policy`   — per-profile policy (`lean` / `balanced` / `strict` / `vag`) and budget floor
+             (AA-G, BOSSAPP-1222).
+`report`   — merged run report v2, merge-card payload, ticket comment, refresh in place
+             (AA-H, BOSSAPP-1223).
+`filing`   — ticket filing + status sync + receipt-guarded comment on change (AA-J,
+             BOSSAPP-1225).
 """

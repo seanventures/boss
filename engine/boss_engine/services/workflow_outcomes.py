@@ -309,9 +309,29 @@ def role_agent(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     return Verdict(FAILED, _reason(result) or "the step produced nothing")
 
 
+def accepted(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """`acceptance` settled check outcome (AA-G, LLD §6.2): SUCCEEDED on met / no_items /
+    label-advisory, AWAITING while the check runs, FAILED for not_run after retries."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    st = _status(result)
+    if st in ("awaiting", "started", "queued", "running"):
+        return Verdict(AWAITING)
+    if result.get("advisory") and st == "succeeded":
+        return Verdict(SUCCEEDED)
+    v = str(result.get("verdict") or "").strip().lower()
+    if v in ("met", "no_items"):
+        return Verdict(SUCCEEDED)
+    if v == "not_run" or st in DID_NOT_SHIP:
+        return Verdict(FAILED, _reason(result) or str(result.get("why") or "acceptance check did not run"))
+    return Verdict(SUCCEEDED if st == "succeeded" else AWAITING)
+
+
 #: Every capability in the catalogue, and how to tell whether its work happened. A capability
 #: missing from here fails `test_every_capability_has_an_outcome_verdict`.
 VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] = {
+    "acceptance": awaited_work,
     "research": awaited_work,
     "meeting": awaited_work,
     "build": awaited_work,

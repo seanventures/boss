@@ -986,8 +986,320 @@ def run_session(sbx: AcceptanceSandbox, *, items: list[dict], ask: Optional[Call
     return result
 
 
+def run_job(
+    db_engine: Any,
+    settings: Any,
+    payload: Mapping[str, Any],
+    *,
+    ask: Optional[Callable[[str], Any]] = None,
+    sandbox_opener: Optional[Callable[..., AcceptanceSandbox]] = None,
+) -> dict[str, Any]:
+    """Execute one `acceptance.check` job end-to-end (AA-G, LLD §6.2).
+
+    Model calls and sandbox execution run STRICTLY OUTSIDE any open DB transaction (BOSSAPP-1232):
+      1. Short Tx 1: read policy, contract, prior check, open ledger rows; mark check `running`.
+      2. No Tx: open sandbox (or fallback), run_session (replay first, then plan/exec/judge),
+         verdict.judge, enforce budget floor.
+      3. Short Tx 2: finalize `acceptance_checks`, `ledger.observe_check`, emit `acceptance.checked`,
+         `filing.file_and_sync`, `report.refresh_run_report`.
+    """
+    from sqlalchemy import text as _text
+
+    from ..core import emit_event
+    from .. import acceptance_gate as _gate
+    from . import checks as _checks
+    from . import contract as _contract
+    from . import filing as _filing
+    from . import ledger as _ledger
+    from . import policy as _policy
+    from . import report as _report
+    from . import verdict as _verdict
+
+    started_mono = time.monotonic()
+    data = dict(payload or {})
+    project_id = str(data.get("project_id") or "")
+    check_id = str(data.get("acceptance_check_id") or "")
+    run_id = str(data.get("run_id") or data.get("code_task_run_id") or "") or None
+    workflow_run_id = str(data.get("workflow_run_id") or "") or None
+    step_id = str(data.get("step_id") or "") or None
+    requested_mode = str(data.get("mode") or "auto")
+    deployed_url = str(data.get("deployed_url") or "") or None
+    deployment_id = str(data.get("deployment_id") or "") or None
+
+    # ── 1. Short Tx 1: load context & mark check running ─────────────────────────────────────
+    with db_engine.begin() as conn:
+        pol = _policy.for_run(
+            conn, project_id, settings=settings,
+            profile_override=data.get("profile"),
+            step_inputs=data.get("policy") if isinstance(data.get("policy"), Mapping) else data,
+        )
+        lineage = str(data.get("lineage_root_run_id") or "")
+        pr_url = str(data.get("pr_url") or "") or None
+        head_sha = str(data.get("head_sha") or "") or None
+        branch = str(data.get("branch") or "") or None
+        title = str(data.get("title") or "")
+        own_spec: dict[str, Any] = {}
+        fctx: dict[str, Any] = {}
+        source_ticket: Optional[dict[str, Any]] = (
+            dict(data["source_ticket"]) if isinstance(data.get("source_ticket"), Mapping) else None
+        )
+        if run_id:
+            run_row = conn.execute(
+                _text(
+                    "SELECT title, spec, finalize_ctx, pull_request_url, state "
+                    "  FROM code_task_runs WHERE id = :r AND project_id = :p"
+                ),
+                {"r": run_id, "p": project_id},
+            ).mappings().first()
+            if run_row:
+                title = title or str(run_row["title"] or "")
+                pr_url = pr_url or run_row["pull_request_url"]
+                own_spec = run_row["spec"] if isinstance(run_row["spec"], dict) else (
+                    json.loads(run_row["spec"]) if isinstance(run_row["spec"], str) and run_row["spec"].strip() else {}
+                )
+                fctx = run_row["finalize_ctx"] if isinstance(run_row["finalize_ctx"], dict) else (
+                    json.loads(run_row["finalize_ctx"]) if isinstance(run_row["finalize_ctx"], str) and run_row["finalize_ctx"].strip() else {}
+                )
+                branch = branch or str(fctx.get("branch") or own_spec.get("base_branch") or "") or None
+                if not head_sha:
+                    st_dict = run_row["state"] if isinstance(run_row["state"], dict) else {}
+                    head_sha = str(st_dict.get("head_sha") or fctx.get("head_sha") or "") or None
+                if not lineage:
+                    lineage = str(fctx.get("root_run_id") or fctx.get("deferred_from_run") or run_id)
+                if source_ticket is None and isinstance(fctx.get("ticket"), Mapping):
+                    source_ticket = dict(fctx["ticket"])
+        if not lineage:
+            lineage = run_id or workflow_run_id or check_id
+
+        contract_row = _contract.latest(conn, root_run_id=lineage, project_id=project_id)
+        if contract_row is None and (run_id or own_spec):
+            contract_row = _contract.ensure_for_run(
+                conn, run_id=run_id or lineage, fctx=fctx, own_spec=own_spec,
+            )
+        prior_check = _checks.latest(
+            conn, project_id=project_id, lineage_root_run_id=lineage, layer="step",
+        )
+        open_rows = _ledger.open_for(conn, project_id=project_id, lineage=lineage)
+
+        mode = _policy.resolve_mode(
+            requested_mode, deployed_url=deployed_url, deployment_id=deployment_id,
+        )
+        if not check_id:
+            pending = _checks.create_pending(
+                conn, project_id=project_id, lineage_root_run_id=lineage,
+                layer="step", mode=mode,
+                contract_id=(contract_row or {}).get("id"),
+                code_task_run_id=run_id, workflow_run_id=workflow_run_id,
+                step_id=step_id, head_sha=head_sha, pr_url=pr_url,
+                budget={"limit_usd": pol.usd, "limit_minutes": pol.minutes},
+            )
+            check_id = str(pending["id"])
+        _checks.mark_running(conn, check_id)
+
+    raw_items = _contract.gate_items(contract_row) if contract_row else []
+    items = [{"n": idx, **it} for idx, it in enumerate(raw_items, start=1)]
+    if not items:
+        rec: dict[str, Any] = {
+            "verdict": "no_items",
+            "why": "no acceptance contract items to check",
+            "counts": {"met": 0, "partial": 0, "missing": 0, "unjudged": 0},
+            "items": [],
+        }
+        with db_engine.begin() as conn:
+            finalized = _checks.finalize_check(
+                conn, check_id, record=rec, contract_id=(contract_row or {}).get("id"),
+                head_sha=head_sha, pr_url=pr_url,
+                duration_ms=int((time.monotonic() - started_mono) * 1000),
+            )
+            emit_event(
+                conn, project_id, "acceptance.checked", "acceptance_agent",
+                "acceptance_check", check_id,
+                {"check_id": check_id, "verdict": "no_items", "layer": "step", "mode": mode,
+                 "counts": rec["counts"], "code_task_run_id": run_id,
+                 "workflow_run_id": workflow_run_id, "lineage_root_run_id": lineage},
+            )
+        return {"ok": True, "acceptance_check_id": check_id, "verdict": "no_items",
+                "check": finalized}
+
+    # ── 2. Outside DB Tx: open sandbox + run session + judge ─────────────────────────────────
+    sbx: Optional[AcceptanceSandbox] = None
+    sess_result: Optional[SessionResult] = None
+    infra_error: Optional[str] = None
+    extracted_probes: list[dict[str, Any]] = []
+    try:
+        egress = LOOPBACK_TARGET if (mode == "environment" and deployed_url) else LOOPBACK
+        opener = sandbox_opener or open_sandbox
+        sbx = opener(
+            settings,
+            run_id=run_id or check_id,
+            source=data.get("source"),
+            head_sha=head_sha,
+            branch=branch,
+            owner=data.get("owner"),
+            repo=data.get("repo"),
+            token=data.get("token"),
+            egress=egress,
+            target_url=deployed_url,
+            project_id=project_id,
+        )
+        head_sha = sbx.head_sha or head_sha
+        sess_result = run_session(
+            sbx,
+            items=items,
+            ask=ask,
+            title=title or lineage,
+            prior=prior_check,
+            open_rows=open_rows,
+            max_commands=int(data.get("max_commands") or MAX_COMMANDS),
+        )
+        stack = _gate.stack_manifest_check(sbx.root, own_spec)
+        rec = _verdict.judge(
+            items,
+            sess_result.reply,
+            stack,
+            root=sbx.root,
+            source={"run_id": lineage, "root": True,
+                    "contract": {"id": (contract_row or {}).get("id"),
+                                 "version": (contract_row or {}).get("version")}},
+            exec_log=sess_result.record,
+            replay=sess_result.carried,
+        )
+        # Preserve replayable probes for unchanged items and newly verified command evidence.
+        carried_probes = [
+            dict(v["probe"]) for v in (sess_result.carried or {}).values()
+            if isinstance(v, Mapping) and isinstance(v.get("probe"), Mapping)
+        ]
+        extracted_probes = _probes.from_record(
+            {**rec, "carried_probes": carried_probes}, sess_result.record, check_id=check_id,
+        )
+
+        elapsed_s = time.monotonic() - started_mono
+        spent_usd = float(sess_result.cost_usd_micros or 0) / 1_000_000.0
+        rec = _policy.enforce_budget(
+            rec,
+            spent_usd=spent_usd,
+            budget_usd=pol.usd,
+            elapsed_seconds=elapsed_s,
+            budget_minutes=pol.minutes,
+            exhausted=bool(sess_result.stop and "budget" in str(sess_result.stop).lower()),
+        )
+    except AcceptanceFenceUnavailable as exc:
+        infra_error = str(exc)
+    except Exception as exc:  # noqa: BLE001 — infra failure is not_run, retryable
+        infra_error = f"{type(exc).__name__}: {exc}"
+    finally:
+        if sbx is not None:
+            with contextlib.suppress(Exception):
+                sbx.close()
+
+    duration_ms = int((time.monotonic() - started_mono) * 1000)
+    if infra_error is not None:
+        rec = {
+            "verdict": "not_run",
+            "why": infra_error,
+            "counts": {"met": 0, "partial": 0, "missing": 0, "unjudged": len(items)},
+            "items": [{**i, "status": _verdict.UNJUDGED, "evidence": f"not run: {infra_error}"}
+                      for i in items],
+        }
+
+    # ── 3. Short Tx 2: finalize check, observe ledger, emit event, file tickets, refresh report
+    with db_engine.begin() as conn:
+        finalized = _checks.finalize_check(
+            conn,
+            check_id,
+            record=rec,
+            contract_id=(contract_row or {}).get("id"),
+            head_sha=head_sha,
+            pr_url=pr_url,
+            commands=sess_result.record if sess_result else (),
+            probes=extracted_probes,
+            engine=str(data.get("engine") or ""),
+            model=sess_result.model if sess_result else None,
+            cost_usd_micros=sess_result.cost_usd_micros if sess_result else 0,
+            duration_ms=duration_ms,
+            budget=rec.get("budget") or {},
+            status="completed",
+        )
+        delta = _ledger.LedgerDelta()
+        if finalized.get("verdict") in ("met", "not_met"):
+            delta = _ledger.observe_check(
+                conn,
+                project_id=project_id,
+                lineage=lineage,
+                check=finalized,
+                record=rec,
+                run_id=run_id,
+                stage="acceptance_step",
+                pr_url=pr_url,
+                contract=contract_row,
+                findings_text=sess_result.reply if sess_result else "",
+                finding_results=sess_result.finding_results if sess_result else (),
+                probes=extracted_probes,
+            )
+
+        open_now = _report.enrich_ledger_rows(
+            conn, project_id,
+            _ledger.open_for(conn, project_id=project_id, lineage=lineage, min_severity="minor"),
+        )
+        digest = _report.comment_digest(finalized, open_rows=open_now)
+        comment_md = _report.ticket_comment(finalized, open_now)
+
+        emit_event(
+            conn, project_id, "acceptance.checked", "acceptance_agent",
+            "acceptance_check", check_id,
+            {
+                "check_id": check_id,
+                "verdict": finalized.get("verdict"),
+                "layer": "step",
+                "mode": mode,
+                "counts": finalized.get("counts") or {},
+                "diff": finalized.get("diff") or {},
+                "digest": digest,
+                "comment_markdown": comment_md,
+                "code_task_run_id": run_id,
+                "workflow_run_id": workflow_run_id,
+                "lineage_root_run_id": lineage,
+            },
+        )
+
+        filing_res = _filing.file_and_sync(
+            conn, settings,
+            project_id=project_id,
+            lineage=lineage,
+            delta=delta,
+            check=finalized,
+            policy=pol,
+            pr_url=pr_url,
+            branch=branch,
+            source_ticket=source_ticket,
+            lineage_title=title or lineage,
+        )
+
+        report_artifact_id: Optional[str] = None
+        if workflow_run_id:
+            refreshed = _report.refresh_run_report(
+                conn, project_id, workflow_run_id, settings=settings,
+            )
+            if refreshed.get("ok"):
+                report_artifact_id = refreshed.get("artifact_id")
+
+    return {
+        "ok": True,
+        "acceptance_check_id": check_id,
+        "verdict": finalized.get("verdict"),
+        "counts": finalized.get("counts") or {},
+        "diff": finalized.get("diff") or {},
+        "open_gaps": len([r for r in open_now if r.get("kind") == "acceptance_gap"]),
+        "delta": delta.to_dict(),
+        "filing": filing_res.to_dict(),
+        "report_artifact_id": report_artifact_id,
+        "cost_usd_micros": sess_result.cost_usd_micros if sess_result else 0,
+        "model_calls": sess_result.model_calls if sess_result else 0,
+    }
+
+
 __all__ = [
-    "AcceptanceSandbox", "Command", "CommandRecord", "LOOPBACK", "LOOPBACK_TARGET",
-    "ModelCallInTransaction", "OUTPUT_CAP", "SessionResult", "judge_prompt", "open_sandbox",
-    "plan_prompt", "planned_commands", "run_session",
+    "AcceptanceFenceUnavailable", "AcceptanceSandbox", "Command", "CommandRecord", "LOOPBACK",
+    "LOOPBACK_TARGET", "ModelCallInTransaction", "OUTPUT_CAP", "SessionResult", "judge_prompt",
+    "open_sandbox", "plan_prompt", "planned_commands", "run_job", "run_session",
 ]

@@ -724,9 +724,34 @@ def assemble_workflow(
     run_findings = workflow_findings(steps, host)
     product = _product_and_build(connection, project_id, steps)
 
+    # AA-H (BOSSAPP-1223): attach latest acceptance check + open findings ledger rows for v2 report.
+    acceptance_data: Optional[dict[str, Any]] = None
+    ledger_rows: list[dict[str, Any]] = []
+    build_info = product.get("build") or {}
+    try:
+        from .acceptance import report as _acc_report
+
+        acceptance_data = _acc_report.latest_for_run(
+            connection,
+            project_id,
+            workflow_run_id,
+            build_run_id=build_info.get("run_id"),
+            pr_url=build_info.get("pull_request_url"),
+        )
+        if acceptance_data:
+            ledger_rows = list(acceptance_data.get("open_rows") or [])
+    except Exception:  # noqa: BLE001 — v1 fallback still renders cleanly
+        acceptance_data = None
+        ledger_rows = []
+
+    steps_next = next_steps(product, run_findings, ledger_rows=ledger_rows)
+
     return {
+        "report_version": 2 if acceptance_data else 1,
+        "acceptance": acceptance_data,
+        "ledger": ledger_rows,
         "product": product,
-        "next_steps": next_steps(product, run_findings),
+        "next_steps": steps_next,
         "ok": True,
         "run_id": workflow_run_id,
         "workflow": run["workflow_name"] or run["workflow_key"],
@@ -841,6 +866,40 @@ def workflow_markdown(report: dict[str, Any]) -> str:
               f"{report.get('elapsed_minutes')} min · "
               f"{_money_str(report.get('total_usd'), report.get('included_usd'))}*", ""]
 
+    acceptance = report.get("acceptance")
+    ledger_rows = list(report.get("ledger") or [])
+    if isinstance(acceptance, Mapping) and acceptance:
+        from .acceptance import report as _acc_report
+
+        if not ledger_rows and isinstance(acceptance.get("open_rows"), list):
+            ledger_rows = list(acceptance["open_rows"])
+        banner = (
+            dict(acceptance["banner"])
+            if isinstance(acceptance.get("banner"), Mapping)
+            else _acc_report.verdict_banner(acceptance, open_rows=ledger_rows)
+        )
+        lines += [f"> {banner['headline']}", f"> {banner['detail']}", ""]
+
+        mh_table = _acc_report.must_haves_markdown(acceptance, ledger_rows=ledger_rows)
+        if mh_table:
+            lines += ["## Must-haves", "", mh_table, ""]
+
+        live_gaps = [r for r in ledger_rows
+                     if str(r.get("status") or "open") in ("open", "in_progress")]
+        if live_gaps:
+            lines += ["## Open gaps & tickets", ""]
+            for row in live_gaps:
+                sev = str(row.get("severity") or "major").upper()
+                key = str(row.get("key") or (f"F-{row['number']}" if row.get("number") else row.get("id") or ""))
+                tk = row.get("ticket") if isinstance(row.get("ticket"), Mapping) else None
+                tk_bit = (f" · [{tk['key']}]({tk['url']})" if tk and tk.get("key") and tk.get("url")
+                          else f" · {tk['key']}" if tk and tk.get("key") else "")
+                fu_bit = f" · follow-up `{row['followup_run_id']}`" if row.get("followup_run_id") else ""
+                lines.append(f"- **{key} [{sev}]** — {row.get('title') or ''}{tk_bit}{fu_bit}")
+            lines.append("")
+
+        lines += ["---", "", "*Details: what was done*", ""]
+
     # 1. WHAT IT IS — the panel's own summary, not the directive repeated back.
     if prd.get("summary"):
         lines += ["## What it is", "", _trim(prd["summary"], 600), ""]
@@ -877,14 +936,44 @@ def workflow_markdown(report: dict[str, Any]) -> str:
     elif prd.get("journey"):
         lines += ["## How to use it", "", _trim(prd["journey"], 700), ""]
 
-    # 4. DOES IT WORK — the honest version, which is usually the useful one.
-    lines += ["## Does it work", ""]
+    # 4. HOW IT WAS CHECKED (v2) / DOES IT WORK (v1 fallback)
+    if isinstance(acceptance, Mapping) and acceptance:
+        lines += ["## How it was checked", ""]
+        cmds = list(acceptance.get("commands") or [])
+        probes_list = list(acceptance.get("probes") or [])
+        budget = acceptance.get("budget") if isinstance(acceptance.get("budget"), Mapping) else {}
+        replayed_n = sum(1 for i in (acceptance.get("items") or []) if i.get("replayed"))
+        acc_bits = [f"mode `{acceptance.get('mode') or 'static'}`",
+                    f"layer `{acceptance.get('layer') or 'step'}`"]
+        if cmds:
+            acc_bits.append(f"{len(cmds)} command(s) recorded")
+        if replayed_n:
+            acc_bits.append(f"{replayed_n} item(s) replayed")
+        elif probes_list:
+            acc_bits.append(f"{len(probes_list)} probe(s)")
+        if budget.get("usd") is not None:
+            acc_bits.append(f"budget ${float(budget['usd']):.2f}"
+                            + (f" / ${float(budget['limit_usd']):.2f}" if budget.get("limit_usd") else ""))
+        lines += ["**Acceptance.** " + " · ".join(acc_bits) + ".", ""]
+        if cmds:
+            lines += ["<details><summary>Recorded commands</summary>", ""]
+            for c in cmds[:40]:
+                cid = c.get("id") or "E?"
+                st_str = (f"HTTP {c['status']}" if c.get("kind") == "http" and c.get("status") is not None
+                          else f"exit {c.get('exit')}")
+                lines.append(f"- `{cid}` ({st_str}) `{c.get('cmd') or ''}`")
+            lines += ["", "</details>", ""]
+    else:
+        lines += ["## Does it work", ""]
+
     verdicts = build.get("verdicts") or {}
     if verdicts:
         lines += ["| Check | Verdict |", "| --- | --- |"]
         for label, key in (("Adversarial review", "review"), ("Security", "security"),
                            ("Consistency", "consistency")):
             lines.append(f"| {label} | {verdicts.get(key) or 'not recorded'} |")
+        if isinstance(acceptance, Mapping) and acceptance:
+            lines.append(f"| Acceptance | {acceptance.get('verdict') or 'not recorded'} |")
         lines.append("")
     if build.get("review_summary"):
         lines += ["**What the reviewer found.** " + build["review_summary"], ""]
@@ -895,8 +984,8 @@ def workflow_markdown(report: dict[str, Any]) -> str:
         lines += [f"**Tests.** {written} test file(s) written. "
                   f"Recorded verification: {ran}.", ""]
 
-    # 5. ACCEPTANCE CRITERIA — listed, never ticked without evidence.
-    if criteria:
+    # 5. ACCEPTANCE CRITERIA — v1 fallback only (v2 renders verified Must-haves at the top).
+    if criteria and not (isinstance(acceptance, Mapping) and acceptance):
         lines += ["## Acceptance criteria", ""]
         for item in criteria:
             lines.append(f"- **{item['id']}** — {item['text']}")
@@ -1202,17 +1291,34 @@ def _quality_followups(state: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         return None
 
 
-def next_steps(product: dict[str, Any], findings_so_far: list[dict[str, str]]
+def next_steps(product: dict[str, Any], findings_so_far: list[dict[str, str]],
+               *, ledger_rows: Optional[list[dict[str, Any]]] = None
                ) -> list[dict[str, str]]:
     """What to do next, ranked — P1 is "do not build on this until it is fixed".
 
     Derived, never invented. Every entry points at something recorded: a test file that was
     written and never run, a reviewer verdict that was not clean, a finding the build chose to
-    defer. The point of the ranking is that "what should I do next" has an answer that is not
-    an opinion.
+    defer, or an open findings-ledger row. The point of the ranking is that "what should I do
+    next" has an answer that is not an opinion.
     """
     build = product.get("build") or {}
     out: list[dict[str, str]] = []
+
+    for row in ledger_rows or []:
+        if str(row.get("status") or "open") not in ("open", "in_progress"):
+            continue
+        sev = str(row.get("severity") or "major").lower()
+        if sev == "nit":
+            continue
+        key = str(row.get("key") or (f"F-{row['number']}" if row.get("number") else row.get("id") or ""))
+        tk = row.get("ticket") if isinstance(row.get("ticket"), Mapping) else None
+        tk_suffix = f" ({tk['key']})" if tk and tk.get("key") else ""
+        out.append({
+            "priority": "P1" if sev in ("blocker", "major") or row.get("kind") == "acceptance_gap" else "P2",
+            "area": str(row.get("kind") or "acceptance"),
+            "item": f"{key}: {_trim(row.get('title'), 220)}{tk_suffix}",
+            "why": f"Open {sev} finding in the lineage ledger.",
+        })
 
     written = len(build.get("test_files") or [])
     commands = build.get("commands_run") or []

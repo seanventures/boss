@@ -133,4 +133,147 @@ def record_check(connection: Any, *, project_id: str, lineage_root_run_id: str, 
     return get(connection, check_id) or {"id": check_id}
 
 
-__all__ = ["LAYERS", "MODES", "VERDICTS", "get", "latest", "record_check"]
+def create_pending(
+    connection: Any,
+    *,
+    project_id: str,
+    lineage_root_run_id: str,
+    layer: str = "step",
+    mode: str = "exercise",
+    contract_id: Optional[str] = None,
+    code_task_run_id: Optional[str] = None,
+    workflow_run_id: Optional[str] = None,
+    step_id: Optional[str] = None,
+    head_sha: Optional[str] = None,
+    pr_url: Optional[str] = None,
+    budget: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Insert an in-flight `acceptance_checks` row (`status='queued'`) for an async step."""
+    from sqlalchemy import text
+
+    from ..core import make_id
+
+    if layer not in LAYERS or mode not in MODES:
+        raise ValueError(f"layer must be one of {LAYERS} and mode one of {MODES}")
+    check_id = make_id("acc")
+    connection.execute(
+        text(
+            "INSERT INTO acceptance_checks (id, project_id, contract_id, lineage_root_run_id, "
+            "code_task_run_id, workflow_run_id, step_id, layer, mode, head_sha, pr_url, verdict, "
+            "status, why, budget) VALUES (:i, :p, :c, :r, :run, :w, :s, :l, :m, :h, :u, "
+            "'not_run', 'queued', '', CAST(:budget AS JSONB))"
+        ),
+        {
+            "i": check_id, "p": project_id, "c": contract_id, "r": lineage_root_run_id,
+            "run": code_task_run_id, "w": workflow_run_id, "s": step_id, "l": layer, "m": mode,
+            "h": head_sha, "u": pr_url, "budget": json.dumps(dict(budget or {})),
+        },
+    )
+    return get(connection, check_id) or {"id": check_id, "status": "queued"}
+
+
+def mark_running(connection: Any, check_id: str) -> None:
+    from sqlalchemy import text
+
+    connection.execute(
+        text("UPDATE acceptance_checks SET status = 'running' WHERE id = :i"),
+        {"i": check_id},
+    )
+
+
+def mark_failed(connection: Any, check_id: str, why: str) -> None:
+    from sqlalchemy import text
+
+    connection.execute(
+        text(
+            "UPDATE acceptance_checks SET status = 'failed', verdict = 'not_run', "
+            "why = :w WHERE id = :i"
+        ),
+        {"i": check_id, "w": str(why or "acceptance check failed")[:2000]},
+    )
+
+
+def finalize_check(
+    connection: Any,
+    check_id: str,
+    *,
+    record: Mapping[str, Any],
+    contract_id: Optional[str] = None,
+    head_sha: Optional[str] = None,
+    pr_url: Optional[str] = None,
+    commands: Iterable[Any] = (),
+    probes: Iterable[Mapping[str, Any]] = (),
+    previous_check_id: Optional[str] = "_latest",
+    engine: Optional[str] = None,
+    model: Optional[str] = None,
+    cost_usd_micros: int = 0,
+    duration_ms: int = 0,
+    budget: Optional[Mapping[str, Any]] = None,
+    exec_log_artifact_id: Optional[str] = None,
+    status: str = "completed",
+) -> dict[str, Any]:
+    """Finalize a pending `acceptance_checks` row in place and return the updated row."""
+    from sqlalchemy import text
+
+    from .verdict import diff as _diff
+
+    cur = get(connection, check_id)
+    if cur is None:
+        raise ValueError(f"acceptance check not found: {check_id}")
+    verdict = str(record.get("verdict") or "not_run")
+    if verdict not in VERDICTS:
+        verdict = "not_run"
+    prev = None
+    if previous_check_id == "_latest":
+        prev_row = connection.execute(
+            text(
+                "SELECT * FROM acceptance_checks WHERE project_id = :p "
+                "AND lineage_root_run_id = :r AND layer = :l AND id <> :self "
+                "AND COALESCE(status, 'completed') = 'completed' "
+                "ORDER BY created_at DESC, id DESC LIMIT 1"
+            ),
+            {"p": cur["project_id"], "r": cur["lineage_root_run_id"],
+             "l": cur["layer"], "self": check_id},
+        ).mappings().first()
+        prev = _row(prev_row) if prev_row else None
+        previous_check_id = prev["id"] if prev else None
+    elif previous_check_id:
+        prev = get(connection, previous_check_id)
+    items = _items(record)
+    cmds = [c.to_dict() if hasattr(c, "to_dict") else dict(c) for c in commands or []]
+    connection.execute(
+        text(
+            "UPDATE acceptance_checks SET "
+            "contract_id = COALESCE(CAST(:c AS TEXT), contract_id), "
+            "head_sha = COALESCE(CAST(:h AS TEXT), head_sha), "
+            "pr_url = COALESCE(CAST(:u AS TEXT), pr_url), "
+            "verdict = :v, status = :st, why = :why, "
+            "counts = CAST(:counts AS JSONB), items = CAST(:items AS JSONB), "
+            "probes = CAST(:probes AS JSONB), commands = CAST(:cmds AS JSONB), "
+            "exec_log_artifact_id = COALESCE(CAST(:ela AS TEXT), exec_log_artifact_id), "
+            "previous_check_id = :prev, diff = CAST(:diff AS JSONB), "
+            "engine = :e, model = :model, cost_usd_micros = :cost, duration_ms = :dur, "
+            "budget = CAST(:budget AS JSONB) "
+            "WHERE id = :i"
+        ),
+        {
+            "i": check_id, "c": contract_id, "h": head_sha, "u": pr_url,
+            "v": verdict, "st": status, "why": str(record.get("why") or "")[:2000],
+            "counts": json.dumps(record.get("counts") or {}),
+            "items": json.dumps(items, default=str),
+            "probes": json.dumps(list(probes or []), default=str),
+            "cmds": json.dumps(cmds, default=str),
+            "ela": exec_log_artifact_id, "prev": previous_check_id,
+            "diff": json.dumps(_diff(prev, {"items": items}) if prev else {}),
+            "e": engine, "model": model or record.get("model"),
+            "cost": int(cost_usd_micros or 0), "dur": int(duration_ms or 0),
+            "budget": json.dumps(dict(budget or record.get("budget") or {})),
+        },
+    )
+    return get(connection, check_id) or {"id": check_id, "verdict": verdict, "status": status}
+
+
+__all__ = [
+    "LAYERS", "MODES", "VERDICTS", "create_pending", "finalize_check",
+    "get", "latest", "mark_failed", "mark_running", "record_check",
+]

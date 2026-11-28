@@ -69,6 +69,7 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     # the QA agent's (Reviewer), whose every preview was refused and skipped (2026-10-13 pre-check).
     "preview": "engineering_captain",
     "review": "adversarial_reviewer",
+    "acceptance": "acceptance_agent",
     "plrr": "sre",
     "more_tests": "qa",
     "monitor": "sre",

@@ -387,6 +387,9 @@ def capabilities() -> list[str]:
         "docs.update",
         # A security scan (F4): the API runs the scanners in the build sandbox under this lease.
         "security.scan",
+        # Acceptance Agent step (AA-G, BOSSAPP-1222): runs the acceptance session, verdict, ledger,
+        # ticket filing and report refresh under this lease.
+        "acceptance.check",
         "validation.rerun",
         # Setup's write check for a model login (engine_policy): the API runs one writer session
         # in a build's sandbox under this lease. Declared here or Setup shows "Checking…" forever.
@@ -939,6 +942,19 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         # The scanners and the sandbox helper are in the api image: the API runs the scan. A
         # scan whose tools failed is a recorded result (status failed, with why), not a retry.
         return client.run_security_scan({"scan_id": job.payload["scan_id"]})
+    if job.kind == "acceptance.check":
+        # Acceptance Agent step (AA-G, BOSSAPP-1222): runs in-engine against the DB engine when
+        # available, else delegates to the API control plane.
+        run_acc = getattr(client, "run_acceptance_check", None)
+        if callable(run_acc):
+            return run_acc({"job_id": job.id, **(job.payload or {})})
+        from boss_engine.config import get_settings
+        from boss_engine.db import get_engine
+        from boss_engine.services.acceptance.session import run_job as _run_acceptance_job
+
+        return _run_acceptance_job(
+            get_engine(get_settings()), get_settings(), dict(job.payload or {}),
+        )
     if job.kind == "validation.rerun":
         # A person overrode a validation finding (finding_overrides): the validator runs again
         # on the change's target in the API's sandbox. A re-run that could not run is recorded
