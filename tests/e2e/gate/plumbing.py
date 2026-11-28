@@ -505,7 +505,8 @@ def _call_site_kwargs() -> set[str]:
 
 
 #: What the gate passes, as the pipeline does (governed_code_task_service._check_app_serves).
-_GATE_SERVE_KWARGS = {"lineage", "known_service", "timeout", "probe_paths", "needs", "bound"}
+_GATE_SERVE_KWARGS = {"lineage", "known_service", "timeout", "probe_paths", "needs", "bound",
+                      "base_failed"}
 
 
 @check("the app starts: BOSS's app-start proof", bug="2, 3")
@@ -533,6 +534,9 @@ def check_serve(g: Gate) -> str:
         kwargs["needs"] = app_needs(None, project_id="", app_key=None,
                                     manifests=[manifest] if manifest else [])
         kwargs["bound"] = {}
+    if "base_failed" in params:
+        # A first build has no earlier start that failed (ENT-REC-09 passes the lineage's last one).
+        kwargs["base_failed"] = None
     g.changed = _changed_files(g)
     g.serve_kwargs = dict(kwargs)
     g.serve = preview_service.prove_app_serves(g.root, list(g.changed), **kwargs)
