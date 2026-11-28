@@ -121,6 +121,8 @@ PATH_PREFIX = "/v1/mcp-gateway/"
 HOST = "127.0.0.1"
 #: The run's own self-service tools are served under this server name.
 RUN_SERVER = "boss_run"
+#: PE-A (BOSSAPP-784): read-only knowledge graph tools served to every build harness.
+KG_SERVER = "boss_kg"
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 MAX_BODY_BYTES = 8 * 1024 * 1024
 MIN_TTL_SECONDS = 3600
@@ -285,6 +287,27 @@ RUN_TOOLS: list[dict] = [
          "title": {"type": "string"}, "body": {"type": "string"}}}},
 ]
 _RUN_TOOL_NAMES = frozenset(t["name"] for t in RUN_TOOLS)
+
+#: PE-A (BOSSAPP-784): read-only KG tools exposed on the `boss_kg` gateway server.
+KG_TOOLS: list[dict] = [
+    {"name": "kg_callers",
+     "description": "Read-only KG query: list callers of a symbol or node_id in this project.",
+     "inputSchema": {"type": "object", "required": ["node_id"], "properties": {
+         "node_id": {"type": "string"}}}},
+    {"name": "kg_blast_radius",
+     "description": "Read-only KG query: compute affected callers, flows, and tests for node_id.",
+     "inputSchema": {"type": "object", "required": ["node_id"], "properties": {
+         "node_id": {"type": "string"}}}},
+    {"name": "kg_precedent",
+     "description": "Read-only KG query: search prior incidents, fixes, and precedents for a query.",
+     "inputSchema": {"type": "object", "required": ["query"], "properties": {
+         "query": {"type": "string"}}}},
+    {"name": "kg_why",
+     "description": "Read-only KG query: explain why a symbol, rule, or node exists in this project.",
+     "inputSchema": {"type": "object", "required": ["node_id"], "properties": {
+         "node_id": {"type": "string"}}}},
+]
+READONLY_KG_TOOLS: tuple[str, ...] = tuple(t["name"] for t in KG_TOOLS)
 #: BOSSAPP-856: listed only on a build that declared runtime services (boss.verify.yaml runtime:).
 RUNTIME_TOOL: dict = {
     "name": "runtime_service",
@@ -568,7 +591,7 @@ class McpGateway:
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
         if "id" not in message:
             return None                       # notifications/initialized, cancelled, ...
-        if server_key != RUN_SERVER and server_key not in grant.servers:
+        if server_key not in (RUN_SERVER, KG_SERVER) and server_key not in grant.servers:
             return _rpc_error(rid, -32004, f"no server '{server_key}' on this run")
         if method == "initialize":
             asked = str(params.get("protocolVersion") or "")
@@ -581,8 +604,12 @@ class McpGateway:
         if method == "ping":
             return _rpc_result(rid, {})
         if method == "tools/list":
-            tools = (RUN_TOOLS + self._keyed_tools(grant) if server_key == RUN_SERVER
-                     else self._upstream_tools(grant, server_key))
+            if server_key == RUN_SERVER:
+                tools = RUN_TOOLS + self._keyed_tools(grant)
+            elif server_key == KG_SERVER:
+                tools = list(KG_TOOLS)
+            else:
+                tools = self._upstream_tools(grant, server_key)
             return _rpc_result(rid, {"tools": tools})
         if method == "tools/call":
             name = str(params.get("name") or "")
@@ -595,6 +622,8 @@ class McpGateway:
             sink = _with_progress(sink, params)
             if server_key == RUN_SERVER:
                 return _rpc_result(rid, self.call_run_tool(grant, name, arguments, sink))
+            if server_key == KG_SERVER:
+                return _rpc_result(rid, self._call_readonly_kg(grant, name, arguments))
             return _rpc_result(rid, self.call_upstream(grant, server_key, name, arguments, sink))
         if method in ("resources/list", "prompts/list"):
             return _rpc_result(rid, {method.split("/")[0]: []})
@@ -814,6 +843,8 @@ class McpGateway:
                 data["body"] = str(arguments.get("body") or "")[:8000]
             self._run_event(grant, event, data, line=f"{label}: {said[:300]}")
             return tool_text({"recorded": True, "event": event})
+        if name in READONLY_KG_TOOLS:
+            return self._call_readonly_kg(grant, name, arguments)
         if name == "ask_person":
             question = str(arguments.get("question") or "").strip()
             if not question:
@@ -838,6 +869,35 @@ class McpGateway:
             return tool_text({"approved": True, "note": answer.get("note") or "",
                               "decision_id": decision_id})
         return _not_released(answer, decision_id, what=action)
+
+    def _call_readonly_kg(self, grant: GatewayGrant, name: str, arguments: dict) -> dict:
+        """PE-A (BOSSAPP-784): execute read-only KG queries inside a build harness session."""
+        from .knowledge.service import KnowledgeService
+
+        svc = KnowledgeService()
+        try:
+            with self._tx() as c:
+                if name == "kg_callers":
+                    nid = str(arguments.get("node_id") or "").strip()
+                    if not nid:
+                        return tool_error("bad_arguments", "kg_callers needs 'node_id'")
+                    return tool_text(svc.callers(c, project_id=grant.project_id, node_id=nid))
+                if name == "kg_blast_radius":
+                    nid = str(arguments.get("node_id") or "").strip()
+                    if not nid:
+                        return tool_error("bad_arguments", "kg_blast_radius needs 'node_id'")
+                    return tool_text(svc.blast(c, project_id=grant.project_id, node_id=nid))
+                if name == "kg_why":
+                    nid = str(arguments.get("node_id") or "").strip()
+                    if not nid:
+                        return tool_error("bad_arguments", "kg_why needs 'node_id'")
+                    return tool_text(svc.why(c, project_id=grant.project_id, node_id=nid))
+                query = str(arguments.get("query") or "").strip()
+                if not query:
+                    return tool_error("bad_arguments", "kg_precedent needs 'query'")
+                return tool_text(svc.search(c, project_id=grant.project_id, query=query))
+        except Exception as exc:  # noqa: BLE001 — read-only KG error returned as typed tool result
+            return tool_error("tool_failed", f"{name} failed: {exc}")
 
     def _run_event(self, grant: GatewayGrant, event: str, data: dict, *, line: str) -> None:
         from .core import emit_event

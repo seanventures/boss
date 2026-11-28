@@ -2442,7 +2442,8 @@ def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     return _render_ctx_block(title, instructions, criteria, service=sticky)
 
 
-def _render_ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
+def _render_ctx_block(title, instructions, criteria, *, service: bool = False,
+                      pe_context: str = "") -> str:
     crit = "\n".join(f"- {c}" for c in criteria or []) or "- (none specified)"
 
     # Standards the PLATFORM requires, as distinct from the ones `_standards_prompt` infers by
@@ -2482,13 +2483,51 @@ def _render_ctx_block(title, instructions, criteria, *, service: bool = False) -
     # the header, so it is the same bytes for every task's stages as well as one task's.
     from .agent_baseline import BUILD_PRIMER
 
+    pe_block = f"\n{pe_context.strip()}\n" if (pe_context and pe_context.strip()) else ""
     return (
         "=== TASK CONTEXT (shared verbatim across all pipeline stages) ===\n"
         f"{BUILD_PRIMER}"
         f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n"
-        f"{standards}{references}\n"
+        f"{standards}{references}{pe_block}\n"
         "=== END TASK CONTEXT ===\n\n"
     )
+
+
+def build_prompt_with_agent_setup(
+    connection,
+    *,
+    project_id: str,
+    title: str,
+    instructions: str,
+    criteria=(),
+    role_key: Optional[str] = None,
+    touched_paths=(),
+    step: str = "implement",
+    areas=(),
+    repo_standards=(),
+    service: bool = False,
+    token_budget: int = 1800,
+    org_id: Optional[str] = None,
+) -> tuple[str, dict]:
+    """PE-B (BOSSAPP-785): assemble a governed build prompt carrying agent role instructions,
+    recalled steers/learnings, scoped repo standards, guide skills, and engineering opinions."""
+    from . import pe_memory
+
+    pack = pe_memory.recall_for_build(
+        connection,
+        project_id=project_id,
+        role_key=role_key,
+        touched_paths=touched_paths,
+        step=step,
+        areas=areas,
+        repo_standards=repo_standards,
+        token_budget=token_budget,
+        org_id=org_id,
+    )
+    prompt = _render_ctx_block(
+        title, instructions, criteria, service=service, pe_context=pack["prompt_block"]
+    )
+    return prompt, pack
 
 
 #: The test author writes no credential literal. BOSS's no_committed_secrets gate scans tests too,
@@ -3895,21 +3934,34 @@ def _operator_review_block(engine, run_id: str, project_id: str) -> str:
 
 
 def _review_prompt(title, criteria, *, instructions="", ui=False, change="", operator="",
-                   ctx=True):
+                   ctx=True, blast_radius=None):
     # `ctx=False` for a merged-panel section (review_panel.combined_prompt): the task context
     # and the shared change are in the prompt ONCE, not once per seat.
+    br_clause = ""
+    if isinstance(blast_radius, dict) and (blast_radius.get("callers") or blast_radius.get("flows")):
+        callers = ", ".join(str(c) for c in (blast_radius.get("callers") or [])[:12])
+        flows = ", ".join(str(f) for f in (blast_radius.get("flows") or [])[:12])
+        br_clause = (
+            "BLAST RADIUS IN SCOPE (PE-C): Verify that this change does NOT break existing "
+            "callers or flows even if they were not explicitly named in the task prompt.\n"
+            + (f"  Callers: {callers}\n" if callers else "")
+            + (f"  Flows: {flows}\n" if flows else "")
+            + "\n"
+        )
     return (
         (_ctx_block(title, instructions, criteria) if ctx else "")
         + (operator or "")
         + "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
         "these tests. Try HARD to break the change: read the implementation and the tests and look "
         "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
-        "sensitivity, error handling, off-by-one).\n\n"
+        "sensitivity, error handling, off-by-one, or broken existing callers).\n\n"
         + _change_clause(change)
         + ci_gate.review_clause_for(change)
-        + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
-        "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
-        "defect; note it but do not fail the change for it.\n\n"
+        + br_clause
+        + "Judge against BOTH the stated task/acceptance criteria AND any existing callers or "
+        "flows in the blast radius that this change could break. A concern about unrequested new "
+        "features is out of scope; breaking an existing caller or silently relabelling a failure "
+        "as success/not_applicable IS an in-scope BLOCKER/MAJOR defect.\n\n"
         "SCOPE CREEP IS THE ISSUE, NEVER THE CURE: in a change to an existing app, files or "
         "machinery the request did not ask for (a Dockerfile, a compose or deploy manifest, a "
         "metrics endpoint, telemetry calls, new documents) are a MINOR finding — 'not asked for, "

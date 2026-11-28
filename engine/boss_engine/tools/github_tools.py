@@ -96,10 +96,21 @@ def _comment(ctx, *, project_id, actor, args):
 
 
 def _fix_pr(ctx, *, project_id, actor, args):
+    from ..services.done_contracts import enforce_pr_contract
     from ..services.github_actions import WORKFLOW_RUN_ID, GitHubActionError, open_fix_pr
 
     args = dict(args or {})
     pid = args.get("project_id") or project_id
+    # PE-L (BOSSAPP-792): refuse a PR whose caller explicitly passed an empty report or enabled
+    # done-contract enforcement without an evidence section.
+    if args.get("enforce_done_contract") or ("report" in args and not str(args.get("report") or "").strip()):
+        ok_contract, gaps = enforce_pr_contract(
+            str(args.get("title") or ""),
+            str(args.get("summary") or ""),
+            evidence={"report": args.get("report")} if str(args.get("report") or "").strip() else None,
+        )
+        if not ok_contract:
+            return {"ok": False, "code": "done_contract_failed", "error": "; ".join(gaps), "gaps": gaps}
     try:
         with ctx.begin() as db:
             return open_fix_pr(
