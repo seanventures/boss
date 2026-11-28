@@ -574,6 +574,10 @@ def plan(c, *, org_id: str, project_id: str, template_refs: list[str], body: dic
     }
     if app["run_id"]:
         run_input["extends_run_id"] = app["run_id"]
+    elif new_app:
+        # A NEW APP, SAID SO: its build starts from the default branch, and another app's
+        # unmerged branch in the same repository is no reason to stop it (app_scope).
+        run_input["new_app"] = True
     return {"rows": rows, "ordered": ordered, "merged": merged, "app": app, "stack": stack,
             "framework": framework, "composite": composite, "connectors": connectors,
             "application_ids": application_ids, "run_input": run_input, "workflow_key": workflow_key,

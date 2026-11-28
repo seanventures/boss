@@ -228,12 +228,15 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
                            base_branch: Optional[str] = None, profile: Optional[str] = None,
                            risk_tier: Optional[int] = None, max_tasks: int = 6,
                            seed_scaffold: bool = True, origin: Optional[dict] = None,
-                           github=None) -> dict:
+                           github=None, new_app: bool = False) -> dict:
     """Decompose the PRD and START the build as one lineage. For a WEB APP, first SEED a
     deterministic Vite+React+TS+Tailwind scaffold onto a fresh lineage branch (no agent, no
     micro-VM turn limit — the exact thing that kept failing an agent-authored scaffold), then
     decompose FEATURE tasks that build on it. Each subsequent task auto-starts as a continuation
-    on the shared branch when the previous lands (advance_decomposition)."""
+    on the shared branch when the previous lands (advance_decomposition).
+
+    `new_app`: the caller knows this is a NEW app (launch_prd_build: an empty repository and no
+    app in the project yet); the build records it (app_scope.NEW_APP_KEY)."""
     root: Optional[str] = None
     seeded = 0
     decomp_input = prd_or_directive
@@ -270,7 +273,8 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
     # it to adopt them rather than convening a second panel and asking for the same sign-off
     # twice — see _ADOPTABLE / _ADOPTABLE_GATES in workflow_capability_runner.
     fctx = {"decomposition_plan": rest, "decomposition_index": 1, "decomposition_total": len(tasks),
-            **({"origin": origin} if origin else {})}
+            **({"origin": origin} if origin else {}),
+            **({"new_app": True} if new_app else {})}
     task_base = base_branch
     web_tests: list = []
     if root:  # build the first feature ON the seeded scaffold branch (shared lineage)

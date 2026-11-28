@@ -2651,6 +2651,9 @@ def retry_code_task(
                           # Same app across every attempt; see start_followup_task.
                           "app_id": (fctx_prev.get("app_id") or fctx_prev.get("root_run_id")
                                      or run_id),
+                          # A NEW APP STAYS ONE on every attempt (app_scope): its retry is never
+                          # stopped by another app's unmerged branch in the repository.
+                          **({"new_app": True} if fctx_prev.get("new_app") is True else {}),
                           **({"official": True} if fctx_prev.get("official") else {}),
                           **({"qa_benchmark": dict(fctx_prev["qa_benchmark"])}
                              if isinstance(fctx_prev.get("qa_benchmark"), dict)

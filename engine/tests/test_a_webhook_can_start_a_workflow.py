@@ -117,6 +117,20 @@ def test_a_signed_delivery_starts_the_workflow_with_its_payload(made):
     assert [(d["status"], d["run_id"]) for d in seen] == [("started", result["run_id"])]
 
 
+def test_a_payload_never_declares_a_new_app(made):
+    """A signed payload is the sender's words: `new_app` in it is dropped (workflows.
+    SERVER_ONLY_INPUTS), so the build step is never handed a new app (app_scope, ENT-FEAT-01)."""
+    engine, key, trigger = made
+    body = json.dumps({"company": "Acme", "new_app": True}).encode()
+    result = _send(engine, trigger, body, _headers(trigger["secret"], body, delivery="d-new"))
+    assert result["status"] == "started", result
+    with engine.begin() as connection:
+        run = connection.execute(text("SELECT input FROM workflow_runs WHERE id = :i"),
+                                 {"i": result["run_id"]}).mappings().one()
+    assert run["input"]["company"] == "Acme"
+    assert "new_app" not in run["input"]
+
+
 def test_a_redelivery_with_the_same_id_starts_no_second_run(made):
     engine, key, trigger = made
     body = b'{"n": 1}'
