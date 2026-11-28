@@ -448,11 +448,12 @@ class CodeTasks(Surface):
     def failed(self, c, since, pid=None):
         from .build_failure import _internal_clauses  # noqa: SLF001 — the one definition
         from . import projects_archive
+        from .run_payload import lean_finalize_ctx
 
         params: dict[str, Any] = {"since": since, "n": MAX_ITEMS_PER_SURFACE, "pid": pid}
         rows = c.execute(text(
             "SELECT c.id, c.project_id, c.title, c.status, c.error, c.updated_at, c.decision_id, "
-            "c.finalize_ctx, COALESCE(c.finalize_ctx->>'root_run_id', c.id) AS root "
+            + lean_finalize_ctx("c") + ", COALESCE(c.finalize_ctx->>'root_run_id', c.id) AS root "
             "FROM code_task_runs c WHERE c.status IN ('failed', 'blocked') "
             "AND c.updated_at >= :since AND c.finalize_ctx->>'workflow_run_id' IS NULL "
             "AND (CAST(:pid AS text) IS NULL OR c.project_id = :pid) "

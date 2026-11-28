@@ -13424,11 +13424,13 @@ def list_sandboxes_endpoint():
             "host": {"connected": False, "claims_frozen": frozen},
             "unavailable": str(e)[:200],
         }
+    from boss_engine.services.run_payload import lean_finalize_ctx
+
     cards = []
     try:
         with begin(engine) as c:
             rows = c.execute(text(
-                "SELECT id, title, project_id, status, spec, state, finalize_ctx, "
+                "SELECT id, title, project_id, status, spec, state, " + lean_finalize_ctx() + ", "
                 "EXTRACT(EPOCH FROM (now()-updated_at))::int AS age "
                 "FROM code_task_runs WHERE status IN ('failed','blocked') "
                 "AND finalize_ctx->>'sandbox_task_id' IS NOT NULL "

@@ -294,11 +294,13 @@ class FactoryFlowService:
 
     def board(self, connection: Any, project_id: str, *, limit: int = 20) -> dict[str, Any]:
         from sqlalchemy import text
+
+        from .run_payload import lean_finalize_ctx
         self.ensure_schema(connection)
         rows = connection.execute(
             text(
                 """
-                SELECT id, status, phase, title, error, state, finalize_ctx, updated_at
+                SELECT id, status, phase, title, error, state, """ + lean_finalize_ctx() + """, updated_at
                 FROM code_task_runs
                 WHERE project_id=:p
                   AND (

@@ -39,6 +39,7 @@ from typing import Any, Callable, Mapping, Optional
 from sqlalchemy import text
 
 from . import admission, owned_process
+from .run_payload import lean_finalize_ctx
 
 _log = logging.getLogger("boss.system_doctor")
 
@@ -992,7 +993,7 @@ def shepherd_escalation_cards(connection: Any, project_id: str) -> list[dict[str
                 {"p": project_id}).mappings().all()
             refs = [str(r["task_ref"]) for r in rows if r["task_ref"]]
             builds = {str(b["id"]): dict(b) for b in connection.execute(text(
-                "SELECT r.id, r.title, r.status, r.phase, r.spec, r.finalize_ctx, "
+                "SELECT r.id, r.title, r.status, r.phase, r.spec, " + lean_finalize_ctx("r") + ", "
                 "d.status AS decision_status FROM code_task_runs r "
                 "LEFT JOIN decisions d ON d.id = r.decision_id WHERE r.id = ANY(:ids)"),
                 {"ids": refs}).mappings()} if refs else {}
