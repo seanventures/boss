@@ -30,6 +30,7 @@ import pytest
 from sqlalchemy import text
 
 from apps.api.app.config import get_settings
+from apps.api.tests.identity_s1_world import world  # noqa: F401 — fixture
 from apps.api.tests.test_a_feature_builds_onto_its_app import (  # noqa: F401 — fixture
     _start as _start_workflow, _tick_until_built, panel,
 )
@@ -434,3 +435,310 @@ def test_the_chat_fallback_for_a_merged_app_starts_a_new_change(engine, apps):
     assert run["finalize_ctx"].get("after_merged_run_id") == B_ROOT
     assert _clones(engine, run["id"]) != f"boss/code/{B_ROOT}"
     assert "new change" in turn.reply
+
+
+# ── Two apps in ONE repository (ENT-FEAT-01, ENT-REC-50) ────────────────────────────────────
+#
+# Recipe Box and Neighborhood Board share local_northgate/northgate; each change is open on its
+# own lineage branch. A new app is said so all the way to its build (app_scope.NEW_APP_KEY, read
+# by the empty-checkout guard), and every door that names one app lands on that app's branch.
+
+R_ROOT, N_ROOT, N_FAILED = "crun_reciperoot01", "crun_boardroot001", "crun_boardretry01"
+R_PREVIEW, N_PREVIEW = "prev_recipebox01", "prev_neighboard1"
+SHARED = "northgate"
+
+
+@pytest.fixture()
+def one_repo(engine):
+    _insert(engine, R_ROOT, title="Recipe Box", repo=SHARED, pr=1,
+            fctx={"attempt": 1, "app_id": "app_recipebox"})
+    _insert(engine, N_ROOT, title="Neighborhood Board", repo=SHARED, pr=2,
+            fctx={"attempt": 1, "app_id": "app_neighborhood", "new_app": True})
+    _insert(engine, N_FAILED, title="Neighborhood Board", repo=SHARED, status="failed",
+            fctx={"attempt": 2, "root_run_id": N_ROOT, "parent_run_id": N_ROOT,
+                  "app_id": "app_neighborhood", "new_app": True},
+            spec={"base_branch": "main"})
+    with engine.begin() as connection:
+        for preview, run in ((R_PREVIEW, R_ROOT), (N_PREVIEW, N_ROOT)):
+            connection.execute(text(
+                "INSERT INTO app_previews (id, project_id, run_id, repo, branch, status, url) "
+                "VALUES (:i, :p, :r, :repo, :b, 'running', 'http://127.0.0.1:4100/')"),
+                {"i": preview, "p": _project(), "r": run, "repo": f"{OWNER}/{SHARED}",
+                 "b": f"boss/code/{run}"})
+    yield
+
+
+def _clones_shared(engine, run_id) -> str:
+    from boss_engine.services.build_base_branch import lineage_clone, resolve_build_base
+
+    run = _run(engine, run_id)
+    spec = run["spec"] or {}
+    with engine.begin() as connection:
+        base = resolve_build_base(connection, project_id=run["project_id"], owner=spec["owner"],
+                                  repo=spec["repo"], explicit=spec.get("base_branch"),
+                                  host_default=lambda: "main", run_id=run_id)
+    branches = {"main", f"boss/code/{R_ROOT}", f"boss/code/{N_ROOT}"}
+    return lineage_clone(run_id, run["finalize_ctx"], base.clone, branches.__contains__)[1]
+
+
+@pytest.mark.parametrize("preview, branch, app_id", [
+    (N_PREVIEW, f"boss/code/{N_ROOT}", "app_neighborhood"),
+    (R_PREVIEW, f"boss/code/{R_ROOT}", "app_recipebox"),
+])
+def test_a_repair_from_a_preview_targets_that_previews_app_in_a_shared_repository(
+        engine, one_repo, preview, branch, app_id):
+    out = _tool(engine, instructions="The list is empty.", preview_id=preview)
+    assert out.get("status") == "queued", out
+    assert _clones_shared(engine, out["run_id"]) == branch
+    assert _run(engine, out["run_id"])["finalize_ctx"].get("app_id") == app_id
+
+
+def test_a_repair_from_a_preview_at_the_start_door_targets_that_app(client, engine, one_repo,
+                                                                    panel):
+    started = _start_from(client, {"title": "Repair the board preview",
+                                   "directive": "The list is empty.",
+                                   "preview_id": N_PREVIEW})
+    assert started.status_code == 200, started.text
+    assert started.json()["extends"]["run_id"] == N_ROOT
+    built = _tick_until_built(client, engine, started.json()["run"]["id"])
+    assert _clones_shared(engine, built[0]["id"]) == f"boss/code/{N_ROOT}"
+
+
+def test_a_retry_in_a_shared_repository_stays_on_its_app(client, engine, one_repo):
+    retried = client.post(f"/v1/code-tasks/{N_FAILED}/retry", json={"actor": "ceo"})
+    assert retried.status_code == 200, retried.text
+    new_id = retried.json().get("run_id") or retried.json().get("new_run_id")
+    assert _clones_shared(engine, new_id) == f"boss/code/{N_ROOT}"
+    fctx = _run(engine, new_id)["finalize_ctx"]
+    assert fctx.get("app_id") == "app_neighborhood" and fctx.get("new_app") is True
+
+
+def test_create_a_new_app_is_said_all_the_way_to_the_build(engine, one_repo, panel, world,
+                                                           monkeypatch):
+    """New work › Create a new app, pressed by a signed-in person: the run's input and its build
+    both say new_app, and the build clones the default branch (not either app's branch)."""
+    from apps.api.tests.identity_s1_world import csrf, fresh_client, make_user, sign_in
+
+    monkeypatch.setattr(get_settings(), "target_github_owner", OWNER)
+    monkeypatch.setattr(get_settings(), "target_github_repo", SHARED)
+    make_user(engine, "newapp@example.test", role="operator")
+    client = fresh_client()
+    assert sign_in(client, "newapp@example.test").status_code == 200
+    client.headers.update(csrf(client))
+    started = _post_work(client, {"kind": "feature", "new_app": True,
+                                  "text": "A parking rota for the street."})
+    assert started.status_code == 200, started.text
+    with engine.begin() as connection:
+        run_input = connection.execute(text("SELECT input FROM workflow_runs WHERE id = :r"),
+                                       {"r": started.json()["run_id"]}).scalar()
+    assert run_input.get("new_app") is True and "extends_run_id" not in run_input
+    built = _built_approving_gates(client, engine, started.json()["run_id"])
+    assert built[0]["finalize_ctx"].get("new_app") is True
+    assert _clones_shared(engine, built[0]["id"]) == "main"
+
+
+def _as(principal_kind):
+    from boss_engine.identity.principal import (AuthContext, AuthMethod, Principal,
+                                                PrincipalKind, PrincipalStatus)
+
+    return AuthContext(Principal("usr_twoapps", getattr(PrincipalKind, principal_kind), "org_x",
+                                 PrincipalStatus.ACTIVE, "T"), AuthMethod.SESSION)
+
+
+def _tool_as(engine, auth, **args) -> dict:
+    from boss_engine.tools.registry import CURRENT_TOOL_AUTH
+
+    token = CURRENT_TOOL_AUTH.set(auth)
+    try:
+        return _tool(engine, **args)
+    finally:
+        CURRENT_TOOL_AUTH.reset(token)
+
+
+def test_a_persons_new_app_is_recorded_on_the_build(engine, one_repo, monkeypatch):
+    monkeypatch.setattr(get_settings(), "target_github_owner", OWNER)
+    monkeypatch.setattr(get_settings(), "target_github_repo", SHARED)
+    out = _tool_as(engine, _as("USER"), instructions="A parking rota for the street.",
+                   new_app=True)
+    assert out.get("status") == "queued", out
+    assert _run(engine, out["run_id"])["finalize_ctx"].get("new_app") is True
+    named = _tool_as(engine, _as("USER"), instructions="Fix the list.", extends_run_id=N_ROOT)
+    assert "new_app" not in _run(engine, named["run_id"])["finalize_ctx"]
+
+
+def test_an_agents_new_app_never_skips_the_empty_checkout_guard(engine, one_repo, monkeypatch):
+    """A model-written new_app answers the app question only: the build is not declared a new
+    app, so the guard still checks it against every app of the repository (AR-54)."""
+    from boss_engine.services import agent_acts
+
+    monkeypatch.setattr(get_settings(), "target_github_owner", OWNER)
+    monkeypatch.setattr(get_settings(), "target_github_repo", SHARED)
+    no_identity = _tool(engine, instructions="A parking rota.", new_app=True)
+    assert no_identity.get("status") == "queued", no_identity
+    assert "new_app" not in _run(engine, no_identity["run_id"])["finalize_ctx"]
+    with agent_acts.origin(act_id="act_twoapps", actor="ceo"):     # a chat turn's model
+        in_a_turn = _tool_as(engine, _as("USER"), instructions="A garden swap.", new_app=True)
+    assert in_a_turn.get("status") == "queued", in_a_turn
+    assert "new_app" not in _run(engine, in_a_turn["run_id"])["finalize_ctx"]
+
+
+def test_the_app_question_never_coaches_an_agent_to_bypass_it(engine, one_repo):
+    out = _tool(engine, instructions="Fix the list.")
+    assert out.get("needs_app_choice") is True, out
+    assert "pass new_app: true" not in out["error"]
+    assert "ask them" in out["error"]
+
+
+def test_an_agents_start_workflow_never_declares_a_new_app(engine, one_repo):
+    """start_workflow's `inputs` are a model's: a `new_app` among them is dropped and named, so
+    the build step is never handed a new app an agent claimed."""
+    from boss_engine.context import EngineContext
+    from boss_engine.tools import build_default_registry
+
+    from apps.api.app import main
+
+    from boss_engine.services import workflow_catalogue
+
+    with engine.begin() as connection:
+        workflow_catalogue.seed(connection, _project(), actor="boss")
+    ctx = EngineContext(settings=get_settings(), engine=engine)
+    args = {"workflow_key": "minor_feature", "directive": "A parking rota.",
+            "title": "Parking Rota", "inputs": {"new_app": True}}
+    out = build_default_registry().invoke("start_workflow", ctx, project_id=_project(),
+                                          actor="ceo", args=args)
+    if out.get("missing"):     # past what this test project lacks (a repository, a model)
+        out = build_default_registry().invoke(
+            "start_workflow", ctx, project_id=_project(), actor="ceo",
+            args={**args, "start_anyway": [m["key"] for m in out["missing"]]})
+    assert "new_app" in (out.get("ignored_input") or []), out
+    run_id = str((out.get("run") or {}).get("id") or out.get("run_id") or "")
+    assert run_id, out
+    with engine.begin() as connection:
+        run_input = connection.execute(text("SELECT input FROM workflow_runs WHERE id = :r"),
+                                       {"r": run_id}).scalar()
+    assert "new_app" not in run_input
+    import inspect
+
+    assert 'if k != "new_app"' in inspect.getsource(main.start_code_task_endpoint)
+
+
+# ── A Command Center launch Into the project (ENT-FEAT-01's own door, end to end) ─────────
+
+def _readme_only_main(tmp_path):
+    import subprocess
+
+    tree = tmp_path / "main"
+    tree.mkdir()
+    for cmd in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
+                ["config", "user.name", "t"]):
+        subprocess.run(["git", *cmd], cwd=tree, check=True)
+    (tree / "README.md").write_text("# northgate\n")
+    subprocess.run(["git", "add", "README.md"], cwd=tree, check=True)
+    return tree
+
+
+def _launched_build(client, engine, *, title, into):
+    """factory_launch.build_run as the launch calls it (spec-first: the Easy Mode workflow), then
+    the real runner until its build step has started the build."""
+    from boss_engine.services import factory_launch
+    from boss_engine.services.jobs import JobLeaseService
+
+    spec = {"title": title, "prompt": f"{title} for the street.", "spec_first": True,
+            "github_repo": f"{OWNER}/{SHARED}", "mode": "new_app", "id": "tpl_into",
+            **({"existing_project": True} if into else {})}
+    with engine.begin() as connection:
+        started = factory_launch.build_run(
+            connection, project_id=_project(), spec=spec, actor="ceo", settings=get_settings(),
+            jobs=JobLeaseService(get_settings()), reservation_id=f"rsv_{title[:6].lower()}")
+    return _built_approving_gates(client, engine, started["workflow_run_id"])[0]
+
+
+def test_a_template_launched_into_the_project_builds_from_main_past_its_other_apps(
+        client, engine, one_repo, panel, tmp_path):
+    """THE REPORTED FLOW: a template launched Into a project whose repository holds two apps'
+    unmerged changes (factory_launch, `existing_project`) -> its Easy Mode run -> the runner's
+    build step -> a build that says new_app -> the empty-checkout guard lets it start on the
+    README-only main. The same launch not Into the project (no mark) is refused there."""
+    from boss_engine.services import app_scope, build_checkout
+
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO github_connections (id, project_id, connection_label, auth_method, "
+            "credential_ref, status, created_by) VALUES ('ghc_twoapps', :p, 'seed', "
+            "'personal_access_token', 'secret:none', 'active', 'seed')"), {"p": _project()})
+        connection.execute(text(
+            "INSERT INTO github_repository_bindings (id, project_id, connection_id, owner, name, "
+            "full_name, role, default_branch, created_by) VALUES ('ghb_twoapps', :p, "
+            "'ghc_twoapps', :o, :n, :r, 'primary', 'main', 'seed')"),
+            {"p": _project(), "o": OWNER, "n": SHARED, "r": f"{OWNER}/{SHARED}"})
+        # Both apps BUILT something (their code is on their branches).
+        connection.execute(text(
+            "UPDATE code_task_runs SET state = jsonb_build_object('impl_files', "
+            "jsonb_build_array('app/index.js')) WHERE id IN (:a, :b)"), {"a": R_ROOT, "b": N_ROOT})
+    tree = _readme_only_main(tmp_path)
+
+    def guard(build):
+        fctx = build["finalize_ctx"]
+        with engine.begin() as connection:
+            return build_checkout.problem(
+                connection, tree, owner=OWNER, repo=SHARED, run_id=build["id"],
+                base_branch="main", app_id=str(fctx.get("app_id") or ""),
+                new_app=app_scope.declared_new_app(fctx))
+
+    into = _launched_build(client, engine, title="Parking Rota", into=True)
+    assert into["finalize_ctx"].get("new_app") is True
+    assert _clones_shared(engine, into["id"]) == "main"
+    assert guard(into) is None
+
+    control = _launched_build(client, engine, title="Garden Swap", into=False)
+    assert "new_app" not in control["finalize_ctx"]
+    refused = guard(control)
+    assert refused and f"boss/code/{R_ROOT}" in refused
+
+
+def test_start_run_drops_a_callers_new_app_and_honours_only_the_declaration(client, engine,
+                                                                            one_repo):
+    from boss_engine.services import workflows as wf
+
+    installed = client.post("/v1/delivery-workflows/catalogue/install",
+                            json={"project_id": _project(), "actor": "ceo"})
+    assert installed.status_code == 200, installed.text
+    with engine.begin() as connection:
+        version = str(wf.running_version(connection, _project(), "minor_feature")["version_id"])
+        forged = wf.start_run(connection, project_id=_project(), actor="ceo",
+                              input_data={"title": "Forged", "directive": "x", "new_app": True},
+                              dedupe_key="twoapps:forged", workflow_version_id=version)
+        declared = wf.start_run(connection, project_id=_project(), actor="ceo",
+                                input_data={"title": "Declared", "directive": "x"},
+                                dedupe_key="twoapps:declared", workflow_version_id=version,
+                                declared_new_app=True)
+        inputs = dict(connection.execute(text(
+            "SELECT id, input FROM workflow_runs WHERE id IN (:a, :b)"),
+            {"a": forged["id"], "b": declared["id"]}).all())
+    assert "new_app" not in inputs[forged["id"]]
+    assert inputs[declared["id"]].get("new_app") is True
+
+
+def test_only_a_persons_request_declares_a_new_app_at_an_http_door():
+    """The rule the start door asks (and every door through it: New work, templates, the
+    composer): only a person. Driven over HTTP under each mode in
+    test_only_a_person_declares_a_new_app.py."""
+    import dataclasses
+    import inspect
+
+    from boss_engine.identity.principal import RunTokenClaims
+    from boss_engine.services.app_scope import a_person_asked
+
+    from apps.api.app import main
+
+    person = _as("USER")
+    assert a_person_asked(person) is True
+    assert a_person_asked(_as("AGENT")) is False
+    assert a_person_asked(_as("SERVICE_ACCOUNT")) is False
+    fields = {f.name for f in dataclasses.fields(RunTokenClaims)}
+    claims = RunTokenClaims(**{name: None for name in fields})
+    assert a_person_asked(dataclasses.replace(person, run_token=claims)) is False
+    assert a_person_asked(None) is False       # no credential presented: nobody
+    source = inspect.getsource(main.start_delivery_workflow)
+    assert "_a_person_asked(identity_guard.presented_identity())" in source
+    assert "declared_new_app=declared_new_app" in source

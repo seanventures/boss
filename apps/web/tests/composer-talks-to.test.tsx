@@ -181,6 +181,7 @@ describe("Talks to in the composer", () => {
                               env: "preview", test_users: "on" }]);
     expect(posts).toHaveLength(1);                         // and then the change starts
     expect(posts[0].input).not.toHaveProperty("app_links");
+    expect(posts[0].input).not.toHaveProperty("new_app");  // a change to an app, not a new one
     expect($('[data-testid="np-talk-0"]')).toBeNull();     // made: it leaves the form
   });
 
@@ -218,6 +219,7 @@ describe("Talks to in the composer", () => {
     expect(posts).toHaveLength(1);
     expect(posts[0].input!.app_links).toEqual([
       { provider_app_key: "crun_bank", alias: "BANKING", env: "preview", credentials: "none" }]);
+    expect(posts[0].input!.new_app).toBe(true);            // said so, all the way to its build
   });
 
   it("a half-filled row stops Start and says so", async () => {

@@ -207,6 +207,29 @@ _UNSET = object()
 #: them. Set by the guard on every request it decides.
 IDENTITY_MODE: ContextVar[str] = ContextVar("boss_identity_mode", default="")
 REQUEST_IDENTITY: ContextVar[Any] = ContextVar("boss_request_identity", default=None)
+#: The request's connection, kept under EVERY mode so a check that needs to know who presented
+#: the request (presented_identity) can ask even when the guard decided nothing: `off` (it returns
+#: before authenticating) or shadow with no credential. Nothing else reads it.
+REQUEST_CONN: ContextVar[Any] = ContextVar("boss_request_conn", default=None)
+
+
+def presented_identity() -> Any:
+    """WHO PRESENTED THIS REQUEST, whatever the mode: the guard's AuthContext when it decided the
+    request, else the credential the request carries, authenticated now (once, cached on the
+    request like every authentication) — never a refusal and never set as REQUEST_IDENTITY, so no
+    other decision changes in off or shadow mode. None when the request carries no credential, or
+    one that does not authenticate. For the few rules that must tell a person from an agent's run
+    token under every mode (app_scope.a_person_asked: who may declare a new app)."""
+    ctx = REQUEST_IDENTITY.get()
+    if ctx is not None:
+        return ctx
+    conn = REQUEST_CONN.get()
+    if conn is None:
+        return None
+    try:
+        return request_auth(conn)
+    except Exception:  # noqa: BLE001 — a credential that does not authenticate is nobody
+        return None
 
 
 def _authenticate(creds: authn.RequestCredentials, conn: Optional[HTTPConnection] = None):
@@ -275,6 +298,7 @@ async def enforce_access(conn: HTTPConnection) -> None:
 
 async def _enforce_access(conn: HTTPConnection) -> None:
     CLAIMED_OTHER.set(None)
+    REQUEST_CONN.set(conn)
     route = conn.scope.get("route")
     endpoint = getattr(route, "endpoint", None) or conn.scope.get("endpoint")
     settings = get_settings()
