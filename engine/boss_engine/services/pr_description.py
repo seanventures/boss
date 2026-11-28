@@ -160,6 +160,19 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         section = baseline_verify.pr_section(baseline_verify.BaselineRecord.from_dict(baseline))
         if section:
             out += ["", section.rstrip()]
+    # PE-Phase 2 (BOSSAPP-790): acceptance evidence per criterion + PR risk rating.
+    if evidence.get("criteria_evidence"):
+        from . import clean_pr as _clean_pr
+
+        crit_md = _clean_pr.render_criterion_evidence(evidence.get("criteria_evidence") or ())
+        if crit_md:
+            out += ["", crit_md]
+    if evidence.get("risk_rating"):
+        from . import clean_pr as _clean_pr
+
+        risk_md = _clean_pr.render_risk_section(evidence.get("risk_rating"))
+        if risk_md:
+            out += ["", risk_md]
     # Links.
     out += ["", "### In BOSS"]
     if build_url:
