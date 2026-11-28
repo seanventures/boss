@@ -36,6 +36,7 @@ os.environ.setdefault("BOSS_IDENTITY_SERVER_KEY",
 PROJECT = "boss-dogfood"
 #: What the console and the worker send, as the laptop's logs show it (apps/worker control_plane).
 MIX = [
+    ("get", f"/v1/code-tasks?project_id={PROJECT}&limit=200&exclude_internal=true", None),
     ("get", f"/v1/console/v2/overview?project_id={PROJECT}", None),
     ("post", "/v1/worker/poll", {"worker_id": "budget-1", "capabilities": ["x.none"], "lease_ttl_seconds": 60}),
     ("post", "/v1/delivery/health/sweep", None),
