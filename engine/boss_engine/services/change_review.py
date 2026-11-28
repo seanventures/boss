@@ -206,20 +206,58 @@ def set_viewed(c: Any, project_id: str, key: str, person: str, *, path: str, sha
     return viewed(c, project_id, key, person)
 
 
-def _decision_for(c: Any, url: str) -> Optional[dict[str, Any]]:
+def _decision_for(c: Any, project_id: str, url: str) -> Optional[dict[str, Any]]:
     row = c.execute(text(
-        "SELECT id, status, question FROM decisions WHERE recommendation->>'pull_request_url' = :u "
+        "SELECT id, status, question, recommendation->>'head_sha' AS head_sha FROM decisions "
+        "WHERE project_id = :p AND recommendation->>'pull_request_url' = :u "
         "AND (recommendation->>'action') = 'review_pull_request' ORDER BY created_at DESC LIMIT 1"),
-        {"u": url}).mappings().first()
+        {"p": project_id, "u": url}).mappings().first()
     return dict(row) if row else None
+
+
+_COMMIT = re.compile(r"[0-9a-f]{7,64}")
+
+
+def same_head(a: Optional[str], b: Optional[str]) -> bool:
+    """Whether two commit ids name one commit. Each may be abbreviated, never below 7 hex
+    characters: a shorter or empty id names no commit, so it matches nothing."""
+    a, b = str(a or "").strip().lower(), str(b or "").strip().lower()
+    return (bool(_COMMIT.fullmatch(a) and _COMMIT.fullmatch(b))
+            and (a.startswith(b) or b.startswith(a)))
+
+
+def stale_card_words(decision: Optional[dict[str, Any]], head: Optional[str]) -> Optional[str]:
+    """Why the change's merge card cannot merge the head being shown, or None. Approving a card
+    merges the head it was raised for, so every Merge offer and Merge press is bound to that
+    head: a card for an earlier head waits for BOSS to raise one for the current head."""
+    card_head = str((decision or {}).get("head_sha") or "").strip()
+    head = str(head or "").strip()
+    if same_head(card_head, head):
+        return None
+    now = f"the change is now at {head[:7]}" if _COMMIT.fullmatch(head.lower()) else \
+        "the change's head could not be read"
+    if not _COMMIT.fullmatch(card_head.lower()):
+        return (f"Its merge card names no commit it was raised for, and {now}, so approving it "
+                "could merge something nobody reviewed. BOSS asks again for the current head "
+                "before it can be merged.")
+    return (f"Its merge card was raised for {card_head[:7]}; {now}. "
+            "BOSS asks again for the current head before it can be merged.")
 
 
 def _merge_offer(c: Any, project_id: str, url: str, head: str, is_open: bool
                  ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
-    decision = _decision_for(c, url)
+    decision = _decision_for(c, project_id, url)
     merge = ({"how": "approve the review decision", "decision_id": decision["id"]}
              if decision and decision["status"] == "pending" and is_open else None)
     if merge is not None:
+        # THE MERGE BUTTON MERGES THE HEAD THIS PAGE SHOWS. Approving the card merges the head
+        # the card was raised for (software_factory pins it), so a card for an earlier head of
+        # this change is held here until BOSS raises the card for the current one.
+        stale = stale_card_words(decision, head)
+        if stale:
+            merge["held"] = {"state": "stale_head", "label": "Waiting for the current head",
+                             "reason": stale}
+            return decision, merge
         from . import ci_gate
 
         merge["held"] = ci_gate.approval_hold(c, project_id, {
@@ -1208,7 +1246,7 @@ class GitHubSource:
                     "round": 0, "required": True} for rc in ordered]
         # The PR's review decision stays as it is: a GitHub review is not sent back
         # (decision_actions offers no revise for it); the fix run's new head asks it again.
-        decision = _decision_for(self.c, self.url)
+        decision = _decision_for(self.c, self.project_id, self.url)
         try:
             started = code_task_service.start_followup_task(
                 self.c, parent_run_id=str(parent), instructions="\n\n".join(parts), jobs=jobs,

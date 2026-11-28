@@ -243,6 +243,60 @@ def test_merge_is_held_while_a_persons_comment_is_open(client, world, engine, re
     assert merged.status_code in (200, 202), merged.text
 
 
+def test_merge_is_bound_to_the_head_its_card_was_raised_for(client, world, engine, repo_root,
+                                                            monkeypatch):
+    """ENT-BUILD-01: the card named the head whose checks failed while the change sat on its
+    repair. Approving a card merges the head the card names, so neither the page nor the Merge
+    route may approve it for a different head; a card for the current head merges."""
+    pid, bound, bare, branch, pr, _r = _project_with_change(engine, world)
+    head = local_repo.branch_sha(bare, branch)
+    old = _decision(engine, pid, pr.url, "0" * 40)
+    monkeypatch.setattr(main.decisions.settings, "enable_sandbox_merge", True, raising=False)
+    with _owner(world):
+        view = client.get(f"/v1/projects/{pid}/local-changes/1").json()
+        refused = client.post(f"/v1/projects/{pid}/local-changes/1/merge", json={"force": True})
+    assert view["merge"]["held"]["state"] == "stale_head"
+    assert "0000000" in view["merge"]["held"]["reason"] and head[:7] in view["merge"]["held"]["reason"]
+    assert refused.status_code == 409 and refused.json()["error"] == "stale_head", refused.text
+    with engine.connect() as db:
+        assert db.execute(text("SELECT status FROM decisions WHERE id = :d"),
+                          {"d": old}).scalar() == "pending"
+    current = _decision(engine, pid, pr.url, head)
+    assert current != old, "a repeat for a new head is a new card, never the old one renamed"
+    with _owner(world):
+        view = client.get(f"/v1/projects/{pid}/local-changes/1").json()
+        merged = client.post(f"/v1/projects/{pid}/local-changes/1/merge", json={})
+    assert view["merge"]["decision_id"] == current and view["merge"]["held"] is None
+    assert merged.status_code in (200, 202), merged.text
+
+
+def test_a_short_or_missing_head_never_binds_a_merge():
+    """Seven hex characters or more on both sides, or the card is stale: an empty, short or
+    non-hex id names no commit, so it never passes as the head being shown."""
+    from boss_engine.services.change_review import same_head, stale_card_words
+
+    full = "abc1234" + "0" * 33
+    assert same_head(full, "abc1234") and same_head("ABC1234", full)
+    for card in ("", None, "abc", "abc123", "zzzzzzzz"):
+        assert not same_head(card, full)
+        words = stale_card_words({"head_sha": card}, full)
+        assert words and "names no commit" in words
+    assert stale_card_words({"head_sha": full}, "") is not None
+    assert stale_card_words({"head_sha": full}, "abc12") is not None
+    assert stale_card_words({"head_sha": full}, full) is None
+
+
+def test_a_card_without_a_head_is_refused_at_merge(client, world, engine, repo_root, monkeypatch):
+    pid, bound, bare, branch, pr, _r = _project_with_change(engine, world)
+    _decision(engine, pid, pr.url, "")
+    monkeypatch.setattr(main.decisions.settings, "enable_sandbox_merge", True, raising=False)
+    with _owner(world):
+        view = client.get(f"/v1/projects/{pid}/local-changes/1").json()
+        refused = client.post(f"/v1/projects/{pid}/local-changes/1/merge", json={"force": True})
+    assert view["merge"]["held"]["state"] == "stale_head"
+    assert refused.status_code == 409 and refused.json()["error"] == "stale_head", refused.text
+
+
 def test_an_agents_comment_never_holds_the_merge(engine, world, repo_root):
     pid, _b, _bare, _branch, pr, _r = _project_with_change(engine, world)
     with engine.begin() as db:
