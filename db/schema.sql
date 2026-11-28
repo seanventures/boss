@@ -17381,6 +17381,26 @@ CREATE TABLE IF NOT EXISTS area_agent_goals (
   cadence_hours INTEGER NOT NULL DEFAULT 24 CHECK (cadence_hours >= 1),
   last_heartbeat_at TIMESTAMPTZ,
   next_heartbeat_at TIMESTAMPTZ,
+
+-- ZERO-TOKEN RECURRING JOBS & CHANGE-ONLY MONITORS (BOSSAPP-939; Kiro gap 6):
+-- Script/command jobs run with zero model calls; change monitors wake an agent only when
+-- the watched revision changes. Enabled by default; agents may create them for their project.
+CREATE TABLE IF NOT EXISTS zero_token_jobs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('script', 'command', 'change_monitor')),
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  cadence TEXT NOT NULL DEFAULT 'interval' CHECK (cadence IN ('interval', 'hourly', 'daily', 'weekly')),
+  interval_minutes INTEGER NOT NULL DEFAULT 15 CHECK (interval_minutes >= 1),
+  command_spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+  watch_target JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_revision TEXT,
+  last_checked_at TIMESTAMPTZ,
+  last_triggered_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_output TEXT,
+  token_cost_usd_micros BIGINT NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL DEFAULT 'boss',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -17457,3 +17477,23 @@ CREATE TABLE IF NOT EXISTS area_agent_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_area_agent_reports_project
   ON area_agent_reports (project_id, area_key, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_zero_token_jobs_project
+  ON zero_token_jobs (project_id, enabled, kind);
+
+CREATE TABLE IF NOT EXISTS zero_token_job_runs (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES zero_token_jobs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('ok', 'skipped_unchanged', 'triggered_agent', 'failed')),
+  revision_before TEXT,
+  revision_after TEXT,
+  changed BOOLEAN NOT NULL DEFAULT false,
+  output_summary TEXT NOT NULL DEFAULT '',
+  agent_run_ref TEXT,
+  token_cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_zero_token_job_runs_job
+  ON zero_token_job_runs (job_id, created_at DESC);

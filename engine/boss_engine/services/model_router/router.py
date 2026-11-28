@@ -262,7 +262,8 @@ class Router:
         started = time.perf_counter()
         mode = (request.mode_override or snapshot.policy.mode or "fixed").lower()
         agent_mode = _agent_mode(request)
-        if mode == "shadow" and agent_mode not in ("local", "pinned"):
+        agent_harness = _agent_harness(request)
+        if mode == "shadow" and agent_mode not in ("local", "pinned") and not agent_harness:
             # SHADOW MODE (BOSSAPP-779): act strictly on the Fixed decision (zero behavioral risk),
             # while computing and logging the counterfactual Smart decision beside it.
             decision = _with(self._fixed(request, snapshot), mode="shadow")
@@ -289,13 +290,13 @@ class Router:
                 )
             except Exception:  # noqa: BLE001 — shadow failure must never break Fixed execution
                 decision = _with(decision, rules=(*decision.rules, "shadow_fallback"))
-        elif mode != "smart" and agent_mode not in ("local", "pinned"):
+        elif mode != "smart" and agent_mode not in ("local", "pinned") and not agent_harness:
             decision = self._fixed(request, snapshot)
         else:
             decision = self._smart(request, snapshot, ledger)
             if mode != "smart":
-                # LOCAL MEANS LOCAL, IN FIXED MODE TOO: an Agent Studio Local/Pinned policy is
-                # obeyed whatever the routing mode (Decision 15).
+                # LOCAL MEANS LOCAL, IN FIXED MODE TOO: an Agent Studio Local/Pinned policy
+                # (including a pinned harness/engine, BOSSAPP-938) is obeyed in both Fixed and Smart.
                 decision = _with(decision, mode="fixed", binding=True,
                                  rules=decision.rules + ("agent_policy",))
         decision = _with(decision, latency_ms=(time.perf_counter() - started) * 1000,
@@ -494,6 +495,7 @@ class Router:
                 why.append(f"The session's model can't run now ({problem}); a new session")
                 rules.append("session_broken")
         agent_mode = _agent_mode(request)
+        agent_harness = _agent_harness(request)
         if hard is not None:
             pass
         elif request.task_pin and request.task_pin.engine:
@@ -501,18 +503,37 @@ class Router:
             engine_pin = None if hard else request.task_pin.engine
             why.append(f"Pinned on the task: {engine_label(request.task_pin.engine)}")
             rules.append("pin:task")
-        elif agent_mode == "pinned":
-            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"),
-                                (snapshot.job_pins.get(job) or ("claude_code", None))[0])
-            if pinned and pinned.engine:
+        elif agent_mode == "pinned" or (agent_harness and agent_mode != "local"):
+            default_eng = agent_harness or (snapshot.job_pins.get(job) or ("claude_code", None))[0]
+            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"), default_eng)
+            if agent_harness and pinned and pinned.model:
+                hard = Target(agent_harness, pinned.model)
+                why.append(
+                    f"Pinned on the agent: {engine_label(agent_harness)} · {pinned.model}"
+                )
+                rules.extend(["pin:agent", "pin:agent_harness"])
+            elif agent_harness:
+                engine_pin = agent_harness
+                why.append(f"Pinned harness on the agent: {engine_label(agent_harness)}")
+                rules.append("pin:agent_harness")
+            elif pinned and pinned.engine:
                 hard = pinned if pinned.model else None
                 engine_pin = None if hard else pinned.engine
-                why.append("Pinned on the agent")
+                why.append(
+                    f"Pinned on the agent: {engine_label(pinned.engine)}"
+                    + (f" · {pinned.model}" if pinned.model else "")
+                )
                 rules.append("pin:agent")
         elif agent_mode == "local":
             allowed, strict = set(LOCAL_ENGINES), True
-            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"), None)
-            if pinned and pinned.engine in LOCAL_ENGINES:
+            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"), agent_harness)
+            if agent_harness and agent_harness in LOCAL_ENGINES:
+                if pinned and pinned.model:
+                    hard = Target(agent_harness, pinned.model)
+                else:
+                    engine_pin = agent_harness
+                rules.append("pin:agent_harness")
+            elif pinned and pinned.engine in LOCAL_ENGINES:
                 hard = pinned if pinned.model else None
                 engine_pin = None if hard else pinned.engine
             why.append("The agent runs on local models only")
@@ -669,6 +690,13 @@ class Router:
 
 def _agent_mode(request: RouteRequest) -> str:
     return str((request.agent_policy or {}).get("selection_mode") or "router").lower()
+
+
+def _agent_harness(request: RouteRequest) -> Optional[str]:
+    """Pinned engine/harness on an Agent Studio role policy (BOSSAPP-938)."""
+    policy = request.agent_policy or {}
+    raw = str(policy.get("pinned_harness") or policy.get("pinned_engine") or "").strip().lower()
+    return raw or None
 
 
 def _blocked(target: Target, snapshot: Snapshot, *, no_metered: bool = False) -> Optional[str]:

@@ -33300,6 +33300,12 @@ def _ambient_org_actor(connection, claimed_actor: str | None) -> str:
 app.include_router(build_ambient_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor, org_actor=_ambient_org_actor))
+# ZERO-TOKEN JOBS & LEARNED SKILLS (BOSSAPP-939, BOSSAPP-941; Kiro gaps 6 & 8)
+from .routers.zero_token_jobs import build_zero_token_and_learned_skills_router
+
+app.include_router(build_zero_token_and_learned_skills_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 # DOCUMENTS (routers/documents.py, services/documents.py; BOSSAPP-874): PRDs, plans, minutes and
 # architectures with append-only revisions, base-revision conflict checks and anchored comments.
 from .routers.documents import build_documents_router
