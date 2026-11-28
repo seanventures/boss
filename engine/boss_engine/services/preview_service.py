@@ -857,14 +857,43 @@ def python_source_has_main_guard(source: str) -> bool:
                for n in tree.body)
 
 
+def python_source_has_run_path(source: str) -> bool:
+    """PE-K (BOSSAPP-789): True when running the file actually executes a server/run path.
+
+    Building an app object (`app = FastAPI()` or `app = Flask(__name__)`) at import time is NOT
+    serving — running `python3 app.py` on such a file exits 0 with an empty log. Require a real
+    run path (`if __name__ == '__main__'`, `uvicorn.run`, `.run(`, `serve_forever`, `run_app`,
+    or `HTTPServer`/`ThreadingHTTPServer` instantiation + serve) before ranking as a server.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(source or "")
+    except (SyntaxError, ValueError):
+        return bool(re.search(r"""__name__\s*==\s*['"]__main__['"]""", source or ""))
+    if python_source_has_main_guard(source):
+        return True
+    _RUN_CALLS = frozenset({
+        "run", "serve_forever", "run_app", "run_simple", "start_server", "serve",
+    })
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call) and _called_name(sub) in _RUN_CALLS:
+                return True
+    return False
+
+
 def python_entry_strength(source: str) -> int:
-    """How surely a program is an app: 0 serves HTTP, 1 has a __main__ block, 2 merely calls.
+    """How surely a program is an app: 0 serves HTTP with a run path, 1 has a __main__ block,
+    2 merely calls or builds an app object without serving.
 
     python_source_is_program counts ANY top-level call, so a config module app_settings.py that
     runs load_dotenv() is "a program" — and in changed-list order it beat the server.py the same
     build wrote. Being a program qualifies a candidate; this ranks the qualified ones.
     """
-    if python_source_serves(source):
+    if python_source_serves(source) and python_source_has_run_path(source):
         return 0
     return 1 if python_source_has_main_guard(source) else 2
 
@@ -1918,6 +1947,15 @@ def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Op
                 'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory dist',
             ]
         script = "dev" if scripts.get("dev") else "start" if scripts.get("start") else None
+        # PE-K (BOSSAPP-789): never run a monorepo workspace root `dev` script as "the app".
+        if script == "dev" and _is_monorepo_root_package(workdir, payload, str(scripts.get("dev") or "")):
+            logger.info(
+                "preview: skipping monorepo root package.json dev script in %s; resolving app entry instead",
+                workdir,
+            )
+            script = "start" if scripts.get("start") and not _is_monorepo_root_package(
+                workdir, payload, str(scripts.get("start") or "")
+            ) else None
         if script:
             suffix = " -- --host 0.0.0.0" if script == "dev" else ""
             # `start` RUNS the app; it does not compile it. A TypeScript service whose start
@@ -1995,6 +2033,61 @@ def node_build_step(app_root: Path, manifest: dict) -> str:
     return ""
 
 
+_MONOREPO_DEV_MARKERS = re.compile(
+    r"(?i)\b(?:pnpm\s+-r|pnpm\s+--recursive|turbo\s+run|nx\s+run-many|lerna\s+run|"
+    r"npm-run-all|concurrently|workspaces)\b"
+)
+
+
+def _is_monorepo_root_package(workdir: Path, payload: dict[str, Any], script_cmd: str) -> bool:
+    """PE-K (BOSSAPP-789): detect a monorepo workspace root package.json so its root dev script
+    is never launched as a single app preview."""
+    has_workspaces = bool(payload.get("workspaces")) or (workdir / "pnpm-workspace.yaml").is_file()
+    if has_workspaces and not (workdir / "index.html").is_file():
+        return True
+    return bool(_MONOREPO_DEV_MARKERS.search(script_cmd or ""))
+
+
+def infer_pythonpath_entries(workdir: Path) -> list[str]:
+    """PE-K (BOSSAPP-789): infer PYTHONPATH entries for guessed Python entries from pyproject.toml
+    or standard repo source layouts (e.g., engine/, src/), so guessed runs do not fail with
+    ModuleNotFoundError (e.g., No module named boss_engine)."""
+    entries: list[str] = []
+    seen: set[str] = set()
+
+    def _add(rel: str) -> None:
+        clean = rel.strip().strip("/")
+        if not clean or clean in seen:
+            return
+        if (workdir / clean).is_dir():
+            seen.add(clean)
+            entries.append(clean)
+
+    pyproject = workdir / "pyproject.toml"
+    if pyproject.is_file():
+        raw = pyproject.read_text(errors="ignore")
+        for m in re.finditer(r"""pythonpath\s*=\s*\[([^\]]+)\]""", raw, re.I | re.S):
+            for item in re.findall(r"""['"]([^'"]+)['"]""", m.group(1)):
+                _add(item)
+        for m in re.finditer(r"""where\s*=\s*\[([^\]]+)\]""", raw, re.I | re.S):
+            for item in re.findall(r"""['"]([^'"]+)['"]""", m.group(1)):
+                _add(item)
+
+    makefile = workdir / "Makefile"
+    if makefile.is_file():
+        raw_mk = makefile.read_text(errors="ignore")
+        for m in re.finditer(r"""PYTHONPATH\s*[:?]?=\s*([^\s;#]+)""", raw_mk):
+            for seg in m.group(1).split(":"):
+                seg = seg.strip().lstrip("./")
+                if seg and not seg.startswith("$"):
+                    _add(seg)
+
+    for candidate in ("engine", "src"):
+        if (workdir / candidate).is_dir() and any((workdir / candidate).glob("*/__init__.py")):
+            _add(candidate)
+    return entries
+
+
 def command_for_entry(workdir: Path, kind: str, value: str) -> Optional[list[str]]:
     """The command that runs ONE resolved app entry. The only place an entry becomes a command.
 
@@ -2026,9 +2119,16 @@ def command_for_entry(workdir: Path, kind: str, value: str) -> Optional[list[str
         # python_entry_invocation decides script vs `-m` — a package module run as a script
         # cannot resolve its relative imports (crun_3e370c11).
         run_dir, argv = python_entry_invocation(workdir, value)
+        pypaths = infer_pythonpath_entries(workdir)
+        env_prefix = ""
+        if pypaths:
+            joined = ":".join(shlex.quote(str((workdir / p).resolve())) for p in pypaths)
+            env_prefix = f"PYTHONPATH={joined}:${{PYTHONPATH:-}} "
         if run_dir == ".":
+            if env_prefix:
+                return ["sh", "-lc", f"{env_prefix}{shlex.join(argv)}"]
             return argv
-        return ["sh", "-lc", f"cd {shlex.quote(run_dir)} && {shlex.join(argv)}"]
+        return ["sh", "-lc", f"cd {shlex.quote(run_dir)} && {env_prefix}{shlex.join(argv)}"]
     if kind == "java":
         from . import toolchains
 
