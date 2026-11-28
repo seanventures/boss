@@ -217,6 +217,11 @@ ACTIONS: dict[str, Rule] = {
     "self_improvement.rollout": _r(ASK_PROD_ONLY, NONE_VERSION, _EM, "install"),
     "storage_delete": _r(ASK_PROD_ONLY, NONE_DELETE, _INF, "install"),
     "storage_rule": _r(ACT, NONE_RECORD, _INF),
+    # The system doctor's heavy-slot changes (capacity_steward): BOSS-side resources, decided and
+    # recorded in one "Decided for you" row per episode; a raise is undone by draining it back.
+    "capacity_raise": _r(ACT, "restore_capacity", "system_doctor"),
+    "capacity_lower": _r(ACT, NONE_RECORD, "system_doctor"),
+    "capacity_reset": _r(ACT, NONE_RECORD, "system_doctor"),
     # G. credentials, external channels, data boundary
     "provide_github_token": _r(ASK_CREDENTIAL, NONE_RECORD, _EM),
     "provide_openai_api_key": _r(ASK_CREDENTIAL, NONE_RECORD, _EM),
