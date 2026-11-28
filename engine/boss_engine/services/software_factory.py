@@ -2027,6 +2027,7 @@ class SoftwareFactoryService:
         files: list[FileChange],
         module_spec: Any,
         model_id: Optional[str],
+        engine_name: Optional[str] = None,
     ) -> str:
         """Build review-packet markdown. Model failure never sinks the PR."""
         prompt = review_packet_prompt(title=title, summary=summary, files=files)
@@ -2040,8 +2041,18 @@ class SoftwareFactoryService:
             ),
         )
         try:
-            model = self.openai or model_routing.project_chat_adapter(
-                connection, self.settings, project_id)
+            if self.openai is not None:
+                model = self.openai
+            elif str(engine_name or "").strip().lower() == "scripted":
+                # BOSSAPP-1484: route scripted-engine builds through the scripted engine so
+                # scripted runs record zero real provider calls and never hit OPENAI_API_KEY.
+                model = model_routing.adapter_for(
+                    model_routing.ModelChoice("scripted", "run engine is scripted"),
+                    connection, self.settings, project_id,
+                )
+            else:
+                model = model_routing.project_chat_adapter(
+                    connection, self.settings, project_id)
             _ref, text, _usage = model.create_text_response(
                 prompt, system, model_id
             )
@@ -2324,6 +2335,9 @@ class SoftwareFactoryService:
             self.budget.release(connection, project_id, reservation_id, message)
             return {**kept, **plane_fields}
 
+        run_engine = None
+        if isinstance(evidence, dict):
+            run_engine = evidence.get("engine") or evidence.get("build_engine")
         review_text = self._review_packet_markdown(
             connection,
             project_id=project_id,
@@ -2333,6 +2347,7 @@ class SoftwareFactoryService:
             files=files,
             module_spec=module_spec,
             model_id=route.get("model_id"),
+            engine_name=str(run_engine) if run_engine else None,
         )
         # Packet is optional commentary. A skipped model call has no provider ref.
         review_provider_ref = None

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -113,7 +112,10 @@ def test_a_limit_with_no_reset_named_has_no_invented_retry_at():
 
 def test_a_header_retry_after_still_wins():
     retry = setup_checks._retry_after({"retry-after": "30"}, RECEIPT)
-    assert retry is not None and setup_checks.parse_time(retry) < RECEIPT_RESET
+    assert retry is not None
+    parsed = setup_checks.parse_time(retry)
+    now = datetime.now(timezone.utc)
+    assert now <= parsed <= now + timedelta(seconds=60)
 
 
 def _callers():

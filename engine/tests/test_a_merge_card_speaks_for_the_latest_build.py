@@ -141,17 +141,54 @@ def test_a_newer_builds_card_withdraws_the_cards_it_supersedes(eng, project):  #
         _cleanup(eng, project)
 
 
-def test_every_new_merge_card_withdraws_the_older_ones():
-    """Wiring, at the source: the one place a merge card is created withdraws the cards it
-    supersedes, by the pull request's URL, right after creating it."""
+def test_every_new_merge_card_withdraws_the_older_ones(eng, project):  # noqa: F811
+    """BOSSAPP-1482: behavioural check replacing the fragile source character-distance check.
+    Creating a newer merge card for a pull request withdraws older pending merge cards for
+    the same PR while keeping the newer card and unrelated PR cards pending."""
+    import ast
     import inspect
+    import textwrap
 
     from boss_engine.services.software_factory import SoftwareFactoryService
 
-    src = inspect.getsource(SoftwareFactoryService)
-    made = src.index('"merge_decision_required",')
-    sweep = src.index("withdraw_superseded_merge_cards(connection, project_id, pr.url,")
-    assert made < sweep < made + 900
+    # Structural AST check (independent of formatting/comment length): propose_pull_request
+    # invokes withdraw_superseded_merge_cards after creating a merge decision.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(SoftwareFactoryService.propose_pull_request)))
+    called = [
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    assert "withdraw_superseded_merge_cards" in called
+
+    # Behavioural check on Postgres: newer build's merge card supersedes older pending cards.
+    with eng.begin() as c:
+        root, early, _follow, latest = _lineage(c, project, latest_passed=EVERYTHING)
+        first = _card(c, project, run_id=root, url=PR)
+        second = _card(c, project, run_id=early, url=PR)
+        unrelated = _card(c, project, run_id=early, url=PR + "99")
+        newest = _card(c, project, run_id=latest, url=PR)
+    try:
+        with eng.begin() as c:
+            withdrawn = run_decisions.withdraw_superseded_merge_cards(
+                c, project, PR, newest, run_id=latest
+            )
+            statuses = {
+                r["id"]: r["status"]
+                for r in c.execute(
+                    text("SELECT id, status FROM decisions WHERE project_id = :p"),
+                    {"p": project},
+                ).mappings()
+            }
+        assert set(withdrawn) == {first, second}
+        assert statuses[first] == "withdrawn"
+        assert statuses[second] == "withdrawn"
+        assert statuses[newest] == "pending"
+        assert statuses[unrelated] == "pending"
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM decisions WHERE project_id = :p"), {"p": project})
+        _cleanup(eng, project)
 
 
 

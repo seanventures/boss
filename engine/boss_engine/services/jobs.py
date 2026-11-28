@@ -939,6 +939,7 @@ class JobLeaseService:
                         lease_expires_at = :lease_expires_at,
                         heartbeat_at = :now_utc,
                         attempt = jobs.attempt + 1,
+                        payload = COALESCE(jobs.payload, '{}'::jsonb) - 'takeover_from_epoch',
                         fence_epoch = """ + _NEXT_EPOCH_SQL + """,
                         updated_at = :now_utc
                     WHERE id = :job_id
@@ -1124,6 +1125,7 @@ class JobLeaseService:
                     lease_expires_at = :lease_expires_at,
                     heartbeat_at = :now_utc,
                     attempt = jobs.attempt + 1,
+                    payload = COALESCE(jobs.payload, '{}'::jsonb) - 'takeover_from_epoch',
                     fence_epoch = """ + _NEXT_EPOCH_SQL + """,
                     updated_at = :now_utc
                 WHERE id = :job_id
