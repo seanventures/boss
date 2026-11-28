@@ -2047,10 +2047,19 @@ class SoftwareFactoryService:
         ).mappings().all()
         return [dict(row) for row in rows]
 
-    def _build_review_packet_model(self, connection: Any, project_id: str) -> Any:
+    def _build_review_packet_model(
+        self, connection: Any, project_id: str, *, engine_name: Optional[str] = None
+    ) -> Any:
         if self.openai is not None:
             return self.openai
         try:
+            if str(engine_name or "").strip().lower() == "scripted":
+                # BOSSAPP-1484: route scripted-engine builds through the scripted engine so
+                # scripted runs record zero real provider calls and never hit OPENAI_API_KEY.
+                return model_routing.adapter_for(
+                    model_routing.ModelChoice("scripted", "run engine is scripted"),
+                    connection, self.settings, project_id,
+                )
             return model_routing.project_chat_adapter(connection, self.settings, project_id)
         except Exception as error:  # noqa: BLE001 — packet is optional
             return error
@@ -2112,10 +2121,13 @@ class SoftwareFactoryService:
         files: list[FileChange],
         module_spec: Any,
         model_id: Optional[str],
+        engine_name: Optional[str] = None,
     ) -> str:
         """Build review-packet markdown. Model failure never sinks the PR."""
         skipped: list[tuple[str, str, str, dict]] = []
-        model_or_error = self._build_review_packet_model(connection, project_id)
+        model_or_error = self._build_review_packet_model(
+            connection, project_id, engine_name=engine_name
+        )
         text = self._run_review_packet_model(
             model_or_error,
             receipt_id=receipt_id,
@@ -2490,7 +2502,12 @@ class SoftwareFactoryService:
                     "validation_summary": result.get("validation_summary"),
                     **plane_fields,
                 }
-            review_model = self._build_review_packet_model(c, project_id)
+            run_engine = None
+            if isinstance(evidence, dict):
+                run_engine = evidence.get("engine") or evidence.get("build_engine")
+            review_model = self._build_review_packet_model(
+                c, project_id, engine_name=str(run_engine) if run_engine else None
+            )
 
         # ── No Tx: external model call, git-host PR creation, CI wait, sandbox validation ───────
         pre_events: list[tuple[str, str, str, dict]] = []

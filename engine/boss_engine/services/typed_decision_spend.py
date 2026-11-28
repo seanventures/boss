@@ -171,21 +171,26 @@ def consumer_for(connection, project_id: str, source_id: Optional[str], actor: s
     return actor
 
 
-def capacity_after_failure(error: BaseException) -> dict:
+def capacity_after_failure(error: BaseException, *,
+                           provider_error: Optional[str] = None) -> dict:
     """What a failed call says about the SOURCE's capacity: only a capacity failure counts.
 
     Every failure used to be recorded as `capacity_state: unavailable`, and the router skips an
     unavailable source — so one crashed research call, or one rejected key, took the operator's
     only Claude subscription out of routing until something marked it available again.
+
+    BOSSAPP-1488: when `provider_error` (CLI stderr / direct provider error line, separate from
+    build/app output) is passed — or attached as `error.provider_error` — classify it
+    non-strictly so a provider-only "You've hit your weekly limit" with no reset still pauses
+    routing for `LIMIT_PROBE_S`, while mixed build/app output stays strict.
     """
-    text_ = str(error).lower()
+    raw_provider = provider_error if provider_error is not None else getattr(
+        error, "provider_error", None
+    )
+    text_ = str(raw_provider or error).lower()
     now = datetime.now(timezone.utc)
-    # THE ONE LIMIT DETECTOR (model_router.headroom), STRICT: an agent's reply or a tool's
-    # output can quote "Weekly limit reached" without any limit being hit, so a plan window
-    # counts only when the sentence named its reset. A per-minute rate limit is rate_limited;
-    # a closed plan window or a spend/credit limit takes the source out — UNTIL `reset_at`:
-    # nothing routed to a refused source ever succeeds to clear it, so the refusal must lapse
-    # by itself (entitlements._capacity_policy_denial) or a passing Setup check clears it.
+    # THE ONE LIMIT DETECTOR (model_router.headroom), STRICT for mixed output, NON-STRICT
+    # when given the provider's own error line directly (BOSSAPP-1488).
     from .entitlements import CAPACITY_RESET_KEY
     from .model_router.headroom import LIMIT_PROBE_S, MINUTE, NO_CREDIT, limit_verdict
 
@@ -196,7 +201,11 @@ def capacity_after_failure(error: BaseException) -> dict:
         reset = named if named is not None and named > now else fallback
         return {"capacity_state": state, CAPACITY_RESET_KEY: reset.isoformat()}
 
-    verdict = limit_verdict(str(error), now, strict=True)
+    verdict = (
+        limit_verdict(str(raw_provider), now, strict=False)
+        if raw_provider
+        else limit_verdict(str(error), now, strict=True)
+    )
     if verdict is not None:
         if verdict.state == NO_CREDIT:
             # OUT OF CREDIT IS NOT A WINDOW: no clock lifts it. A person tops up; a green Setup

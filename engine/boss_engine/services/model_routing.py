@@ -377,6 +377,10 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
     from .openai_adapter import OpenAIAdapter
 
     engine = choice.engine
+    if engine == "scripted":
+        from .scripted_engine import ScriptedChatAdapter
+
+        return ScriptedChatAdapter()
     if not engine:
         # Nothing connected. The OpenAI adapter's own "OPENAI_API_KEY is not configured" is
         # what reaches the step, and model_failures explains it as "no connected model".

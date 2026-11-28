@@ -260,9 +260,12 @@ def test_the_shepherd_resumes_an_approved_run_instead_of_cancelling_it(eng, proj
                 {"p": project, "r": rid}).scalar()
         assert row["status"] == "running" and queued == 1
         assert row["finalize_ctx"]["approved_resume_requeues"] == 0
-        assert row["finalize_ctx"]["approved_resume_asked"]["answer"] == "retry"
+        # BOSSAPP-1482: 'retry' clears approved_resume_asked so a retry job lost before claiming
+        # the run can be re-queued and asked again instead of sitting silently at the plan gate.
+        assert "approved_resume_asked" not in row["finalize_ctx"]
 
-        # Answered once, never asked again — even at the cap.
+        # If the retry hits the cap again, Shepherd asks again; answering 'leave' records the
+        # answer and never asks again.
         with eng.begin() as c:
             c.execute(text("DELETE FROM jobs WHERE project_id = :p"), {"p": project})
             c.execute(text(
@@ -272,11 +275,20 @@ def test_the_shepherd_resumes_an_approved_run_instead_of_cancelling_it(eng, proj
                 {"r": rid, "n": APPROVED_RESUME_MAX_REQUEUES})
         sweep_abandoned_runs(eng, get_settings(), project)
         with eng.begin() as c:
+            esc2 = c.execute(text(
+                "SELECT id FROM shepherd_escalations WHERE task_ref = :r AND status = 'open'"),
+                {"r": rid}).scalar()
+        assert esc2 is not None
+        act(eng, get_settings(), f"shepherd:{esc2}", "leave", actor="ceo")
+        with eng.begin() as c:
+            row2 = c.execute(text(
+                "SELECT status, finalize_ctx FROM code_task_runs WHERE id = :r"),
+                {"r": rid}).mappings().one()
+            assert row2["finalize_ctx"]["approved_resume_asked"]["answer"] == "leave"
+            assert row2["status"] == "blocked"
             assert c.execute(text(
                 "SELECT count(*) FROM shepherd_escalations WHERE task_ref = :r AND "
                 "status = 'open'"), {"r": rid}).scalar() == 0
-            assert c.execute(text("SELECT status FROM code_task_runs WHERE id = :r"),
-                             {"r": rid}).scalar() != "cancelled"
     finally:
         _cleanup(eng, project)
 

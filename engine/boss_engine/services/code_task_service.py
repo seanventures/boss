@@ -3207,15 +3207,16 @@ def person_side_reason(reason: str) -> Optional[str]:
     return _person_side(str(reason or "").lower())
 
 
-def _is_limit_message(reason: str) -> bool:
-    """STRICT: a pipeline reason can carry the app's own test output ("expected 'Weekly limit
-    reached' to be visible"), so a plan limit counts only with the reset it named."""
+def _is_limit_message(reason: str, *, strict: bool = True) -> bool:
+    """STRICT for mixed pipeline output ("expected 'Weekly limit reached' to be visible");
+    NON-STRICT for a direct provider/CLI error line (BOSSAPP-1488)."""
     from .model_router.headroom import is_limit_message
 
-    return is_limit_message(reason, strict=True)
+    return is_limit_message(reason, strict=strict)
 
 
-def classify_pipeline_exception(reason: str) -> tuple[str, str]:
+def classify_pipeline_exception(reason: str, *,
+                                provider_error: Optional[str] = None) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
     failure: retrying with more turns / on the existing branch is the fix, and it must NOT trigger
@@ -3223,6 +3224,9 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
 
     Model TPM / rate-limit / credits / budget exhaustion is needs_human: escalate to a Decision
     rather than retrying forever into the DLQ (W2.5 / W-REL-03).
+
+    BOSSAPP-1488: when `provider_error` (CLI stderr / provider error line separate from mixed
+    build output) is supplied, classify it non-strictly while keeping mixed `reason` strict.
     """
     r = (reason or "").lower()
     from .harness_failures import parse_sentence
@@ -3241,6 +3245,8 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
         return "needs_human", "build_services_unavailable"
     if "error_max_turns" in r or "max turns" in r or "max_turns" in r:
         return "recoverable", "max_turns_exhausted"
+    if provider_error and _is_limit_message(provider_error, strict=False):
+        return "needs_human", "model_rate_limit"
     # Model capacity / economics — human or capacity change required; not silent requeue.
     if any(
         sig in r

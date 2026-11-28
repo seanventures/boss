@@ -77,11 +77,31 @@ def _sandbox() -> Any:
 
 def _issue(provider: str, credential: str = "", *, settings: Any = None,
            source: Optional[Callable[[], str]] = None,
-           proxy: Optional[model_proxy.ModelProxy] = None) -> model_proxy.Issued:
+           proxy: Optional[model_proxy.ModelProxy] = None,
+           max_requests: Optional[int] = None,
+           max_tokens: Optional[int] = None,
+           budget_usd_micros: Optional[int] = None) -> model_proxy.Issued:
     proxy = proxy or model_proxy.get()
     run_id, project_id = model_proxy._run_binding()
+    if max_requests is None and max_tokens is None:
+        if budget_usd_micros is None:
+            try:
+                from .llm_telemetry import get_llm_context
+
+                ctx = get_llm_context()
+                raw_budget = ctx.get("budget_usd_micros") or ctx.get("max_budget_usd_micros")
+                if raw_budget is not None:
+                    budget_usd_micros = int(raw_budget)
+            except Exception:  # noqa: BLE001
+                budget_usd_micros = None
+        limits = model_proxy.subscription_budget_limits(
+            settings, budget_usd_micros=budget_usd_micros
+        )
+        max_requests = limits["max_requests"]
+        max_tokens = limits["max_tokens"]
     return proxy.issue(provider, credential, ttl=model_proxy.session_ttl(settings),
-                       run_id=run_id, project_id=project_id, source=source)
+                       run_id=run_id, project_id=project_id, source=source,
+                       max_requests=max_requests, max_tokens=max_tokens)
 
 
 def _read_json(path: str) -> Optional[dict]:

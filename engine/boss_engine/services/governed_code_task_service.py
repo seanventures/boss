@@ -5408,9 +5408,13 @@ def _plan_covers_brief(engine, settings, project_id, run_id, design, *, title, i
 
     try:
         try:
+            from . import scripted_engine as _se
             from .typed_decisions import make_decider
 
-            decider = make_decider(settings)
+            _is_scripted = _se.enabled() and (
+                getattr(settings, "code_agent_engine", "") == _se.ENGINE
+            )
+            decider = None if _is_scripted else make_decider(settings)
         except Exception:  # noqa: BLE001 — the deterministic match still runs
             _log_caught(logger)
             decider = None
@@ -5949,15 +5953,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # own fallback keeps the keyword answer when the model cannot answer, an explicit spec tier
     # still wins inside it, and any failure here degrades to the old call outright.
     try:
+        from . import scripted_engine as _se
         from .pipeline_profiles import model_risk_tier
         from .typed_decisions import make_decider
 
-        _rt = model_risk_tier({**spec, "title": title}, profile, make_decider(settings))
-        risk_tier = int(_rt["tier"])
-        with _transaction(engine) as c:
-            emit_event(c, project_id, "code_task.risk_tier_decided", "boss", "code_task_run",
-                       run_id, {"tier": risk_tier, "sensitive": bool(_rt.get("sensitive")),
-                                "by": "model" if _rt.get("ok") else "keyword_fallback"})
+        _run_eng = str(spec.get("engine") or getattr(settings, "code_agent_engine", "") or "").lower()
+        if _run_eng == _se.ENGINE and _se.enabled():
+            risk_tier = infer_risk_tier({**spec, "title": title}, profile)
+        else:
+            _rt = model_risk_tier({**spec, "title": title}, profile, make_decider(settings))
+            risk_tier = int(_rt["tier"])
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.risk_tier_decided", "boss", "code_task_run",
+                           run_id, {"tier": risk_tier, "sensitive": bool(_rt.get("sensitive")),
+                                    "by": "model" if _rt.get("ok") else "keyword_fallback"})
     except Exception:  # noqa: BLE001 — the keyword tier is the floor this never falls below
         _log_caught(logger)
         risk_tier = infer_risk_tier({**spec, "title": title}, profile)
@@ -13662,7 +13671,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         reason = f"{reason} [substrate={execution_substrate}]"
         from .code_task_service import classify_pipeline_exception
         from .spend_cap_failover import apply_spend_cap_failover
-        fclass, rcode = classify_pipeline_exception(reason)
+        fclass, rcode = classify_pipeline_exception(
+            reason, provider_error=getattr(exc, "provider_error", None)
+        )
         if re.search(r"\b[a-z0-9_]+_(?:base_url|api_key)\s+is\s+not\s+configured\b", reason, re.I):
             fclass, rcode = "needs_human", "model_not_configured"
             reason = (
