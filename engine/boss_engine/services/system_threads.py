@@ -15,6 +15,7 @@ a job and is blind while one runs, which is exactly when the host needs watching
   degradation rung admission and Metatron obey (system_doctor);
 * the backup scheduler: hourly verified pg_dumps with tiered retention, one holder by DB lease
   (backup_scheduler, BOSSAPP-838);
+* the memory trim: freed memory back to the machine every minute (memory_trim, BOSSAPP-1506);
 * the extension scheduler: extensions' scheduled jobs and event feeds, one firing per DB lease
   (extensions/jobs.py, BOSSAPP-861).
 
@@ -212,6 +213,15 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("reflection schedule not started", exc_info=True)
         started["reflection"] = False
+    try:
+        # Freed memory back to the machine (BOSSAPP-1506): without it every thread's malloc
+        # arena kept its high-water mark and the API grew to 5 GB in a day (memory_trim).
+        from . import memory_trim
+
+        started["memory_trim"] = memory_trim.start()
+    except Exception:  # noqa: BLE001
+        _log.warning("memory trim not started", exc_info=True)
+        started["memory_trim"] = False
     # D7 (AP-P3): these are system services, not agents — each in the one registry the Health
     # screen lists beside the bots (system_services.py). Never stops the API booting.
     try:

@@ -30,6 +30,7 @@ KNOWN: dict[str, tuple[str, str, str, Optional[int]]] = {
     "stop_watch": ("Stop watch", "thread", "api", None),
     "ledger": ("Ownership ledger", "thread", "api", None),
     "drain_on_sigterm": ("Drain on deploy", "thread", "api", None),
+    "memory_trim": ("Memory trim", "thread", "api", None),
     "claude_login": ("Claude login refresher", "thread", "api", None),
     "codex_login": ("Codex login refresher", "thread", "api", None),
     "backup_scheduler": ("Backups", "scheduler", "api", None),

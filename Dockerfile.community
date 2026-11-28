@@ -253,12 +253,18 @@ FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN python -c 'import json; assert json.load(open("/tmp/community-export-status.json"))["mechanically_complete"], "Community source export is blocked"'
 
+# MALLOC_ARENA_MAX=2 (BOSSAPP-1506): glibc gives each thread its own malloc arena, up to 8 per
+# core, and each keeps the high-water mark of whatever ran on it. The API's thread pool spread
+# one minute's 90 MB read across dozens of arenas and reached 5.2 GB in 18 h, most of it free
+# chunks never handed back. Two shared arenas cost nothing measurable under the GIL; the API's
+# memory_trim thread returns what is freed (engine/boss_engine/services/memory_trim.py).
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app:/app/engine \
     PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
     HOME=/home/boss \
-    BOSS_RUNTIME_USER=boss
+    BOSS_RUNTIME_USER=boss \
+    MALLOC_ARENA_MAX=2
 WORKDIR /app
 
 # THE RUNTIME USER, with the uid/gid every install has had (100/102): volumes made by an earlier
