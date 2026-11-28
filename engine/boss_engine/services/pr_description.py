@@ -160,6 +160,27 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         section = baseline_verify.pr_section(baseline_verify.BaselineRecord.from_dict(baseline))
         if section:
             out += ["", section.rstrip()]
+    # PE-A (BOSSAPP-784): Study record + PR claim verification links.
+    if evidence.get("study_record"):
+        from . import study_record as _study_record
+
+        study_md = _study_record.render_study_section(
+            evidence.get("study_record"),
+            claims=evidence.get("claims") or (),
+        )
+        if study_md:
+            out += ["", study_md]
+    # PE-D (BOSSAPP-787): Replay outcomes for fixes replayed against previously failing runs.
+    replays = [r for r in (evidence.get("replay_outcomes") or []) if isinstance(r, dict)]
+    if replays:
+        out += ["", "### Replay outcomes"]
+        for r in replays:
+            mark = "✅" if r.get("after_ok") else "❌"
+            rid = str(r.get("run_id") or r.get("id") or "replay")
+            before = str(r.get("before_status") or "failed")
+            after = str(r.get("after_status") or ("passed" if r.get("after_ok") else "failed"))
+            note = f" — {r['note']}" if r.get("note") else ""
+            out.append(f"- {mark} `{rid}`: `{before}` → `{after}`{note}")
     # Links.
     out += ["", "### In BOSS"]
     if build_url:
