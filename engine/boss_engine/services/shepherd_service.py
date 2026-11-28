@@ -827,16 +827,21 @@ def answer_approved_resume(connection, escalation_id: str, answer: str, *, actor
                              {"i": run_id}).mappings().first()
     if row is None:
         return False
-    connection.execute(sql(
-        "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
-        "|| jsonb_build_object('approved_resume_asked', jsonb_build_object("
-        "'escalation', CAST(:e AS TEXT), 'answer', CAST(:a AS TEXT), 'by', CAST(:by AS TEXT))) "
-        "WHERE id = :i"), {"i": run_id, "e": escalation_id, "a": answer, "by": actor})
     if answer == "retry":
+        # BOSSAPP-1482: clear approved_resume_asked on 'retry' so if this retry job is lost
+        # before claiming the run, Shepherd can re-queue and ask again instead of stalling.
+        connection.execute(sql(
+            "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+            "- 'approved_resume_asked' WHERE id = :i"), {"i": run_id})
         _queue_approved_resume(connection, project_id, run_id, row["task_id"], 0)
         emit_event(connection, project_id, "shepherd.approved_run_resumed", actor,
                    "code_task_run", run_id, {"why": "a person chose Retry", "try": 0})
     else:
+        connection.execute(sql(
+            "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+            "|| jsonb_build_object('approved_resume_asked', jsonb_build_object("
+            "'escalation', CAST(:e AS TEXT), 'answer', CAST(:a AS TEXT), 'by', CAST(:by AS TEXT))) "
+            "WHERE id = :i"), {"i": run_id, "e": escalation_id, "a": answer, "by": actor})
         connection.execute(sql(
             "UPDATE code_task_runs SET status = 'blocked', phase = 'done', error = :e, "
             "updated_at = now() WHERE id = :i"),
