@@ -336,6 +336,7 @@ def build_setup_router(
         # Claude Code's sign-in (`claude setup-token`) PRINTS a long-lived token: it is stored
         # here on the server, under the org's model home, and never reaches the browser.
         store = None
+        target_pool = None
         if sign_in.LOGINS[provider].captures_token:
             if body.add_account:
                 # BOSSAPP-1343: another seat, stored as its own pool member; account 1 stays.
@@ -353,6 +354,7 @@ def build_setup_router(
                     pool_scope = "org"
                 except _Refused:
                     pool_scope = "project"
+                target_pool = f"org:{org_id}" if pool_scope == "org" else f"project:{body.project_id}"
                 store = pools.sign_in_store(engine, get_settings(), body.project_id, actor,
                                             provider, body.account_label, scope=pool_scope)
             else:
@@ -363,7 +365,8 @@ def build_setup_router(
             return sign_in.start(provider, project_id=body.project_id, actor=actor,
                                  org_id=org_id, settings=get_settings(), login_rejected=rejected,
                                  fresh=bool(body.fresh), store=store,
-                                 add_account=bool(body.add_account and store is not None))
+                                 add_account=bool(body.add_account and store is not None),
+                                 target_pool=target_pool)
         except sign_in.SignInError as error:
             sign_in_failed(error)
         raise AssertionError("unreachable")
