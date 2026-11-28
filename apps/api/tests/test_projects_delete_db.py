@@ -159,7 +159,9 @@ def test_the_dialog_counts_what_goes_by_kind(world, owner, client, engine, hosts
     assert seen["staging_apps"][0]["host"] == "demo-host"
     assert seen["production_apps"] == [] and seen["previews_running"] == 1
     assert any("GitHub" in k for k in seen["keeps"]) and any("audit" in k for k in seen["keeps"])
-    assert seen["export"]["available"] is False and seen["export"]["note"]
+    assert seen["export"]["available"] is True
+    assert seen["export"]["href"] == f"/v1/projects/{a['id']}/export"
+    assert seen["export"]["note"]
     assert hosts["calls"] == [], "reading what goes touches nothing"
 
 

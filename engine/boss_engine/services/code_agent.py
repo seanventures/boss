@@ -1915,7 +1915,7 @@ class NativeCodeAgent:
     #: read-only toolset, a turn budget, an estimated cost, a per-turn transcript and a plain
     #: one-shot completion (run_plain) for single-turn verdicts.
     capabilities = EngineCapabilities(read_only=True, turn_limit=True, reports_cost=True,
-                                      streams_turns=True, plain_completion=True)
+                                      streams_turns=True, budget_limit=True, plain_completion=True)
 
     _EDIT_SYS = (
         "You are an expert engineer working in a checked-out git repository (files shown below). "
@@ -2030,7 +2030,7 @@ class NativeCodeAgent:
 
     def _run_tool_loop(
         self, prompt: str, cwd: Path, *, read_only: bool, model: Optional[str],
-        max_turns: Optional[int] = None,
+        max_turns: Optional[int] = None, max_budget_usd: Optional[float] = None,
     ) -> dict:
         """Drive a real multi-turn tool-calling conversation against the sandbox.
 
@@ -2108,6 +2108,8 @@ class NativeCodeAgent:
         # THE CALLER'S TURN BUDGET when it gives one (a continuation, an escalated reviewer),
         # as every engine honours it; the lane's own default otherwise.
         max_turns = int(max_turns) if max_turns else self._max_turns(read_only)
+        budget_micros = (int(round(max(float(max_budget_usd), 0.01) * 1_000_000))
+                         if max_budget_usd is not None else None)
         capped = True
         stop_reason = "turn_cap"
         pending_tool: Optional[str] = None
@@ -2183,6 +2185,17 @@ class NativeCodeAgent:
                 summary = said or summary
                 capped = False
                 stop_reason = "done"
+                break
+            if budget_micros is not None and total_cost >= budget_micros:
+                from .engine_contract import BUDGET_PARTIAL_MARKER
+
+                summary = ((said or summary) + " ").strip()
+                summary = (summary + " " if summary else "") + (
+                    f"[boss] stopped at the ${float(max_budget_usd):.2f} session spend ceiling; "
+                    "the work done so far is in the diff. " + BUDGET_PARTIAL_MARKER
+                )
+                capped = False
+                stop_reason = "budget_cap"
                 break
 
             messages.append(msg.get("raw") or {
@@ -2306,6 +2319,8 @@ class NativeCodeAgent:
             result["pending_args_sha256"] = binding.get("args_sha256")
             result["pending_args_preview"] = binding.get("args_preview")
             result["pending_binding"] = binding
+        if stop_reason == "budget_cap" and max_budget_usd is not None:
+            result["budget_ceiling_usd"] = float(max_budget_usd)
         if refusal is not None:
             result["refused"] = refusal
         return result
@@ -2355,12 +2370,13 @@ class NativeCodeAgent:
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None,  # no session store: engine_contract seeds one
         max_turns: Optional[int] = None,
+        max_budget_usd: Optional[float] = None,
         **_ignored,  # parallel_agents: sub-agents are a Claude CLI capability
     ) -> dict:
         if self._tools_enabled():
             try:
                 return self._run_tool_loop(prompt, cwd, read_only=read_only, model=model,
-                                           max_turns=max_turns)
+                                           max_turns=max_turns, max_budget_usd=max_budget_usd)
             except _ToolsUnsupported:
                 pass  # fall through to the legacy path; already logged at WARNING
         return self._run_single_shot(prompt, cwd, read_only=read_only, model=model)

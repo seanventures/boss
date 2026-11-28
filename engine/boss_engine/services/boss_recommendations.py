@@ -148,16 +148,7 @@ def _record(connection: Connection, *, project_id: str, signature: str, title: s
     return {"id": rec_id, "created": True, "occurrences": 1}
 
 
-def list_recommendations(connection: Connection, project_id: str, *,
-                         status: Optional[str] = None) -> list[dict[str, Any]]:
-    rows = connection.execute(
-        text("SELECT id, signature, status, title, symptom, evidence, root_cause, "
-             "proposed_change, files, refs, occurrences, boss_version, created_by, created_at, "
-             "updated_at, self_fix_id, class_signature, attempts, acceptance_tests "
-             "FROM boss_recommendations "
-             "WHERE project_id = :p "
-             "AND (CAST(:s AS TEXT) IS NULL OR status = :s) ORDER BY created_at"),
-        {"p": project_id, "s": status}).mappings().all()
+def _hydrate_rows(connection: Connection, rows: list[Any]) -> list[dict[str, Any]]:
     from .self_fix_privacy import mask_value
 
     known = _known(connection) if rows else ()
@@ -178,6 +169,77 @@ def list_recommendations(connection: Connection, project_id: str, *,
     return out
 
 
+def _project_org_id(connection: Connection, project_id: str) -> Optional[str]:
+    row = connection.execute(
+        text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+             "WHERE p.id = :p"), {"p": project_id}).scalar()
+    return str(row) if row else None
+
+
+def list_recommendations(connection: Connection, project_id: str, *,
+                         status: Optional[str] = None) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        text("SELECT id, project_id, signature, status, title, symptom, evidence, root_cause, "
+             "proposed_change, files, refs, occurrences, boss_version, created_by, created_at, "
+             "updated_at, self_fix_id, class_signature, attempts, acceptance_tests "
+             "FROM boss_recommendations "
+             "WHERE project_id = :p "
+             "AND (CAST(:s AS TEXT) IS NULL OR status = :s) ORDER BY created_at"),
+        {"p": project_id, "s": status}).mappings().all()
+    return _hydrate_rows(connection, list(rows))
+
+
+def list_org_recommendations(connection: Connection, org_id: str, *,
+                             status: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every recommendation across all projects of `org_id` (BOSSAPP-770 SF-11), tenant-scoped."""
+    rows = connection.execute(
+        text("SELECT br.id, br.project_id, br.signature, br.status, br.title, br.symptom, "
+             "br.evidence, br.root_cause, br.proposed_change, br.files, br.refs, br.occurrences, "
+             "br.boss_version, br.created_by, br.created_at, br.updated_at, br.self_fix_id, "
+             "br.class_signature, br.attempts, br.acceptance_tests "
+             "FROM boss_recommendations br "
+             "JOIN projects p ON p.id = br.project_id "
+             "JOIN workspaces w ON w.id = p.workspace_id "
+             "WHERE w.org_id = :org "
+             "AND (CAST(:s AS TEXT) IS NULL OR br.status = :s) ORDER BY br.created_at"),
+        {"org": org_id, "s": status}).mappings().all()
+    return _hydrate_rows(connection, list(rows))
+
+
+def find_recommendation(connection: Connection, rec_id: str, *,
+                        project_id: Optional[str] = None,
+                        org_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Look up one recommendation by id, checking `project_id` first and then sibling projects in
+    the same org (BOSSAPP-770 SF-11). Never crosses an organization boundary."""
+    wanted = str(rec_id or "").strip()
+    if not wanted:
+        return None
+    if project_id:
+        row = connection.execute(
+            text("SELECT id, project_id, signature, status, title, symptom, evidence, root_cause, "
+                 "proposed_change, files, refs, occurrences, boss_version, created_by, created_at, "
+                 "updated_at, self_fix_id, class_signature, attempts, acceptance_tests "
+                 "FROM boss_recommendations WHERE id = :i AND project_id = :p"),
+            {"i": wanted, "p": project_id}).mappings().first()
+        if row:
+            return _hydrate_rows(connection, [row])[0]
+        if not org_id:
+            org_id = _project_org_id(connection, project_id)
+    if not org_id:
+        return None
+    row = connection.execute(
+        text("SELECT br.id, br.project_id, br.signature, br.status, br.title, br.symptom, "
+             "br.evidence, br.root_cause, br.proposed_change, br.files, br.refs, br.occurrences, "
+             "br.boss_version, br.created_by, br.created_at, br.updated_at, br.self_fix_id, "
+             "br.class_signature, br.attempts, br.acceptance_tests "
+             "FROM boss_recommendations br "
+             "JOIN projects p ON p.id = br.project_id "
+             "JOIN workspaces w ON w.id = p.workspace_id "
+             "WHERE br.id = :i AND w.org_id = :org"),
+        {"i": wanted, "org": org_id}).mappings().first()
+    return _hydrate_rows(connection, [row])[0] if row else None
+
+
 def set_status(connection: Connection, project_id: str, rec_id: str, status: str) -> bool:
     if status not in STATUSES:
         raise ValueError(f"status must be one of {', '.join(STATUSES)}")
@@ -185,6 +247,36 @@ def set_status(connection: Connection, project_id: str, rec_id: str, status: str
         text("UPDATE boss_recommendations SET status = :s, updated_at = now() "
              "WHERE id = :i AND project_id = :p"), {"s": status, "i": rec_id, "p": project_id})
     return bool(done.rowcount)
+
+
+def close_recommendation(connection: Connection, settings: Any, *, project_id: str, rec_id: str,
+                         status: str = "done", reason: str, actor: str,
+                         commit_ref: Optional[str] = None,
+                         pr_url: Optional[str] = None) -> dict[str, Any]:
+    """Close a platform gap as `done` or `wont_fix` with an audited reason (BOSSAPP-770 SF-16)."""
+    if status not in ("done", "wont_fix"):
+        raise ValueError("close status must be 'done' or 'wont_fix'")
+    why = str(reason or "").strip()
+    if not why:
+        raise ValueError("reason is required to close a platform gap")
+    known = _known(connection)
+    cleaned_why = _clean(why, 1000, known)
+    if not set_status(connection, project_id, rec_id, status):
+        return {"ok": False, "found": False, "id": rec_id,
+                "error": f"no platform gap {rec_id!r} in project {project_id!r}"}
+    emit_event(
+        connection, project_id, "boss.recommendation_closed", actor,
+        "boss_recommendation", rec_id,
+        {"recommendation_id": rec_id, "status": status, "reason": cleaned_why,
+         **({"commit_ref": str(commit_ref).strip()[:80]} if commit_ref else {}),
+         **({"pr_url": str(pr_url).strip()[:300]} if pr_url else {}),
+         "sentence": f"Closed platform gap {rec_id} ({status}): {cleaned_why[:160]}"},
+    )
+    write_file(connection, settings, project_id)
+    return {"ok": True, "id": rec_id, "project_id": project_id, "status": status,
+            "reason": cleaned_why,
+            **({"commit_ref": str(commit_ref).strip()[:80]} if commit_ref else {}),
+            **({"pr_url": str(pr_url).strip()[:300]} if pr_url else {})}
 
 
 def link_self_fix(connection: Connection, project_id: str, rec_id: str, self_fix_id: str,
