@@ -26,6 +26,7 @@ import React, { useState } from "react";
 
 import type { CrewMember, RedGreen, Responder, ResponderWho } from "../../lib/incident-response";
 import { useLocalTime } from "../../lib/local-time";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { RunFace, nameOf } from "../agents/run-face";
 import { consoleHref } from "../agents/org-shared";
 import { Markdown } from "../markdown";
@@ -60,6 +61,7 @@ export function whoWords(w: ResponderWho | null): { name: string; role: string }
 }
 
 export function Who({ w, testId }: { w: ResponderWho | null; testId?: string }) {
+  useIdentityVersion();
   const { name, role } = whoWords(w);
   const face = w?.kind === "agent" ? (
     <RunFace roleKey={w.roleKey} size={24} />
@@ -81,6 +83,7 @@ export function Who({ w, testId }: { w: ResponderWho | null; testId?: string }) 
 }
 
 function Crew({ crew }: { crew: CrewMember[] }) {
+  useIdentityVersion();
   return (
     <ul className="obs-crew" aria-label="The build's crew" data-testid="obs-responder-crew">
       {crew.map((c) => {
@@ -163,6 +166,7 @@ export function Responders({ rows, onReport, answer }: {
   /** Answering the agent's question in place (the live card has a project and an actor). */
   answer?: { projectId: string; actor: string; onDone?: () => void };
 }) {
+  useIdentityVersion();
   const lt = useLocalTime();
   if (!rows.length) return null;
   return (

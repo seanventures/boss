@@ -16,6 +16,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { formatMonthDay } from "../../lib/datetime";
 import { obsWrite } from "../observability/obs-write";
 import type { Team } from "./scoped-budgets";
 
@@ -72,8 +73,7 @@ export function versus(key: BaselineKey, before: number | undefined, after: numb
 
 const fmt = (n: number | null | undefined, unit: string) =>
   n === null || n === undefined ? "–" : `${Number.isInteger(n) ? n : n.toFixed(1)}${unit}`;
-const shortDay = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) : "";
+const shortDay = (iso: string | null) => formatMonthDay(iso);
 
 /** Hours per PR, oldest first, as small bars against the baseline line. */
 function ReviewBars({ items, baseline }: { items: ReviewItem[]; baseline?: number }) {

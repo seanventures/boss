@@ -10,6 +10,7 @@ import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useState } from "react";
 
 import { showToast } from "../client-forms";
+import { localFull } from "../../lib/local-time";
 import {
   afterWrite, generateKeypair, listSecrets, putSecret, secretAccessLog, verifySecret,
   type SecretAccessLog, type SecretRow,
@@ -178,7 +179,7 @@ export function SecretsSheet({ projectId, actor, onClose, canWrite = true }: {
                             <tbody>
                               {log.events.map((e) => (
                                 <tr key={e.id} data-testid="inf-secret-access-row">
-                                  <td className="inf-muted">{e.accessed_at ? new Date(e.accessed_at).toLocaleString() : "—"}</td>
+                                  <td className="inf-muted">{e.accessed_at ? localFull(e.accessed_at) : "—"}</td>
                                   <td title={e.reason ?? undefined}>{e.outcome === "resolved" ? "Read" : "Refused"}</td>
                                   <td className="inf-mono" data-copy="data">{e.run_id ?? "—"}</td>
                                   <td className="inf-mono">{e.person_id ?? "—"}</td>

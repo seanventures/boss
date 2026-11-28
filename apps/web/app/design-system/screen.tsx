@@ -6,6 +6,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 const CSS = `
 @import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;600&display=swap");
@@ -516,9 +517,9 @@ export function DesignSystemScreen({ workspaceId = "" }: { workspaceId?: string 
       {saved ? <p className="ds-note" data-testid="ds-saved">{saved}</p> : null}
 
       <div className="ds-actions">
-        <button type="button" data-testid="ds-save" onClick={() => { void save(); }}>
+        <GatedButton permission="org:update" type="button" data-testid="ds-save" onClick={() => { void save(); }}>
           Save design system
-        </button>
+        </GatedButton>
       </div>
 
       <div className="ds-new">
@@ -531,9 +532,9 @@ export function DesignSystemScreen({ workspaceId = "" }: { workspaceId?: string 
             onChange={(event) => setAppName(event.target.value)}
           />
         </label>
-        <button type="button" className="ds-create" data-testid="ds-create" onClick={() => { void createApp(); }}>
+        <GatedButton permission="project:create" type="button" className="ds-create" data-testid="ds-create" onClick={() => { void createApp(); }}>
           Create app
-        </button>
+        </GatedButton>
         {appRead ? (
           <p className="ds-app-read" data-testid="ds-app-read">
             {`${appRead.app} reads ${appRead.system}.`}

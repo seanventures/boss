@@ -24,8 +24,12 @@ import { closeWatch, useWatchParam, WatchDoor, WatchedCard, WatchSheet } from ".
 import { parseLanding, type Landing } from "../../lib/watch-app";
 import { notifyChanged } from "../changed";
 import { isHydrated, localWith } from "../../lib/local-time";
+import { clock } from "../../lib/log-time";
 import { useNow } from "../agents/live-util";
 import type { PxCtx } from "./project-page";
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 
 type Env = HealthView["environments"][number];
 type Incident = HealthView["incidents"][number];
@@ -38,14 +42,14 @@ export function dayTime(iso: string, now: Date | null = isHydrated() ? new Date(
   if (!now) {
     return localWith(iso, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
   }
-  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const hm = clock(iso, { seconds: false });
   const same = (x: Date, y: Date) => x.toDateString() === y.toDateString();
   if (same(d, now)) return `Today ${hm}`;
   const days = (now.getTime() - d.getTime()) / 86_400_000;
   // Always with its clock time (12-09 "Today 09:12 · 14 min"): an incident on Wednesday is
   // "Wed 09:12", never a bare "Wed".
-  if (days < 6) return `${d.toLocaleDateString([], { weekday: "short" })} ${hm}`;
-  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${hm}`;
+  if (days < 6) return `${WEEKDAYS[d.getDay()]} ${hm}`;
+  return `${MONTHS[d.getMonth()]} ${d.getDate()} ${hm}`;
 }
 /** "09:52" when it is today, else as dayTime ("Wed", "Nov 2"): THE ONE CLOCK of this tab, the same
  *  24-hour local text as the incidents ("Today 09:38") and the parity component's history
@@ -55,7 +59,7 @@ export function clockTime(iso: string, now: Date | null = isHydrated() ? new Dat
   if (!/^\d{4}-\d{2}-\d{2}T/.test(iso) || Number.isNaN(d.getTime())) return iso;
   if (!now) return localWith(iso, { hour: "2-digit", minute: "2-digit", hour12: false });
   return d.toDateString() === now.toDateString()
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : dayTime(iso, now);
+    ? clock(iso, { seconds: false }) : dayTime(iso, now);
 }
 /** 840 → "14 min", 7200 → "2 h". */
 export const spanWords = (sec: number | null) => (sec === null ? "" : sec < 3600 ? `${Math.max(1, Math.round(sec / 60))} min` : `${Math.round(sec / 360) / 10} h`);

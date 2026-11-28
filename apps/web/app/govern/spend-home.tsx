@@ -16,6 +16,7 @@ import {
   type ProjectSpendRow, type SpendView,
 } from "../../lib/govern";
 import { usePolledRead } from "../../lib/log-stream";
+import { formatMonthDay } from "../../lib/datetime";
 import { DailyBars } from "./cap-preview";
 import { LegacyHolds } from "./meter";
 import { ReconciliationCard } from "./reconciliation-card";
@@ -32,7 +33,7 @@ const heldOf = (p: Period | null | undefined) => Number(p?.held_usd_micros ?? p?
 
 const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
-const shortDay = (iso: string) => day(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const shortDay = (iso: string) => formatMonthDay(`${iso}T00:00:00Z`);
 
 /** One bar per day of the chosen period: the whole month (days to come are empty), the last
  *  7 days, or today. Days without spend are $0 bars, so the bars sit at their dates. */
@@ -73,9 +74,7 @@ function periodOf(meter: Meter | null | undefined, which: "day" | "month"): Peri
 /** "Dec 1" from a reset time (UTC: budget periods turn over at 00:00 UTC). */
 export function resetDay(iso: string | null | undefined): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  return formatMonthDay(iso);
 }
 
 /** The hero's badge: at the cap (by the at-limit choice), near it, or on track with a forecast. */

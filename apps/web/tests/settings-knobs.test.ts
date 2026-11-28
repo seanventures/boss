@@ -269,7 +269,8 @@ describe("choosing a model per job", () => {
 
   it("renders a picker per job, its options from the API rather than a list", () => {
     expect(JOBS).toContain("<select");
-    expect(JOBS).toContain("job.options.map(");
+    expect(JOBS).toContain("foldOptions(job.options)");
+    expect(JOBS).toContain("menu.map(");
     for (const hardcoded of ['value="codex"', 'value="claude_code"', 'value="openrouter"']) {
       expect(JOBS).not.toContain(hardcoded);
     }

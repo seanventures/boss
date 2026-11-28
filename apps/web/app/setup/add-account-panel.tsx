@@ -365,8 +365,14 @@ function ClassicSteps({ onClose, onAdvanced, initial, onBack, account = null }: 
         {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
         <div className="su-line su-panel-foot">
           <button type="button" className="su-btn" onClick={onClose} data-testid="su-account-cancel">Cancel</button>
-          {(
-            <GatedButton permission={step === 2 ? "repository:register" : "github:connect"} type="button"
+          {step === 2 ? (
+            <GatedButton permission="repository:register" type="button"
+                         className="su-btn su-btn-primary" data-testid="su-account-continue"
+                         disabled={busy} onClick={() => void next()}>
+              {busy ? <CircleNotch className="su-spin" size={12} aria-hidden /> : null}{continueLabel}
+            </GatedButton>
+          ) : (
+            <GatedButton permission="github:connect" type="button"
                          className="su-btn su-btn-primary" data-testid="su-account-continue"
                          disabled={busy || (step === 1 && how !== "token" && signing && !signedIn)} onClick={() => void next()}>
               {busy ? <CircleNotch className="su-spin" size={12} aria-hidden /> : null}{continueLabel}

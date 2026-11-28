@@ -413,7 +413,8 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
   // (nothing failed) but the row still owes a Test action and an honest "checked Xh ago", same
   // as an amber/red row, a login can die silently between checks.
   const checkedAt = serverPill?.at ?? src?.pill?.checked_at ?? null;
-  const checkedAgeMs = checkedAt ? Date.now() - Date.parse(checkedAt) : null;
+  const nowMs = lt.now();
+  const checkedAgeMs = checkedAt && nowMs ? nowMs - Date.parse(checkedAt) : null;
   const staleGreen = pill.tone === "green" && checkedAgeMs != null && checkedAgeMs > 2 * 3600 * 1000;
   const needs = red || pill.tone === "amber" || staleGreen;
 
@@ -568,7 +569,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
           </Tip>
         ) : null}
         {!busy && !editing && entry?.next_check_at && pill.tone !== "green"
-          && Date.parse(entry.next_check_at) > Date.now() ? (
+          && nowMs > 0 && Date.parse(entry.next_check_at) > nowMs ? (
           <Tip tip={entry.next_check_why ?? "BOSS proves this connection again then; Re-check tries now."}
                className="su-faint" testid="su-model-next-check">
             Next check {lt.full(entry.next_check_at)}

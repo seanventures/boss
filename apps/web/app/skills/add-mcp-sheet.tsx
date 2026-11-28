@@ -20,6 +20,7 @@ import { ArrowLeft, Check, Lock, MagnifyingGlass, PlugsConnected, Terminal, Warn
 
 import type { McpCatalogueEntry } from "../../lib/kit-types";
 import { kitApi, mcpApi, toolOverrides, type Connector, type CrewMember, type McpAuthInput } from "../../lib/kit-api";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgentAvatar } from "../agent-avatar";
 import { showToast } from "../client-forms";
 import { ConnectorsTab } from "./connectors-tab";
@@ -64,6 +65,7 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
   grants?: boolean;
   crew?: CrewMember[];
 }) {
+  useIdentityVersion();
   const [items, setItems] = useState<McpCatalogueEntry[] | null>(null);
   const [entry, setEntry] = useState<McpCatalogueEntry | null>(null);
   const [connector, setConnector] = useState<Connector | null>(null);

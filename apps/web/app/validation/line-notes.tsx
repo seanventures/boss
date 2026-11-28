@@ -22,6 +22,7 @@ import {
   type Finding, type Fix, type Override, type OverrideAction, type OverrideResult, type Validation,
 } from "../../lib/validation-review";
 import { noteWords, placeNotes } from "../../lib/line-notes";
+import { localWith } from "../../lib/hydration-state";
 import type { DiffFile } from "../../lib/diff-view";
 import type { Pins } from "../changes/[projectId]/[number]/pins";
 import { ActorName, SevChip } from "./kit";
@@ -143,7 +144,7 @@ function OverrideLine({ r }: { r: Override }) {
   return (
     <div className="ln-rec" id={refTarget(r.id)} data-testid="vr-override-record" data-action={r.action}>
       <span className="vr-mono">{r.id} · </span><b><ActorName id={r.actor} name={r.actor_name} /></b> {verb[r.action] ?? OVERRIDE_VERBS[r.action]}
-      {at && !Number.isNaN(at.getTime()) ? ` · ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+      {at && !Number.isNaN(at.getTime()) ? ` · ${localWith(at.getTime(), { hour: "2-digit", minute: "2-digit" })}` : ""}
       {r.reason ? ` · “${r.reason}”` : ""}{r.commit_sha ? <span className="vr-mono vr-dim"> · commit {shortSha(r.commit_sha)}</span> : null}
       {r.rerun_id ? <span className="vr-mono vr-dim"> · re-run{/^[A-Z]-\d+$/.test(r.rerun_id) ? ` ${r.rerun_id}` : ""}</span> : null}
       {r.approver && !r.approved_at ? <span className="vr-unexplained"> · waiting on <ActorName id={r.approver} /> to approve</span> : null}

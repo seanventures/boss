@@ -10,6 +10,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 type Field = { key: string; label: string; position?: number };
 type Grant = {
@@ -274,7 +275,7 @@ export function FieldAcl({ projectId = "", actor = "" }: { projectId?: string; a
           ))}
           <div className="fg1268-actions">
             <button type="button" onClick={() => setLabels([...labels, ""])}>Add field</button>
-            <button type="button" data-testid="create-app" onClick={() => void createApp()}>Create app</button>
+            <GatedButton permission="project:update" type="button" data-testid="create-app" onClick={() => void createApp()}>Create app</GatedButton>
           </div>
           {createError ? <p role="alert">{createError}</p> : null}
         </form>

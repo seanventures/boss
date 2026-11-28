@@ -93,6 +93,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only-quarantined", action="store_true")
     args = ap.parse_args(argv)
     quarantine = read_quarantine()
+    if args.only_quarantined and not quarantine:
+        print("web-unit-ci: 0 quarantined files (nothing to check)")
+        return 0
     files = sorted(quarantine) if args.only_quarantined else []
     results = run_vitest(files)
     if not results:

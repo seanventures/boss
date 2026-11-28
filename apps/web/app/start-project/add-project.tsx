@@ -28,6 +28,7 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { useAreaKeydown } from "../../lib/area-keys";
+import { localFull } from "../../lib/local-time";
 import { createPortal } from "react-dom";
 import {
   ArrowLeft, ArrowRight, ArrowsIn, ArrowsOut, ArrowsVertical, CaretRight, ChatsCircle, CircleNotch, DotsThree, Flask,
@@ -859,7 +860,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                     {r.language ? <span className="npx-faint npx-small">{r.language}</span> : null}
                     <span className="npx-spacer" />
                     {opens ? <InUseTag used={users} /> : null}
-                    <span className="npx-faint npx-mono npx-small" title={r.pushed_at ? `Last push ${new Date(r.pushed_at).toLocaleString()}` : "Last push not known yet"}>{ageShort(r.pushed_at)}</span>
+                    <span className="npx-faint npx-mono npx-small" title={r.pushed_at ? `Last push ${localFull(r.pushed_at)}` : "Last push not known yet"}>{ageShort(r.pushed_at)}</span>
                     {cursor === i ? <span className="npx-kbd">↵</span> : null}
                   </button>
                   {users.length ? <InUseBlock repoId={r.id} used={users} act={inUseRows} testid={`ap-repo-${r.id}`} /> : null}

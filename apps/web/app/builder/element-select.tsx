@@ -2,6 +2,7 @@
 
 import React, { useId, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 /**
  * Mark one piece of a generated proof. Edit, restyle, comment, or regenerate.
@@ -310,7 +311,8 @@ export function ElementSelect({
           placeholder="What should change?"
           onChange={(event) => setChange(event.target.value)}
         />
-        <button
+        <GatedButton
+          permission="preview:manage"
           type="submit"
           className="em-record"
           data-testid="record-change"
@@ -318,7 +320,7 @@ export function ElementSelect({
           disabled={!ready}
         >
           Record change
-        </button>
+        </GatedButton>
         {error ? (
           <p className="em-error" role="alert" data-testid="mark-error">{error.message}</p>
         ) : null}

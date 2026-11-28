@@ -16,6 +16,7 @@
  */
 import React from "react";
 
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { agentName } from "./kit-copy";
 
 export const GRANT_ACTION = "grant_tool_access";
@@ -38,6 +39,7 @@ export function grantOf(rec: Record<string, unknown>): GrantCard | null {
 const TIER_WORDS = ["Reads", "Reads", "Writes", "Public"];
 
 export function GrantAccessCard({ card }: { card: GrantCard }) {
+  useIdentityVersion();
   const n = card.tools.length;
   return (
     <div className="decision-grant-card" data-testid="decision-grant-card">

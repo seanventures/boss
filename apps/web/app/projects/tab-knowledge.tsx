@@ -110,7 +110,7 @@ function Repos({ ctx, repos, onChecked }: { ctx: PxCtx; repos: KnowledgeRepo[]; 
   const recheck = async (r: KnowledgeRepo) => {
     setBusy(r.full_name); setSaid({ text: "" });
     const w = await pxWrite("/v1/setup/checks", { project_id: ctx.projectId, target: r.binding_id ? `repository:${r.binding_id}` : "repository",
-                                                  idempotency_key: `px-recheck-${r.binding_id || r.full_name}-${Date.now()}` }, "Re-check");
+                                                  idempotency_key: `px-recheck-${r.binding_id || r.full_name}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 10)}` }, "Re-check");
     setBusy("");
     setSaid(w.ok ? { text: w.demo ? "Sample mode — nothing was sent." : `Checked ${r.full_name} again.`, tone: "green" } : { text: w.error ?? "Not checked.", tone: "red" });
     if (w.ok && !w.demo) onChecked?.();

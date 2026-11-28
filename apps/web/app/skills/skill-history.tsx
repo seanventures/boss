@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import { apiWrite } from "../../lib/api-write";
+import { localFull } from "../../lib/local-time";
 import { showToast } from "../client-forms";
 import { shortError } from "./kit-copy";
 
@@ -45,7 +46,7 @@ async function supplyWrite(body: Record<string, unknown>) {
 }
 
 function when(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleString() : "";
+  return iso ? localFull(iso) : "";
 }
 
 export function SkillHistory({ projectId, actor, skillKey, onChanged }: {

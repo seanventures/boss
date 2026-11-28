@@ -6,6 +6,7 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 export const SUITE_KINDS = ["website", "mobile", "slides", "data_view"] as const;
 
@@ -281,7 +282,8 @@ export function ProjectSuite({
         })}
       </div>
       <div className="psu-bar">
-        <button
+        <GatedButton
+          permission="project:update"
           type="button"
           data-testid="suite-publish-together"
           title={allHeld ? "Publish every held plate." : "Hold all four first."}
@@ -289,7 +291,7 @@ export function ProjectSuite({
           onClick={publishSheet}
         >
           Publish the sheet
-        </button>
+        </GatedButton>
         {allHeld ? null : (
           <p className="psu-note" data-testid="suite-sheet-note">
             Hold all four plates before publishing the sheet.

@@ -24,7 +24,7 @@ import { DemoLoginRow } from "./tab-settings";
 import { ConfirmSheet } from "./confirm-sheet";
 import { DeployLive, DeployStepFailed } from "./deploy-live";
 import { ItemAction } from "./staging-target-sheet";
-import { isHydrated, localWith, whenLocal } from "../../lib/local-time";
+import { LOCAL, isHydrated, localWith, whenLocal } from "../../lib/local-time";
 import { useNow } from "../agents/live-util";
 import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import type { PxCtx } from "./project-page";
@@ -94,7 +94,7 @@ export function dayTime(at: string, nowMs?: number | null): string {
   if (nowMs === null || (nowMs === undefined && !isHydrated())) {
     return localWith(at, { month: "short", day: "numeric" });
   }
-  const refMs = nowMs ?? Date.now();
+  const refMs = nowMs ?? LOCAL.now();
   const week = refMs - d.getTime() < 6 * 86_400_000;
   return week ? localWith(at, { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
     : localWith(at, { month: "short", day: "numeric" });
@@ -110,7 +110,7 @@ export function agoWords(at: string, nowMs?: number | null): string {
   const t = new Date(at).getTime();
   if (!Number.isFinite(t)) return "";
   if (nowMs === null || (nowMs === undefined && !isHydrated())) return "";
-  const refMs = nowMs ?? Date.now();
+  const refMs = nowMs ?? LOCAL.now();
   const s = Math.max(0, Math.round((refMs - t) / 1000));
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
