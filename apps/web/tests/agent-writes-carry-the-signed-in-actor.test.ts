@@ -95,6 +95,9 @@ const KNOWN_AGENT_WRITERS = [
   // carry the signed-in actor through apiWrite (never a literal actor).
   "lib/agent-platform.ts",
   "app/agents/passport-endpoints.tsx",
+  "app/agents/roster-bulk.tsx",
+  "app/govern/scoped-budgets.tsx",
+  "app/skills/tool-rules.tsx",
 ];
 
 /** Builds the bodies the writers above send, so it is held to the same rule. */

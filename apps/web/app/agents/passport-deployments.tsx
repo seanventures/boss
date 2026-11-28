@@ -14,6 +14,7 @@ import {
   deployVersion, promoteVersion, readAgentDeployments, readPromotionChecks, rollbackDeployment,
   type AgentDeploymentsData, type PromotionChecksData, type ReadResult,
 } from "../../lib/agent-platform";
+import { actorWords } from "../../lib/actor-words";
 import { formatDate } from "../../lib/datetime";
 import { usd } from "../../lib/money";
 import "./agent-platform.css";
@@ -202,7 +203,7 @@ export function PassportDeployments({ projectId, actor, roleKey }: {
                         <td>{h.action}</td>
                         <td className="ap-mono">{h.from_version ? `v${h.from_version} → ` : ""}v{h.to_version}</td>
                         <td><span className="ap-pill" data-tone={h.status === "applied" ? "green" : "amber"}>{h.status}</span></td>
-                        <td className="ap-sub">{h.actor}{h.decision_id ? ` (${h.decision_id})` : ""}</td>
+                        <td className="ap-sub">{actorWords(h.actor)}{h.decision_id ? ` (${h.decision_id})` : ""}</td>
                       </tr>
                     ))}
                   </tbody>

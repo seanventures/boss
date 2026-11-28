@@ -238,7 +238,7 @@ export function RosterBulk({
   agents: givenAgents,
   connections: givenConnections,
   projectId = "",
-  actor = "ceo",
+  actor = "",
   onApply,
 }: {
   agents?: RosterAgent[];

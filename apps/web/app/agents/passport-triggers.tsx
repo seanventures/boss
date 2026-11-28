@@ -473,7 +473,7 @@ export function PassportTriggers({
                       <GatedButton permission="agent:deploy" type="button" className="ap-chip-btn" disabled={busyId === t.id} onClick={() => openEdit(t)}>
                         Edit
                       </GatedButton>
-                      <GatedButton permission="agent:deploy" type="button" className="ap-chip-btn" disabled={busyId === t.id} data-testid={`ap-trig-pause-${t.id}`} onClick={() => void onPauseToggle(t)}>
+                      <GatedButton permission="agent:lifecycle" type="button" className="ap-chip-btn" disabled={busyId === t.id} data-testid={`ap-trig-pause-${t.id}`} onClick={() => void onPauseToggle(t)}>
                         {t.status === "paused" ? "Resume" : "Pause"}
                       </GatedButton>
                       {t.kind === "webhook" ? (

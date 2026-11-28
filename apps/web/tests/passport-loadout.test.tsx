@@ -75,7 +75,9 @@ describe("W1 · the Loadout comes first", () => {
     const sections = $$(".tpl-page-inner section");
     expect(sections[0].id).toBe("ag-sec-loadout");
     expect($('[data-testid="ag-pnav"] a')?.textContent).toBe("Loadout");
-    expect(SECTIONS.map((s) => s.label)).toEqual(["Loadout", "Work", "Profile", "Used in", "Lineage", "Settings"]);
+    expect(SECTIONS.map((s) => s.label)).toEqual([
+      "Loadout", "Work", "Profile", "Used in", "Lineage", "Deployments", "Triggers", "Endpoints", "Settings",
+    ]);
     // The Kit's old links (`&tab=skills`) land on the Loadout, and so does no tab at all.
     expect(readTab("?tab=skills")).toBe("loadout");
     expect(readTab("")).toBe("loadout");
