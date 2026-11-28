@@ -606,6 +606,16 @@ def host_disk_sample(connection: Any, host_id: str, *, fresh_only: bool = False)
     return sample
 
 
+def _qa_pressure(connection: Any, host_id: Optional[str]) -> Optional[dict[str, Any]]:
+    try:
+        from . import qa_disk_pressure
+
+        with connection.begin_nested():
+            return qa_disk_pressure.state(connection, host_id)
+    except Exception:  # noqa: BLE001 — the card shows the rest
+        return None
+
+
 def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
     """`GET /v1/infra/storage/summary` (docs/infra/INFRA_AGENT_API.md §4)."""
     from . import storage_incidents
@@ -660,6 +670,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
             "trend": [{"at": t.isoformat(), "used_gb": round(u, 2), "free_gb": round(fr, 2)}
                       for t, u, fr in series],
             "thresholds": th, "level": level, "rules": rules,
+            # `boss qa disk-pressure`: thresholds moved for a test, and until when.
+            "qa_pressure": _qa_pressure(connection, host_id),
             "last_cleanup": last, "open_incident_id": (open_incident or {}).get("id"),
             # ST-8: telemetry tables' share of the database and the last retention sweep.
             "telemetry": telemetry,
@@ -716,6 +728,14 @@ def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[
         with background():
             with engine.begin() as c:
                 storage_rules.ensure_defaults(c)
+                # A test's disk pressure (qa_disk_pressure) past its time is put back first.
+                try:
+                    from . import qa_disk_pressure
+
+                    with c.begin_nested():
+                        qa_disk_pressure.expire(c)
+                except Exception:  # noqa: BLE001 — never stops the watch
+                    _log.warning("storage watch: test disk pressure not checked", exc_info=True)
                 if sample_api:
                     record_sample(c, clean_sample(collect_api_sample(c), source="api"))
                 for host_id in hosts(c, within=timedelta(minutes=10)):

@@ -283,8 +283,11 @@ def put_rules(request: Request, payload: RulesBody) -> dict[str, Any]:
             unknown = sorted(set(payload.thresholds) - set(storage_rules.DEFAULT_THRESHOLDS))
             if unknown:
                 raise HTTPException(status_code=422, detail=f"unknown thresholds: {', '.join(unknown)}")
-            storage_rules.upsert(connection, kind="threshold", rule=payload.thresholds,
-                                 host_id=payload.host_id, source="operator", actor=actor)
+            try:
+                storage_rules.upsert(connection, kind="threshold", rule=payload.thresholds,
+                                     host_id=payload.host_id, source="operator", actor=actor)
+            except ValueError as exc:      # out of order: 422 naming the keys, never a 500
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"rules": storage_rules.list_rules(connection, payload.host_id),
                 "thresholds": storage_rules.thresholds(connection, payload.host_id)}
 
