@@ -233,6 +233,10 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .local_projects import router as local_projects_router
 
     app.include_router(local_projects_router)
+    # The test plan's ledger (`boss qa report`): one row per attempt at a fault case, read-only.
+    from .qa_ledger import router as qa_ledger_router
+
+    app.include_router(qa_ledger_router)
     # The change page as a git-style review, local and GitHub alike (BOSSAPP-954).
     from .change_review import router as change_review_router
 

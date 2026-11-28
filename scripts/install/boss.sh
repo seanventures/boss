@@ -153,6 +153,25 @@ Commands:
                       Run inside a working copy (the project is read from its remote) or
                       pass --project PROJECT. Signed by a person: the token boss clone or
                       boss login stored (or BOSS_TOKEN); refused without one.
+  qa fault CASE --project P [--app A]
+                      The test plan's fault cases, one command each (scripts/install/qa_fault.py):
+                      clone a LOCAL test project, break its app the way ENT-CASE describes
+                      (Node, Python or Go; another stack is refused), push it on
+                      test/fault-<case> (BOSS opens a change) and say what to do next. Refuses
+                      a project BOSS says ships to production. --list lists the cases;
+                      --revert CASE puts it back (a revert change, or deletes the unmerged branch)
+  qa disk-pressure warn|critical|floor|off [--hours H]
+                      The low-disk cases (ENT-REC-29..31) without filling the disk: BOSS moves
+                      the storage thresholds just above today's free space (only ever up),
+                      marked on the Storage card, back by itself after H hours (24); off puts
+                      back what the test moved. Refused on a production install
+  qa report [--since T] [--project P] [--case ID] [--json]
+                      The test ledger from BOSS's own records (read-only): one row per run of a
+                      fault case — failure seen, green or draft change, time to fix, human
+                      actions (unattended Y/N), the agent that acted, final state, diagnostics.
+                      Markdown, or JSON with --json
+  qa diagnostics RUN [--out FILE]
+                      A run's diagnostics report (as Download diagnostics makes it, masked)
   version             Installed release and commit
 
 Another install: boss --dir PATH. The installed boss command always runs its own install
@@ -2090,6 +2109,32 @@ else:
 ' <<<"$said"
 }
 
+# ---- the test plan's fault kit (scripts/install/qa_fault.py) ---------------------------------
+# Signed by a person (their token, never the host tools' key): the kit pushes as them and reads
+# what they may read. The token reaches the helper on stdin and git through the credential helper.
+cmd_qa() {
+  need_install
+  local what="${1:-}"; shift || true
+  case "$what" in
+    fault|disk-pressure|report|diagnostics) ;;
+    *) die "qa: fault, disk-pressure, report or diagnostics (boss qa fault --list)" ;;
+  esac
+  if [[ "$what" == fault ]] && [[ " $* " == *" --list "* ]]; then
+    python3 "$SELF_DIR/qa_fault.py" fault --list; return
+  fi
+  local token
+  if [[ "$what" == disk-pressure ]]; then
+    # The host's own disk, from the host shell: the Host tools key, as the storage readings are.
+    token="$(host_key)" || die "BOSS did not give the host tools a key. Is the api service running ($(hint_command) status)?"
+  else
+    token="$(person_token)" || exit 1
+  fi
+  [[ "$what" == fault ]] && remember_token "$token"
+  printf '%s\n' "$token" | BOSS_QA_API="$(api_url)" BOSS_QA_REMOTE="$(git_remote_base)" \
+    BOSS_QA_HELPER="$(credential_helper)" \
+    python3 "$SELF_DIR/qa_fault.py" "$what" "$@"
+}
+
 case "$COMMAND" in
   clone) cmd_clone "$@" ;;
   login) cmd_login "$@" ;;
@@ -2114,6 +2159,7 @@ case "$COMMAND" in
   steward) cmd_steward "$@" ;;
   toolchains) cmd_toolchains "$@" ;;
   self-fix) cmd_self_fix "$@" ;;
+  qa) cmd_qa "$@" ;;
   version|--version) cmd_version ;;
   *) printf 'boss: unknown command %s\n\n' "$COMMAND" >&2; usage >&2; exit 2 ;;
 esac

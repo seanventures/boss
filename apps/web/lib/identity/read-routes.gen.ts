@@ -716,6 +716,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["qa/benchmark-apps", "assurance:read"],
   ["qa/benchmark-apps/evaluations", "assurance:read"],
   ["qa/benchmark-apps/runs/{}/report", "code_task:read"],
+  ["qa/ledger", "code_task:read"],
   ["quick-lane/runs", "workflow_run:read"],
   ["quick-lane/runs/{}", "workflow_run:read"],
   ["receipts", "activity:read"],

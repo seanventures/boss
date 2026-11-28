@@ -141,7 +141,7 @@ class GitHubFake:
         base_sha = self._sha_of(bare, f"refs/heads/{pr['base']}") or _ZERO
         n = pr["number"]
         return {"number": n, "id": n, "node_id": f"PR_{n}", "state": pr["state"],
-                "merged": pr["merged"], "draft": False, "title": pr.get("title"),
+                "merged": pr["merged"], "draft": bool(pr.get("draft")), "title": pr.get("title"),
                 "body": pr.get("body"), "merge_commit_sha": pr.get("merge_sha"),
                 "html_url": f"https://github.com/{full}/pull/{n}",
                 "url": f"https://api.github.com/repos/{full}/pulls/{n}",
@@ -422,6 +422,8 @@ class GitHubFake:
                                         "base": str(body.get("base") or "main"),
                                         "body": str(body.get("body") or "")[:4000],
                                         "state": "open", "merged": False,
+                                        # A draft is kept as asked (checks_failing opens one).
+                                        "draft": bool(body.get("draft")),
                                         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")})
             return 201, self._pr_payload(bare, full, pr)
         if rest == "/pulls":
