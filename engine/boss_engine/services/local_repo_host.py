@@ -131,6 +131,23 @@ def is_local_pr_url(url: Any) -> bool:
     return f"://{LOCAL_PR_HOST}/" in str(url or "")
 
 
+#: Why approving a local change's merge would do nothing on this install (ENT-APPR-02).
+LOCAL_MERGE_DISABLED = ("Local merging is disabled on this installation. Enable "
+                        "BOSS_ENABLE_SANDBOX_MERGE and restart BOSS, then approve this change.")
+
+
+def local_merge_disabled(settings: Any, recommendation: Any) -> Optional[str]:
+    """LOCAL_MERGE_DISABLED when `recommendation` is a local change's merge and this install
+    does not merge, else None. With sandbox merging off, an approved GitHub pull request is
+    merged by a person in GitHub (decisions._create_merge_gate_block); a local change has no
+    such place, so its approval would be recorded with nothing carried out. Read by every
+    approval, a person's or a policy's (decisions.transition)."""
+    rec = recommendation if isinstance(recommendation, dict) else {}
+    if rec.get("action") != "review_pull_request" or not is_local_pr_url(rec.get("pull_request_url")):
+        return None
+    return None if getattr(settings, "enable_sandbox_merge", False) else LOCAL_MERGE_DISABLED
+
+
 def _engine(settings: Any):
     from ..db import get_engine
 

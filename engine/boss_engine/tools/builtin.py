@@ -1285,6 +1285,29 @@ def _titled_for_the_app(connection, cts, run_id: str, title) -> str:
     return f"{app}: {feature or 'a change'}"
 
 
+def _new_app_from_a_person(asked: bool) -> bool:
+    """A NEW APP SAID BY A PERSON (app_scope.NEW_APP_KEY), never a model's argument: a workflow
+    build step's trusted value (the run was started with start_run's declared_new_app, written
+    under workflows.NEW_APP_INPUT), or `new_app` from a person calling directly (MCP, CLI) — a person
+    principal, no run token, outside any chat turn or step. An agent's `new_app` only skips the
+    app question; the empty-checkout guard still treats its build as naming no app."""
+    from ..services import agent_acts
+    from ..services.workflow_capability_runner import _IN_STEP_AUTHORITY
+    from .registry import CURRENT_TOOL_AUTH, trusted_step_arg
+
+    if trusted_step_arg("new_app") is True:
+        return True
+    if not asked or _IN_STEP_AUTHORITY.get():
+        return False
+    found = agent_acts.current_origin()
+    if found.get("act_id") or found.get("step_run_id"):
+        return False                     # a chat turn's or a step's model wrote it
+    auth = CURRENT_TOOL_AUTH.get()
+    principal = getattr(auth, "principal", None)
+    return bool(principal is not None and getattr(principal, "is_person", False)
+                and getattr(auth, "run_token", None) is None)
+
+
 def _building_agent(connection, project_id: str, actor: str) -> dict | None:
     """{role_key, agent_id} when `actor` is an agent on this project (not a person), else None."""
     from sqlalchemy import text as _text
@@ -1461,6 +1484,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         if new_app and (extends or preview_id):
             return {"ok": False, "error": ("Name the app to change (extends_run_id or preview_id) "
                                            "or ask for a new app (new_app), not both.")}
+        if _new_app_from_a_person(new_app):
+            # Recorded on the build (app_scope.NEW_APP_KEY): it starts from the default branch,
+            # and another app's unmerged branch in the repository is no reason to stop it. Only
+            # a person's word does that; a model's `new_app` only answers the app question below.
+            finalize_ctx["new_app"] = True
         if preview_id and not extends:
             with ctx.begin() as connection:
                 preview = _preview_in_project(connection, preview_id, pid)
@@ -1494,8 +1522,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 with ctx.begin() as connection:
                     new_work.require_app_choice(connection, pid, (
                         "Which one should this change? Name it as extends_run_id (or the "
-                        "preview_id the person was looking at), or pass new_app: true to "
-                        "create a new app. list_code_tasks shows each app's build."))
+                        "preview_id the person was looking at); list_code_tasks shows each "
+                        "app's build. If the person did not say which, ask them. new_app is "
+                        "only for an app the person asked to create, and it never lets a "
+                        "build start beside another app's unmerged code."))
             except new_work.AppChoiceNeeded as asked:
                 return {"ok": False, "needs_app_choice": True, "error": str(asked),
                         "app_choices": asked.choices}
@@ -2506,6 +2536,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             # `start_run` now drops them for every caller; they are named here so the reply
             # says what was ignored rather than dropping it in silence.
             ignored = sorted(k for k in run_input if str(k).startswith(wf.ADOPT_PREFIX))
+            # NOR THAT IT IS A NEW APP (app_scope.NEW_APP_KEY): only a person's door declares one,
+            # and a declared new app is never stopped beside another app's unmerged code.
+            # start_run drops it for every caller too; it is named here so the reply says so.
+            if "new_app" in run_input:
+                run_input.pop("new_app")
+                ignored = sorted({*ignored, "new_app"})
             adoption: dict = {}
             if adopted:
                 # The same research rule the console's start uses: a COMPLETED dossier WITH

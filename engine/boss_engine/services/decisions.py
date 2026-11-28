@@ -809,6 +809,21 @@ class DecisionService:
                     recommendation = json.loads(recommendation)
                 except ValueError:
                     recommendation = None
+            # AN APPROVAL IS RECORDED ONLY WHEN ITS EFFECT CAN FOLLOW: a local merge on an install
+            # that does not merge stays pending and says which setting it needs. A person's
+            # force merges anyway (the follow-on honours force), so it is not refused.
+            from .local_repo_host import local_merge_disabled
+
+            disabled = None if force else local_merge_disabled(self.settings, recommendation)
+            if disabled:
+                raise InvalidDecisionTransitionError(disabled)
+            # A "Merge the tip?" card (software_factory, an unverifiable head) is answered only
+            # with Force: an unforced approval would merge nothing and raise it again, and dev
+            # autonomy would loop on it.
+            if not force and isinstance(recommendation, dict) and recommendation.get("merge_tip_card"):
+                raise InvalidDecisionTransitionError(
+                    "This repository's host cannot confirm which commit the pull request holds. "
+                    "Approve with Force to merge its tip, or merge it in the repository host.")
             preview = (recommendation or {}).get("action_preview") \
                 if isinstance(recommendation, dict) else None
             current_hash = (preview or {}).get("content_hash") if isinstance(preview, dict) \
@@ -1295,7 +1310,7 @@ class DecisionService:
             )
             # Meeting PRD publish → auto-start a governed code task so the
             # approved outcome advances into coding (previously a dead-end).
-            self._start_code_task_after_prd(connection, row, actor, recommendation)
+            self._start_code_task_after_prd(connection, row, actor, recommendation, note=note)
         elif action == "resume_agent_run":
             # A durable agent run paused for approval — resume it via a worker job
             # so the conversation continues with the approved tool's result.
@@ -2023,6 +2038,7 @@ class DecisionService:
         row: dict[str, Any],
         actor: str,
         recommendation: dict[str, Any],
+        note: Optional[str] = None,
     ) -> None:
         """After a meeting's PRD publish decision is approved, auto-start a
         governed code task seeded from the PRD so the task advances into coding
@@ -2155,7 +2171,10 @@ class DecisionService:
             return
         raw_title = str(args.get("title") or "Code task")
         title = raw_title[5:].strip() if raw_title.startswith("PRD: ") else raw_title
-        prd_markdown = args.get("markdown") or ""
+        from .meeting_service import with_requester_answer
+
+        prd_markdown = with_requester_answer(
+            args.get("markdown") or "", recommendation.get("build_readiness_question"), note)
         directive = prd_markdown or f"Implement the approved plan: {title}"
 
         # The beginning of this outcome, recorded so the build can be drawn as the continuation
@@ -3333,10 +3352,19 @@ def launch_prd_build(engine, settings: Settings, jobs, *, project_id: str, decis
                 directive=directive, owner=owner, repo=repo, review=False, origin=origin,
                 github=github)
         else:
+            # A NEW APP only when nothing says otherwise: an empty repository AND no app in the
+            # project yet (an approved PRD beside one app may be that app's feature, so it is
+            # not declared, and the empty-checkout guard still protects it).
+            new_app = False
+            if not has_code:
+                from .project_experience import new_work
+
+                with begin(engine) as connection:
+                    new_app = not new_work.app_choices(connection, project_id)
             result = pd.start_decomposed_build(
                 engine, settings, jobs, project_id=project_id, task_id=task_id,
                 prd_or_directive=directive, owner=owner, repo=repo, base_branch=None,
-                seed_scaffold=not has_code, origin=origin, github=github)
+                seed_scaffold=not has_code, origin=origin, github=github, new_app=new_app)
     except Exception as error:  # noqa: BLE001 — recorded below, never silent
         _log.exception("PRD build for %s did not start", decision_id)
         result = {"started": False, "reason": "build_launch_failed",

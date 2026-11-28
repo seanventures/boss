@@ -470,6 +470,10 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
         run_input["extends_run_id"] = anchor["run_id"]
         if anchor.get("mode") == "new_change":
             run_input["extends_from_default"] = True
+    elif payload.new_app:
+        # CREATE A NEW APP, the person's choice: its build starts from the default branch and
+        # another app's unmerged branch in the repository never stops it (app_scope).
+        run_input["new_app"] = True
     picked_profile = new_work.chosen_profile(payload.profile)
     if picked_profile:
         run_input["profile"] = picked_profile

@@ -336,3 +336,20 @@ def test_the_preview_records_the_trees_kind_only_when_the_build_did_not(eng, pro
     builds.append(said)
     ps.record_app_kind(eng, said, tree)
     assert ps.is_service_build(eng, said) is False, "the build's own record stands"
+
+
+def test_only_a_verified_pushed_document_review_skips_preview_before_start(eng, project, builds):
+    crun = _build(eng, project, ["guide.md"])
+    builds.append(crun)
+    with eng.begin() as c:
+        doc = {"documentation_review": {"application_tests": "not_applicable"}}
+        c.execute(text("UPDATE code_task_runs SET state=CAST(:d AS jsonb) WHERE id=:id"),
+                  {"d": json.dumps(doc), "id": crun})
+        assert runner._document_review_preview(c, project, crun) is None
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx=CAST(:ctx AS jsonb) WHERE id=:id"),
+                  {"ctx": json.dumps({"local_review_of_push": True}), "id": crun})
+        assert runner._document_review_preview(c, project + "-other", crun) is None
+        result = runner._perform_capability(c, None, project_id=project, actor="boss", step={},
+                                            context={}, key="preview", capability=CAPABILITIES["preview"],
+                                            inputs={"run_id": crun})
+        assert result["status"] == "not_applicable" and result["tool"] is None

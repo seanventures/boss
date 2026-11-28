@@ -913,7 +913,7 @@ def ask_model(adapter: Any, *, raw_adapter: Any = None, agent: str, evidence: Ma
         choices=choices, context=pack, hints=list(hints), brief=SYSTEM_PROMPT.format(agent=agent),
         check=check, read=ReadPhase(tools=list(tools or []) if run_tool else [], run=run_tool,
                                     max_turns=max_turns, max_usd_micros=max_usd_micros,
-                                    result_chars=MAX_TOOL_RESULT_CHARS),
+                                    result_chars=MAX_TOOL_RESULT_CHARS, reserve_format_retry=True),
         adapter=adapter, min_confidence=0.0, context_limit=MAX_PACK_CHARS)
     by = {k: str(got.by.get(k) or "") for k in ("engine", "model", "source")}
     if not by["engine"]:

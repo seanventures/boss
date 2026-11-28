@@ -506,3 +506,21 @@ def test_a_deploy_generates_the_session_key_its_compose_file_reads():
     same_text, _ = with_compose_owned_secrets(declared, load_manifest(declared),
                                               {"docker-compose.yml": compose}.get)
     assert same_text == declared, "a manifest that declares it is left as written"
+
+
+def test_a_webhook_secret_boss_mints_for_a_deploy_is_said_in_the_plan(caplog):
+    """A provider that signs its webhooks with a secret IT issued will not match a minted one:
+    the deploy plan's manifest says so, and so does the log."""
+    import logging
+
+    from boss_engine.services.stack_deploy import with_compose_owned_secrets
+
+    text_ = ("version: 1\nname: hooks\nkind: compose\ncompose:\n  file: docker-compose.yml\n"
+             "health: [{url: \"{target.public_url}/\", expect: 200}]\n")
+    compose = "services:\n  app:\n    environment:\n      WEBHOOK_SECRET: ${WEBHOOK_SECRET}\n"
+    with caplog.at_level(logging.WARNING, logger="boss_engine.services.stack_deploy"):
+        placed_text, placed = with_compose_owned_secrets(text_, load_manifest(text_),
+                                                         {"docker-compose.yml": compose}.get)
+    assert "WEBHOOK_SECRET" in placed.summary()["generated_env_keys"]
+    assert "# BOSS: WEBHOOK_SECRET is minted for this deploy" in placed_text
+    assert any("WEBHOOK_SECRET" in r.getMessage() for r in caplog.records)

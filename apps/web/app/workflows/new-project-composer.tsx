@@ -869,6 +869,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                                fields: declaredInputs, supplied: inputsToSend,
                                needsRepository });
     if (fromFile) Object.assign(input, fileStartExtras(schema, draft.inputs));
+    // A NEW APP, SAID SO: its build starts from the default branch beside the project's other
+    // apps, never refused for another app's unmerged change (the API's app_scope).
+    input.new_app = true;
     // A NEW APP'S LINKS travel with its start: the app exists only once it is built, so the start
     // checks them (app_link:manage, the apps, the aliases) and the first build makes them.
     if (brief && talks.length) input.app_links = linkRequests(talks);

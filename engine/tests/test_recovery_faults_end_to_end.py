@@ -424,15 +424,17 @@ def test_rec09_the_crash_on_start_is_named_as_an_exit_before_serving(rec09):
     assert rounds and "app_serves" in rounds[0]["data"]["failing_gates"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ENT-REC-09: a repair round that writes nothing runnable skips the app-start proof "
-    "(prove_app_serves: source 'no_runnable_change', ok), so the repair build of an app that "
-    "still crashes on start completes green with an ordinary pull request — no draft, no "
-    "follow-up"))
 def test_rec09_an_app_that_still_crashes_never_completes_green(rec09):
+    """A repair round that writes nothing runnable still starts the app it sits on (it is known
+    not to start: preview_service.lineage_start_failure), so it can never complete green."""
     last = rec09["runs"][-1]
     green = last["status"] == "completed" and not _of(rec09, "code_task.pr_opened_with_checks_failing")
     assert not green, "the server still throws on start, so the lineage cannot end green"
+    serve = [e["data"] for e in _of(rec09, "code_task.app_serve_checked")
+             if e["entity_id"] != rec09["root"]]
+    assert serve and all(not s["ok"] and s.get("source") != "no_runnable_change" for s in serve), \
+        "every later build started the app again, and it failed"
+    assert all(pr.get("draft") for pr in rec09["prs"]), "a draft marked checks failing, never green"
 
 
 def test_rec09_the_lineage_ends(rec09):

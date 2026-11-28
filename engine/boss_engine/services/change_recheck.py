@@ -201,10 +201,13 @@ def request(engine: Any, settings: Any, jobs: Any, run_id: str, *, project_id: s
 PUSH_HOLD = "a re-check commits nothing: it only judges the change as it stands"
 
 
-def push_hold_reason(recheck: bool, template_reason: Optional[str]) -> Optional[str]:
+def push_hold_reason(recheck: bool, template_reason: Optional[str], *, submitted_review: bool = False,
+                     where: str = "") -> Optional[str]:
     """Why a push is held, or None: a re-check holds EVERY commit and upsert (a checkpoint, a
     rescue, a partial PR, the preview declaration, the PRD record, a stage commit), whatever its
     label; otherwise an applied template's hold, as before (#168 review R2)."""
+    if submitted_review and where.startswith("checkpoint:"):
+        return "A review cannot checkpoint unfinished work onto the submitted branch."
     return PUSH_HOLD if recheck else template_reason
 
 

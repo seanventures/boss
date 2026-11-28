@@ -367,6 +367,10 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
     }
     if app["run_id"]:
         run_input["extends_run_id"] = app["run_id"]
+    elif new_app:
+        # A NEW APP, SAID SO: its build starts from the default branch, and another app's
+        # unmerged branch in the same repository is no reason to stop it (app_scope).
+        run_input["new_app"] = True
     workflow_key = str(body.get("workflow_key") or "").strip() or DEFAULT_WORKFLOW
     if body.get("workflow_key") and workflow_key != DEFAULT_WORKFLOW:
         check_build_workflow(c, project_id, workflow_key)

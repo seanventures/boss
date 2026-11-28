@@ -47,6 +47,10 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
            deferred: Iterable[dict] = (), build_url: str = "", run_id: str = "",
            quality_gate_id: str = "", baseline: Optional[dict] = None) -> str:
     """The description. Every line comes from a record; nothing is written by a model."""
+    docs = evidence.get("documentation_review") or {}
+    if docs:
+        paths = docs["submitted_paths"]
+        additions = deletions = None
     paths = sorted({str(p) for p in paths if p})
     rounds = [r for r in rounds if isinstance(r, dict)]
     out = [f"## {title}".strip(), ""]
@@ -66,7 +70,11 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     cmds = next((v for v in (evidence.get("test_commands"), evidence.get("tests"))
                  if isinstance(v, list) and v), [])
     single = evidence.get("test_cmd") or evidence.get("test_command")
-    if cmds:
+    if docs:
+        mark = "✅" if docs["exit_code"] == 0 else "❌"
+        out += [f"- {mark} `git diff --check` (exit {docs['exit_code']}).",
+                "- Application tests are inapplicable to this documentation-only tree."]
+    elif cmds:
         for c in cmds[:6]:
             c = c if isinstance(c, dict) else {"command": str(c)}
             ok = c.get("ok") if "ok" in c else c.get("exit_code") == 0
@@ -83,6 +91,11 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     # A gate whose check did not run is skipped, with why — never counted as passed or failed
     # (the rounds record an unconvened seat as not_run, which must not turn its gate false).
     skipped = {g: why for g, why in _seat_policy.skipped_gates(evidence).items() if g in gates}
+    if docs:
+        for gate in ("code_written", "written_tests_pass", "existing_tests_intact",
+                     "web_package_honest", "app_serves", "nothing_broke"):
+            if gate in gates and gates[gate]:
+                skipped[gate] = "documentation-only review"
     final = next((r.get("seats") or {} for r in reversed(rounds) if r.get("seats")), {})
     # A REVIEW THAT REFUTED ONLY WITH FINDINGS BELOW THE BAR'S BLOCKING SEVERITY (a MAJOR at
     # the standard bar) passed its gate: those findings are the build's follow-ups, so the

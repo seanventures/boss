@@ -2605,6 +2605,9 @@ def retry_code_task(
                              if (_budget := _lineage_cap.person_budget(
                                  repair_retries, person=bool(by_person and not automatic)))
                              is not None else {}),
+                          **({key: fctx_prev[key] for key in ("local_review_of_push",
+                              "local_change_branch", "local_change_set_id") if key in fctx_prev}
+                             if fctx_prev.get("local_review_of_push") and not fix_note else {}),
                           # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
                           # after the job is queued (a fast-failing attempt read it as 0).
                           **({"auto_infra_retry": int(auto_retry_attempt)}
@@ -2672,6 +2675,9 @@ def retry_code_task(
                           # Same app across every attempt; see start_followup_task.
                           "app_id": (fctx_prev.get("app_id") or fctx_prev.get("root_run_id")
                                      or run_id),
+                          # A NEW APP STAYS ONE on every attempt (app_scope): its retry is never
+                          # stopped by another app's unmerged branch in the repository.
+                          **({"new_app": True} if fctx_prev.get("new_app") is True else {}),
                           **({"official": True} if fctx_prev.get("official") else {}),
                           **({"qa_benchmark": dict(fctx_prev["qa_benchmark"])}
                              if isinstance(fctx_prev.get("qa_benchmark"), dict)
