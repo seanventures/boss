@@ -318,6 +318,31 @@ def infer_risk_tier(spec: dict, profile: dict) -> int:
     return clamped
 
 
+def study_tier_for(
+    spec: dict,
+    profile: dict,
+    *,
+    is_existing_code: bool = True,
+    blast_radius: Optional[dict] = None,
+) -> int:
+    """PE-A (BOSSAPP-784): risk tier for the Study stage — inverted for existing code.
+
+    Edits to existing code carry blast-radius risk and always start at tier >= 2 for Study,
+    escalating to tier 3 when the blast radius touches multiple callers/flows or high risk.
+    """
+    base = infer_risk_tier(spec, profile)
+    if not is_existing_code:
+        return base
+    tier = max(base, 2)
+    br = blast_radius or {}
+    callers = list(br.get("callers") or [])
+    flows = list(br.get("flows") or [])
+    risk_level = str(br.get("risk_level") or "").strip().lower()
+    if risk_level in ("high", "critical") or len(callers) >= 5 or len(flows) >= 3:
+        tier = 3
+    return min(3, tier)
+
+
 # The same four tiers infer_risk_tier picks between, described by what they cost, so a model
 # judges the work rather than the vocabulary. Kept beside the keyword version because the two
 # must mean the same thing: evals/task_rigor measures one against the other.

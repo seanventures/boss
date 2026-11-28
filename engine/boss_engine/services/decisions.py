@@ -128,9 +128,54 @@ class DecisionService:
             params,
         ).mappings().all()
 
+        from . import decision_ladder as _decision_ladder
+
         expired = 0
         for row in rows:
             if decision_actions.never_expires(row):
+                self._keep_open_past_deadline(connection, dict(row))
+                continue
+            policy = _decision_ladder.resolve_deadline_expiry(dict(row))
+            if policy["outcome"] == "apply_recommendation":
+                updated = connection.execute(
+                    text(
+                        """
+                        UPDATE decisions
+                        SET status = 'approved',
+                            approved_by = 'system:deadline_default',
+                            approved_at = :updated_at,
+                            resolution_note = :note,
+                            updated_at = :updated_at
+                        WHERE id = :decision_id AND status IN ('pending', 'delegated')
+                        """
+                    ),
+                    {
+                        "decision_id": row["id"],
+                        "updated_at": now_utc(),
+                        "note": policy["note"],
+                    },
+                )
+                if updated.rowcount != 1:
+                    continue
+                emit_event(
+                    connection,
+                    row["project_id"],
+                    "decision.default_applied",
+                    "system",
+                    "decision",
+                    row["id"],
+                    {
+                        "deadline_at": row["deadline_at"].isoformat(),
+                        "default_action": policy["applied_action"],
+                        "safe_default_applied": policy["applied_action"],
+                        "still_answerable": False,
+                        "note": policy["note"],
+                    },
+                )
+                continue
+            # Irreversible hold decisions remind and escalate rather than silently expiring
+            # unless explicitly marked non-reopenable legacy hold.
+            if (row["default_action"] or "hold") == "hold":
                 self._keep_open_past_deadline(connection, dict(row))
                 continue
             updated = connection.execute(
@@ -160,10 +205,6 @@ class DecisionService:
                 {
                     "deadline_at": row["deadline_at"].isoformat(),
                     "default_action": row["default_action"] or "hold",
-                    # "hold" means DO NOTHING, so nothing was applied. Reporting
-                    # `safe_default_applied: hold` read as "handled safely" when the truth is
-                    # "nobody answered and the work is waiting" — and 77% of decisions on the
-                    # live project took this path.
                     "safe_default_applied": (
                         None if (row["default_action"] or "hold") == "hold"
                         else row["default_action"]
