@@ -17,8 +17,10 @@ by_person, never an agent's tool call, a recovery build or another caller; those
 never reset it). BOSS's retries of its own platform errors (`started_by: platform`,
 `auto_infra_retry`) attempt nothing at the code and are skipped.
 
-A person's own repair budget on the build (`repair_retries`, set when they started or retried
-it) is their window: the cap is then 1 + that figure when it is larger (cap_for).
+A PERSON'S own repair budget is their window: when a verified person retries with
+`repair_retries`, the attempt records it (`person_repair_budget`, clamped to MAX_PERSON_BUDGET)
+with the person mark, and the window that attempt opens is capped at 1 + that figure when it is
+larger than CAP. Any other caller's figure (an agent's tool call) never moves the cap.
 
 Every automatic path asks before it starts another build: the quality gate (no repair child at the
 cap; the PR opens as a draft with no follow-up, its card saying BOSS already tried this), the
@@ -85,11 +87,23 @@ def started_by(*, automatic: bool, by_person: bool, platform_retry: bool) -> str
     return PERSON if (by_person and not automatic) else BOSS
 
 
-def cap_for(spec: Optional[Mapping[str, Any]]) -> int:
-    """The cap for a build: CAP, or a person's own larger repair budget (1 + repair_retries)."""
-    asked = (spec or {}).get("repair_retries")
-    if isinstance(asked, int) and not isinstance(asked, bool) and asked >= 0:
-        return max(CAP, 1 + asked)
+#: finalize_ctx key: the repair budget a verified person gave the attempt they started.
+PERSON_BUDGET = "person_repair_budget"
+#: The most repair rounds a person may give one window (the tools' own bound).
+MAX_PERSON_BUDGET = 5
+
+
+def person_budget(repair_retries: Any, *, person: bool) -> Optional[int]:
+    """What a start records as the person's repair budget: theirs, clamped; None otherwise."""
+    if not person or not isinstance(repair_retries, int) or isinstance(repair_retries, bool):
+        return None
+    return max(0, min(MAX_PERSON_BUDGET, repair_retries))
+
+
+def _cap_of(fctx: Mapping[str, Any]) -> int:
+    asked = fctx.get(PERSON_BUDGET)
+    if isinstance(asked, int) and not isinstance(asked, bool):
+        return max(CAP, 1 + max(0, min(MAX_PERSON_BUDGET, asked)))
     return CAP
 
 
@@ -102,10 +116,11 @@ def _kind(row_id: str, root: str, fctx: Mapping[str, Any]) -> Optional[str]:
     return PERSON if said == PERSON else BOSS
 
 
-def attempts(connection: Any, run_id: str, cause: Optional[str] = None) -> int:
-    """How many builds of the window that holds `run_id` (up to and including it) stopped on
-    `cause` (default: the cause `run_id` itself recorded). 0 when it records none, or when the
-    lineage cannot be read (no cap then: the other bounds still hold)."""
+def standing(connection: Any, run_id: str, cause: Optional[str] = None) -> tuple[int, int]:
+    """(attempts, cap) for the window that holds `run_id`: how many of its builds (up to and
+    including it) stopped on `cause` (default: the cause `run_id` recorded), and the cap of that
+    window (CAP, or the budget of the person who opened it). (0, CAP) when it records no cause
+    or the lineage cannot be read (no cap then: the other bounds still hold)."""
     try:
         with connection.begin_nested():
             row = connection.execute(text(
@@ -113,10 +128,10 @@ def attempts(connection: Any, run_id: str, cause: Optional[str] = None) -> int:
                 "finalize_ctx->>'stop_cause' AS cause FROM code_task_runs WHERE id = :r"),
                 {"r": run_id}).mappings().first()
             if not row:
-                return 0
+                return 0, CAP
             cause = cause or row["cause"]
             if not cause:
-                return 0
+                return 0, CAP
             root = row["root"]
             rows = connection.execute(text(
                 "SELECT id, status, finalize_ctx FROM code_task_runs "
@@ -124,8 +139,8 @@ def attempts(connection: Any, run_id: str, cause: Optional[str] = None) -> int:
                 "AND created_at <= (SELECT created_at FROM code_task_runs WHERE id = :r) "
                 "ORDER BY created_at, id"), {"root": root, "r": run_id}).mappings().all()
     except Exception:  # noqa: BLE001 — an unread lineage is never a reason to stop work
-        return 0
-    n = 0
+        return 0, CAP
+    n, cap = 0, CAP
     for r in rows:
         fctx = r["finalize_ctx"] or {}
         if isinstance(fctx, str):
@@ -134,19 +149,24 @@ def attempts(connection: Any, run_id: str, cause: Optional[str] = None) -> int:
         if kind is None:
             continue
         if kind == PERSON:
-            n = 0
+            n, cap = 0, _cap_of(fctx)
         stopped = str(fctx.get(STOP_CAUSE) or "")
         if stopped:
             n = n + 1 if stopped == cause else n
         elif str(r["status"] or "") == "completed" and r["id"] != run_id:
             n = 0                           # it went green: the window closes
-    return n
+    return n, cap
 
 
-def spent(connection: Any, run_id: str, spec: Optional[Mapping[str, Any]] = None,
-          cause: Optional[str] = None) -> bool:
+def attempts(connection: Any, run_id: str, cause: Optional[str] = None) -> int:
+    """How many builds of the window that holds `run_id` stopped on `cause` (standing)."""
+    return standing(connection, run_id, cause)[0]
+
+
+def spent(connection: Any, run_id: str, cause: Optional[str] = None) -> bool:
     """Has BOSS made all the attempts it may make at this cause by itself?"""
-    return attempts(connection, run_id, cause) >= cap_for(spec)
+    made, cap = standing(connection, run_id, cause)
+    return made >= cap
 
 
 def risk_tier(parent: Optional[Mapping[str, Any]],
@@ -162,4 +182,5 @@ def risk_tier(parent: Optional[Mapping[str, Any]],
 
 
 __all__ = ["BOSS", "CAP", "NEXT_STEP", "PERSON", "PLATFORM", "REASON", "STARTED_BY", "STOP_CAUSE",
-           "attempts", "cap_for", "cause_gate", "risk_tier", "spent", "started_by", "words"]
+           "MAX_PERSON_BUDGET", "PERSON_BUDGET", "attempts", "cause_gate", "person_budget", "risk_tier",
+           "spent", "standing", "started_by", "words"]

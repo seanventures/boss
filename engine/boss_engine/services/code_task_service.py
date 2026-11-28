@@ -2395,8 +2395,9 @@ def retry_code_task(
     # code and keep their own bounds.
     if automatic and not platform_retry and not recheck:
         with _transaction(engine) as c:
-            _made = _lineage_cap.attempts(c, run_id)   # at the cause this build stopped on
-        if _made >= _lineage_cap.cap_for(spec):
+            # At the cause this build stopped on, against its window's cap.
+            _made, _cap = _lineage_cap.standing(c, run_id)
+        if _made >= _cap:
             raise RetryNeedsPerson(
                 f"{_lineage_cap.words(_made)}. {_lineage_cap.NEXT_STEP}.")
 
@@ -2598,6 +2599,12 @@ def retry_code_task(
                           _lineage_cap.STARTED_BY: _lineage_cap.started_by(
                               automatic=automatic, by_person=by_person,
                               platform_retry=platform_retry),
+                          # A VERIFIED PERSON'S repair budget is their window's cap (clamped);
+                          # any other caller's figure never moves it.
+                          **({_lineage_cap.PERSON_BUDGET: _budget}
+                             if (_budget := _lineage_cap.person_budget(
+                                 repair_retries, person=bool(by_person and not automatic)))
+                             is not None else {}),
                           # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
                           # after the job is queued (a fast-failing attempt read it as 0).
                           **({"auto_infra_retry": int(auto_retry_attempt)}

@@ -154,16 +154,27 @@ def test_an_agents_retry_on_a_spent_lineage_stays_spent(env):  # noqa: F811
     assert lineage_cap.started_by(automatic=True, by_person=False, platform_retry=True) == "platform"
 
 
-def test_a_persons_repair_budget_is_their_window(env):  # noqa: F811
-    assert lineage_cap.cap_for({}) == lineage_cap.CAP
-    assert lineage_cap.cap_for({"repair_retries": 5}) == 6
-    assert lineage_cap.cap_for({"repair_retries": 1}) == lineage_cap.CAP
-    root = _run(env, spec={"repair_retries": 5})
-    third = _run(env, root=root, n=2, attempt=3, started_by="boss", spec={"repair_retries": 5})
-    _run(env, root=root, n=1, attempt=2, started_by="boss")
+def test_a_persons_repair_budget_is_their_window_and_nobody_elses(env):  # noqa: F811
+    """A verified person's repair_retries caps the window they open (clamped to 5); an agent's
+    figure, however large, never moves it."""
+    assert lineage_cap.person_budget(1000, person=True) == lineage_cap.MAX_PERSON_BUDGET
+    assert lineage_cap.person_budget(1000, person=False) is None
+    assert lineage_cap.person_budget(None, person=True) is None
+    root = _run(env)
+    person = _run(env, root=root, n=1, attempt=2, started_by="person", person_repair_budget=5)
+    fourth = None
+    for i in range(2, 6):
+        fourth = _run(env, root=root, n=i, attempt=i + 1, started_by="boss")
     with env.engine.begin() as c:
-        assert not lineage_cap.spent(c, third, {"repair_retries": 5})
-        assert lineage_cap.spent(c, third, {})
+        assert lineage_cap.standing(c, person) == (1, 6)
+        assert lineage_cap.standing(c, fourth) == (5, 6) and not lineage_cap.spent(c, fourth)
+    agent_root = _run(env, spec={"repair_retries": 1000})
+    agent = _run(env, root=agent_root, n=1, attempt=2, started_by="boss",
+                 spec={"repair_retries": 1000}, person_repair_budget=None)
+    third = _run(env, root=agent_root, n=2, attempt=3, started_by="boss")
+    with env.engine.begin() as c:
+        assert lineage_cap.standing(c, agent)[1] == lineage_cap.CAP
+        assert lineage_cap.spent(c, third)
 
 
 def test_a_persons_retry_starts_a_new_window(env):  # noqa: F811
@@ -203,9 +214,11 @@ def test_every_attempt_says_who_started_it():
 
     retry = inspect.getsource(cts.retry_code_task)
     assert "_lineage_cap.started_by(" in retry and "by_person=by_person" in retry
+    # Only a verified person's repair budget is recorded, with the person mark.
+    assert "repair_retries, person=bool(by_person and not automatic)" in retry
     spawn = inspect.getsource(governed._spawn_deferred_findings_task)
     assert "_lineage_cap.STARTED_BY: _lineage_cap.BOSS" in spawn
-    assert "_lineage_cap.attempts(c, parent_run_id)" in spawn
+    assert "_lineage_cap.standing(c, parent_run_id)" in spawn
 
 
 def test_a_continuation_keeps_the_lineage_s_risk_tier():

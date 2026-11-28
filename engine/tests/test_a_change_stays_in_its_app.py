@@ -91,9 +91,28 @@ def test_the_folders_a_brief_names(tmp_path):
     root = _two_apps(tmp_path)
     assert app_root.named_folders(root, "Build it in the `recipe-box/` folder.") == ["recipe-box"]
     assert app_root.named_folders(
-        root, "Move the login from neighborhood-board into `recipe-box/`") == [
+        root, "Move the login from neighborhood-board/ into `recipe-box/`") == [
         "neighborhood-board", "recipe-box"]
+    assert app_root.named_folders(root, "Change apps/admin only.") == ["apps/admin"]
     assert app_root.named_folders(root, "Add a counter to the slug service.") == []
+
+
+def test_a_bare_word_or_a_negated_mention_is_never_a_folder_to_work_in(tmp_path):
+    """A monorepo with `api/` and `web/` apps: "calls the api" and "do not touch the api" name
+    no folder, so a web build keeps its scope."""
+    for app in ("api", "web"):
+        (tmp_path / app).mkdir()
+        (tmp_path / app / "package.json").write_text('{"scripts": {"start": "node ."}}')
+    for brief in ("Build it in the `web/` folder. The web app calls the api for its data.",
+                  "Build it in the `web/` folder. Do not touch the api.",
+                  "Build it in the `web/` folder. Don't touch `api/`.",
+                  "Build it in the `web/` folder, without changing api/ at all.",
+                  "Edit `web/` but leave `api/` alone."):
+        assert app_root.named_folders(tmp_path, brief) == ["web"], brief
+        exempt: list = []
+        assert governed._scope_for_writing(None, "crun_1", "p", tmp_path,
+                                           {"instructions": brief}, {}, None, None, "web",
+                                           exempt) == "web", brief
 
 
 # ── ENT-REC-51: the pull request's whole change ───────────────────────────────────────────────
@@ -232,8 +251,20 @@ def test_every_build_path_runs_its_agents_through_the_scope():
             "            or _app_root_mod.clean_rel(_recorded_app), _write_exempt)") in src
     # The micro-VM guest's brief too.
     assert "_scoped_prompt(prompt)}" in src
+    # No merge base (the micro-VM substrate, no history): the gate is not judged, and says so,
+    # rather than judging paths an earlier attempt may since have restored.
+    assert "code_task.app_scope_unjudged" in src and "fallback = None" in src
     # The gate judges the pull request's whole change, with the brief's folders exempt.
-    assert "root, _whole_change_paths(), _write_scope[0], exempt=_write_exempt)" in src
+    assert "root, _change, _write_scope[0], exempt=_write_exempt)" in src
+
+
+def test_the_card_says_how_many_attempts_were_made():
+    from boss_engine.services import checks_failing
+
+    six = checks_failing.stopped_record("attempts_spent", ["written_tests_pass"], attempts=6)
+    assert "(6 attempts" in six["words"] and six["no_followup"]
+    assert "(3 attempts" in checks_failing.stopped_record(
+        "attempts_spent", ["written_tests_pass"])["words"]
 
 
 def test_a_cross_app_brief_has_no_single_app_scope(tmp_path):

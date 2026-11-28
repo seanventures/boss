@@ -137,7 +137,8 @@ def environment_stop(failing: Iterable[str], *, faults: Optional[Mapping[str, st
 
 def stopped_record(reason: str, failing: Iterable[str], *,
                    needs: Optional[Iterable[str]] = None,
-                   why: Optional[str] = None) -> dict[str, Any]:
+                   why: Optional[str] = None,
+                   attempts: Optional[int] = None) -> dict[str, Any]:
     """What the PR and its card say about such a stop, in the words a person acts on:
 
       a secret only a person can set (`needs`, the app_serves check's `needs_secret`) —
@@ -157,8 +158,9 @@ def stopped_record(reason: str, failing: Iterable[str], *,
         # ONE CAP PER LINEAGE (lineage_cap): BOSS made its attempts; a person decides next.
         from .lineage_cap import NEXT_STEP, words
 
+        said = words(attempts) if attempts else words()
         return {"reason": reason, "no_followup": True, "action": NEXT_STEP,
-                "words": f"stopped: {words()}, {labels}. {NEXT_STEP}"}
+                "words": f"stopped: {said}, {labels}. {NEXT_STEP}"}
     if reason == "refusal":
         said = " ".join(str(why or "").split())[:300] or labels
         return {"reason": reason, "no_followup": True,

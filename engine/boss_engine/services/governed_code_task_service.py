@@ -4356,8 +4356,7 @@ def _spawn_deferred_findings_task(
     # ONE CAP PER CAUSE (lineage_cap): the follow-up would be one attempt too many at the
     # cause its parent stopped on.
     with _transaction(engine) as c:
-        _made = _lineage_cap.attempts(c, parent_run_id)
-        _cap = _lineage_cap.cap_for(spec)
+        _made, _cap = _lineage_cap.standing(c, parent_run_id)
         if _made >= _cap:
             emit_event(c, project_id, "code_task.followup_skipped", "boss", "code_task_run",
                        parent_run_id, {"reason": _lineage_cap.words(_made),
@@ -11050,14 +11049,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             gates["tests_written_first"] = bool(test_files)
             gates["coder_did_not_edit_tests"] = tests_untouched
         _other_app_files: list[str] = []
+        _app_scope_note: list[Optional[str]] = [None]
+        _app_scope_said = [False]
 
-        def _whole_change_paths() -> list[str]:
+        def _app_scope_record() -> dict:
+            return {"app": _write_scope[0], "other_app_files": _other_app_files[:40],
+                    **({"unjudged": _app_scope_note[0]} if _app_scope_note[0] else {})}
+
+        def _whole_change_paths() -> Optional[list[str]]:
             """THE PULL REQUEST'S WHOLE CHANGE, not this attempt's (whole_change): the tree
             against the merge base of the PR's base branch and the work, renames off — never a
             two-dot diff against the base's tip, which counts what other apps merged since. A
-            shallow checkout is deepened to reach it. Without one (the micro-VM substrate, no
-            history to be had) the lineage's own recorded paths judge, with this run's."""
-            fallback = sorted(set(_changed_paths()) | set(_lineage_paths))
+            shallow checkout is deepened to reach it. None without one (the micro-VM substrate,
+            no history to be had): what still differs cannot be told, so the gate is not judged
+            rather than judged on paths an earlier attempt may have restored."""
+            fallback = None
             base = str((_release_target or {}).get("pr_base") or repo_base_branch or "").strip()
             if use_microvm or not base or sandbox is None:
                 return fallback
@@ -11092,12 +11098,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             `stayed_in_app`, whichever turn wrote it. No scope, no gate."""
             if not _write_scope[0]:
                 return
+            _change = _whole_change_paths()
+            if _change is None:
+                # NOT JUDGED, SAID SO: no merge base to measure the pull request's change from.
+                _app_scope_note[0] = ("not judged: BOSS could not find where this branch left "
+                                      "its base, so it cannot tell which files the pull request "
+                                      "still changes")
+                gates.pop(STAYED_IN_APP_GATE, None)
+                if not _app_scope_said[0]:
+                    _app_scope_said[0] = True
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.app_scope_unjudged", "boss",
+                                   "code_task_run", run_id,
+                                   {"app": _write_scope[0], "why": _app_scope_note[0]})
+                return
+            _app_scope_note[0] = None
             _other_app_files[:] = _app_root_mod.foreign_app_paths(
-                root, _whole_change_paths(), _write_scope[0], exempt=_write_exempt)
+                root, _change, _write_scope[0], exempt=_write_exempt)
             gates[STAYED_IN_APP_GATE] = not _other_app_files
             try:
-                evidence["app_scope"] = {"app": _write_scope[0],
-                                         "other_app_files": _other_app_files[:40]}
+                evidence["app_scope"] = _app_scope_record()
             except NameError:  # the first judgement runs before `evidence` exists (below)
                 pass
             if _other_app_files:
@@ -11321,8 +11341,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
-            **({"app_scope": {"app": _write_scope[0], "other_app_files": _other_app_files[:40]}}
-               if _write_scope[0] else {}),
+            **({"app_scope": _app_scope_record()} if _write_scope[0] else {}),
             **({"web_package_contract": _web_contract} if _web_contract is not None else {}),
             # A multi-service app: its services, the backend BOSS started and what ran against it.
             **({"stack_verify": dict(_stack_record)} if _stack_record else {}),
@@ -12192,8 +12211,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
                     "|| jsonb_build_object(CAST(:k AS text), CAST(:v AS text)) WHERE id = :id"),
                     {"k": _lineage_cap.STOP_CAUSE, "v": _stop_cause, "id": run_id})
-                _lineage_made = _lineage_cap.attempts(c, run_id, _stop_cause)
-            _lineage_cap_n = _lineage_cap.cap_for(spec)
+                _lineage_made, _lineage_cap_n = _lineage_cap.standing(c, run_id, _stop_cause)
             _lineage_spent = _lineage_made >= _lineage_cap_n
             if _lineage_spent:
                 rounds_used = max(rounds_used, max_repair_rounds)
@@ -12566,7 +12584,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "hard": action == _checks_failing.ACTION,
                     "rounds_used": rounds_used, "quality_gate_id": qg_id,
                     **({"stopped": _checks_failing.stopped_record(
-                        _env_stop, failing,
+                        _env_stop, failing, attempts=(_lineage_made if _lineage_spent else None),
                         needs=((app_serves_record or {}).get("needs_secret")
                                if "app_serves" in failing
                                and gate_faults.get("app_serves") == "PERSON" else None),

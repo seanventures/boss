@@ -145,20 +145,35 @@ def is_shared_package(root: Path | str, app: str) -> bool:
     return _workspaces_root(base) and not _deployable(base / rel)
 
 
+#: A mention that says the folder is NOT to be changed ("don't touch `api/`", "without changing
+#: apps/web"): never a folder the brief asks to work in.
+_NEGATED = re.compile(r"(?:\bdo(?:n'?t| not)\s+(?:touch|change|edit|modify)|\bwithout\s+"
+                      r"(?:touching|changing|editing|modifying)|\bleave\b|\bnot\s+(?:in|"
+                      r"under|inside)|\bnever\s+(?:touch|change|edit))[^.;:,\n]*$", re.I)
+#: A path-like mention: backticked (`crm`, `crm/`, `apps/admin`) or a bare path with a slash
+#: (crm/, apps/admin). A bare word ("calls the api") is never a folder.
+_FOLDER_MENTION = re.compile(r"`([A-Za-z0-9][\w.-]*(?:/[\w.-]+)*)/?`"
+                             r"|(?<![\w./`-])([A-Za-z0-9][\w.-]*(?:/[\w.-]+)*/|[A-Za-z0-9][\w.-]*"
+                             r"(?:/[\w.-]+)+)(?![\w`])")
+
+
 def named_folders(root: Path | str, text: Any) -> list[str]:
-    """The folders of this repository a brief names: in backticks (`crm/`, `apps/admin`) or, for
-    a subfolder app, by its name as a word ("move the login from crm to helpdesk")."""
+    """The folders of this repository a brief names AS PLACES TO WORK: path-like mentions
+    (`crm/`, `apps/admin`, crm/) that are folders of the tree. A bare word is never one ("calls
+    the api" in a monorepo with an `api/` app), nor is a negated mention ("don't touch
+    `api/`", "without changing apps/web")."""
     base = Path(root)
     words = str(text or "")
     out: set[str] = set()
-    for m in re.finditer(r"`([A-Za-z0-9][\w.-]*(?:/[\w.-]+)*)/?`", words):
-        rel = clean_rel(m.group(1))
-        if rel and (base / rel).is_dir():
-            out.add(rel)
-    for app in subfolder_apps(base):
-        name = app.rsplit("/", 1)[-1]
-        if len(name) >= 3 and re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", words, re.I):
-            out.add(app)
+    for m in _FOLDER_MENTION.finditer(words):
+        rel = clean_rel(m.group(1) or m.group(2))
+        if not rel or not (base / rel).is_dir():
+            continue
+        # The clause the mention is in: a negation earlier in it is about this folder.
+        start = max(words.rfind(stop, 0, m.start()) for stop in (".", "\n", ";", ",", " but "))
+        if _NEGATED.search(words[start + 1:m.start()]):
+            continue
+        out.add(rel)
     return sorted(out)
 
 

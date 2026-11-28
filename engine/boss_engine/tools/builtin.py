@@ -1682,7 +1682,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ctx.engine, ctx.settings, ctx.jobs, run_id,
             fix_note=(args.get("fix_note") or ""),
             profile=(args.get("profile") or None),
-            repair_retries=(int(rr) if isinstance(rr, int) else None),
+            # The schema's bound, held here too: a caller's figure is never past 5.
+            repair_retries=(min(5, max(0, int(rr))) if isinstance(rr, int) else None),
         )
         return {"status": "retried", "result": _json_safe(result)}
 
