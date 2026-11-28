@@ -268,6 +268,8 @@ def _public(connection: Any, row: dict[str, Any], *, with_spend: bool = True) ->
         out[k] = row[k].isoformat() if isinstance(row.get(k), datetime) else None
     if with_spend:
         out["spent_usd_micros"] = spent(connection, row)
+        out["reserved_usd_micros"] = reserved(connection, row)
+        out["committed_usd_micros"] = out["spent_usd_micros"] + out["reserved_usd_micros"]
     return out
 
 
@@ -301,6 +303,59 @@ def spent(connection: Any, policy: dict[str, Any], now: Optional[datetime] = Non
     return int(connection.execute(text(
         f"SELECT COALESCE(SUM({money}), 0) FROM llm_calls l WHERE {where} "
         "AND l.created_at >= :start AND l.created_at < :end"), params).scalar() or 0)
+
+
+def reserved(connection: Any, policy: dict[str, Any], now: Optional[datetime] = None) -> int:
+    """Active unexpired budget reservations held against this policy's scope (BOSSAPP-1502)."""
+    from .core import now_utc
+
+    scope_type = str(policy["scope_type"])
+    params = {"now": now or now_utc(), "s": policy["scope_id"], "o": policy["org_id"]}
+    in_org = ("r.project_id IN (SELECT p.id FROM projects p JOIN workspaces w ON "
+              "w.id = p.workspace_id WHERE w.org_id = :o)")
+    where = {
+        "org": in_org,
+        "project": "r.project_id = :s",
+        "team": f"r.project_id IN ({team_projects_sql(':s')}) AND {in_org}",
+    }.get(scope_type)
+    if not where:
+        return 0
+    return int(connection.execute(text(
+        f"SELECT COALESCE(SUM(r.amount_usd_micros), 0) FROM budget_reservations r "
+        f"WHERE {where} AND r.status = 'active' AND r.expires_at > :now"), params).scalar() or 0)
+
+
+def committed(connection: Any, policy: dict[str, Any], now: Optional[datetime] = None) -> int:
+    """Settled spend in the period plus active unexpired reservations (BOSSAPP-1502)."""
+    return spent(connection, policy, now) + reserved(connection, policy, now)
+
+
+def admission_lock_keys(connection: Any, project_id: str) -> list[str]:
+    """Canonically ordered advisory lock keys for admitting a reservation on `project_id`
+    (BOSSAPP-1502): coarsest scope first (org -> teams sorted -> project) so concurrent
+    reservations across projects sharing an org or team hard cap serialize deadlock-free."""
+    keys: list[str] = []
+    if _any_active(connection):
+        org_id = _org_of_project(connection, project_id)
+        if org_id:
+            rows = connection.execute(text(
+                "SELECT DISTINCT sbp.scope_type, sbp.scope_id "
+                "FROM scoped_budget_policies sbp "
+                "WHERE sbp.org_id = :o AND sbp.status = 'active' AND sbp.hard_stop = true "
+                "  AND (sbp.scope_type = 'org' "
+                f"      OR (sbp.scope_type = 'team' AND :p IN ({team_projects_sql('sbp.scope_id')}))) "
+                "ORDER BY sbp.scope_type, sbp.scope_id"),
+                {"o": org_id, "p": project_id}).mappings().all()
+            org_keys = sorted({
+                f"boss-budget:0:org:{r['scope_id']}" for r in rows if r["scope_type"] == "org"
+            })
+            team_keys = sorted({
+                f"boss-budget:1:team:{r['scope_id']}" for r in rows if r["scope_type"] == "team"
+            })
+            keys.extend(org_keys)
+            keys.extend(team_keys)
+    keys.append(f"boss-budget:{project_id}")
+    return keys
 
 
 def _workflow_of(connection: Any, workflow_run_id: Optional[str]) -> Optional[str]:
@@ -393,7 +448,7 @@ def reservation_limit(connection: Any, project_id: str, *, role: Optional[str] =
     for policy in matching(connection, project_id, role=role, workflow_run_id=workflow_run_id):
         if not policy["hard_stop"]:
             continue
-        remaining = int(policy["cap_usd_micros"]) - spent(connection, policy)
+        remaining = int(policy["cap_usd_micros"]) - committed(connection, policy)
         if tightest is None or remaining < tightest[1]:
             tightest = (policy, remaining)
     return tightest

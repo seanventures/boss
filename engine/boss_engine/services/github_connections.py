@@ -282,7 +282,8 @@ class GitHubConnectionService:
              "credential_ref": credential_ref, "auth_method": method},
         )
         self._bind_connection_slot(connection, project_id=project_id,
-                                   credential_ref=credential_ref, connection_id=connection_id)
+                                   credential_ref=credential_ref, connection_id=connection_id,
+                                   api_base_url=api_base_url)
         return self.get_connection(connection, project_id, connection_id)
 
     def create_connection(
@@ -383,7 +384,8 @@ class GitHubConnectionService:
             },
         )
         self._bind_connection_slot(connection, project_id=project_id,
-                                   credential_ref=credential_ref, connection_id=connection_id)
+                                   credential_ref=credential_ref, connection_id=connection_id,
+                                   api_base_url=safe_api_base)
         return self.get_connection(connection, project_id, connection_id)
 
     def transition_connection(
@@ -1201,11 +1203,23 @@ class GitHubConnectionService:
             raise ValueError("GitHub connections require a GitHub SecretRef.")
         _refuse_env_ref_on_another_host(secret_ref, api_base)
         if github_urls.api_base(api_base) != github_urls.api_base() and \
-                not _is_connection_slot_for(secret_ref, project_id, connection_id, fresh=fresh):
+                not _is_connection_slot_for(secret_ref, project_id, connection_id,
+                                            api_base=api_base, fresh=fresh):
             raise ValueError(
                 f"A credential for {github_urls.web_host(api_base)} must be saved through this "
                 "connection: paste that host's token here (Setup › GitHub access) instead of "
                 "naming an existing secret.")
+        # BOSSAPP-1490: a slot already bound to a specific host cannot be repointed to a different
+        # host (even back to github.com or to another GHES host) without saving a new token.
+        meta = secret_ref.get("metadata") if isinstance(secret_ref.get("metadata"), dict) else {}
+        slot = meta.get(CONNECTION_SLOT_KEY) if isinstance(meta, dict) else None
+        if isinstance(slot, dict) and slot.get("api_base") and not fresh:
+            if github_urls.api_base(slot["api_base"]) != github_urls.api_base(api_base):
+                raise ValueError(
+                    f"This credential slot is bound to {github_urls.web_host(slot['api_base'])} "
+                    f"and cannot be repointed to {github_urls.web_host(api_base)}; paste a new "
+                    "token for the target host."
+                )
         if method == "github_app":
             if not (app_id and str(app_id).strip()):
                 raise ValueError("github_app connections require app_id.")
@@ -1288,15 +1302,17 @@ class GitHubConnectionService:
                         connection_id: str) -> Optional[dict[str, Any]]:
         """The connection's current secret_refs row when it is that connection's own bound slot."""
         row = connection.execute(text(
-            "SELECT r.id, r.ref_kind, r.ref_key, r.storage_backend, r.project_id, r.scope_type, "
-            "r.metadata FROM github_connections g JOIN secret_refs r ON r.project_id = g.project_id "
+            "SELECT g.api_base_url, r.id, r.ref_kind, r.ref_key, r.storage_backend, r.project_id, "
+            "r.scope_type, r.metadata FROM github_connections g JOIN secret_refs r "
+            "ON r.project_id = g.project_id "
             "AND g.credential_ref = r.ref_kind || ':' || r.ref_key "
             "WHERE g.project_id = :p AND g.id = :c"), {"p": project_id, "c": connection_id}
         ).mappings().first()
         if row is None:
             return None
         record = dict(row)
-        return record if credential_host_for(record, github_urls.PUBLIC_API, project_id,
+        conn_base = record.get("api_base_url") or github_urls.PUBLIC_API
+        return record if credential_host_for(record, conn_base, project_id,
                                              connection_id) else None
 
     def _write_connection_slot(self, connection: Connection, *, project_id: str, value: str,
@@ -1305,25 +1321,28 @@ class GitHubConnectionService:
         """THE write-through for a connection slot: the material goes to the slot's own unique
         key, and the reference row records it — never through a name-derived key."""
         from .secret_access_log import record_version
+        from .secret_backends import put_owned
         from .secrets_service import _KIND_MAP, _metadata
 
         meta = _metadata(value, secret_kind)
+        owner = f"project:{project_id}"
         if existing is not None:
             ref_id, backend, key = existing["id"], existing["storage_backend"], existing["ref_key"]
-            backend_for(backend, self.settings).put(key, value)
+            put_owned(backend_for(backend, self.settings), key, value, owner_scope=owner)
             connection.execute(text(
                 "UPDATE secret_refs SET metadata = metadata || CAST(:m AS JSONB) || "
                 "jsonb_build_object(CAST(:k AS TEXT), jsonb_build_object('pending', true, "
                 "'project_id', CAST(:p AS TEXT), 'connection_id', "
-                "metadata -> CAST(:k AS TEXT) ->> 'connection_id')), status = 'active', "
-                "updated_at = now() WHERE id = :id"),
+                "metadata -> CAST(:k AS TEXT) ->> 'connection_id', "
+                "'api_base', metadata -> CAST(:k AS TEXT) ->> 'api_base')), "
+                "status = 'active', updated_at = now() WHERE id = :id"),
                 {"m": json.dumps(meta), "k": CONNECTION_SLOT_KEY, "p": project_id, "id": ref_id})
         else:
             import uuid
 
             ref_id = f"sref_{uuid.uuid4().hex}"
             backend, key = self._preferred_backend(), connection_slot_key(ref_id)
-            backend_for(backend, self.settings).put(key, value)
+            put_owned(backend_for(backend, self.settings), key, value, owner_scope=owner)
             meta[CONNECTION_SLOT_KEY] = {"pending": True, "project_id": project_id}
             connection.execute(text(
                 "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, "
@@ -1346,9 +1365,10 @@ class GitHubConnectionService:
         return (str(project_id), str(credential_ref)) in self.__dict__.get("_fresh_slots", set())
 
     def _bind_connection_slot(self, connection: Connection, *, project_id: str,
-                              credential_ref: str, connection_id: str) -> None:
-        """Bind the slot THIS flow just wrote (pending) to the connection, at write time. Only a
-        fresh slot is bound; a slot already bound to another connection is never re-bound."""
+                              credential_ref: str, connection_id: str,
+                              api_base_url: Optional[str] = None) -> None:
+        """Bind the slot THIS flow just wrote (pending) to the connection and its host (api_base),
+        at write time (BOSSAPP-1490). Only a fresh slot is bound."""
         if not self._is_fresh_slot(project_id, credential_ref):
             return
         kind, _, key = str(credential_ref or "").partition(":")
@@ -1360,12 +1380,20 @@ class GitHubConnectionService:
             # this connection's alone, so it is never bound.
             raise ValueError("This connection's credential slot is named by another reference; "
                              "paste the token again.")
+        if not api_base_url:
+            api_base_url = connection.execute(text(
+                "SELECT api_base_url FROM github_connections WHERE project_id = :p AND id = :c"),
+                {"p": project_id, "c": connection_id}).scalar()
+        bound_base = github_urls.api_base(api_base_url) if api_base_url else ""
+        slot_obj = {"connection_id": connection_id, "project_id": project_id}
+        if bound_base:
+            slot_obj["api_base"] = bound_base
         connection.execute(text(
             "UPDATE secret_refs SET metadata = metadata || jsonb_build_object(CAST(:k AS TEXT), "
-            "jsonb_build_object('connection_id', CAST(:c AS TEXT), 'project_id', CAST(:p AS TEXT))) "
+            "CAST(:slot AS JSONB)) "
             "WHERE project_id = :p AND ref_kind = :rk AND ref_key = :key "
             "AND metadata -> CAST(:k AS TEXT) ->> 'pending' = 'true'"),
-            {"k": CONNECTION_SLOT_KEY, "c": connection_id, "p": project_id, "rk": kind,
+            {"k": CONNECTION_SLOT_KEY, "slot": json.dumps(slot_obj), "p": project_id, "rk": kind,
              "key": key})
         self.__dict__.get("_fresh_slots", set()).discard((str(project_id), str(credential_ref)))
 
@@ -2286,10 +2314,10 @@ def _in_slot_form(record: Any) -> bool:
 
 
 def _is_connection_slot_for(record: Any, project_id: str, connection_id: Optional[str], *,
-                            fresh: bool = False) -> bool:
+                            api_base: Any = None, fresh: bool = False) -> bool:
     """A slot this connection's flow wrote: pending AND written by this very flow (``fresh``:
-    the same service call chain that just stored it), or already bound to this connection. A
-    pending slot left behind by a failed flow is no one's to name."""
+    the same service call chain that just stored it), or already bound to this connection and
+    the same host ``api_base`` (BOSSAPP-1490)."""
     meta = record.get("metadata") if isinstance(record, dict) and isinstance(
         record.get("metadata"), dict) else {}
     slot = meta.get(CONNECTION_SLOT_KEY)
@@ -2298,19 +2326,23 @@ def _is_connection_slot_for(record: Any, project_id: str, connection_id: Optiona
     if not isinstance(slot, dict) or str(slot.get("project_id") or "") != str(project_id) or \
             str(record.get("project_id") or "") != str(project_id):
         return False
-    return (fresh and bool(slot.get("pending"))) or (bool(connection_id) and
-                                         str(slot.get("connection_id") or "") == str(connection_id))
+    if fresh and bool(slot.get("pending")):
+        return True
+    if not (bool(connection_id) and str(slot.get("connection_id") or "") == str(connection_id)):
+        return False
+    # BOSSAPP-1490: if api_base was recorded on the slot, it must match the target api_base.
+    if api_base and slot.get("api_base"):
+        if github_urls.api_base(slot["api_base"]) != github_urls.api_base(api_base):
+            return False
+    return True
 
 
 def credential_host_for(record: Any, conn_base: Any, project_id: Optional[str],
                         connection_id: Optional[str] = None) -> str:
-    """THE RULE (BOSSAPP-1286): the REST base a resolved credential belongs to. A connection's
-    non-install base ONLY for a credential in a slot BOUND TO THAT CONNECTION — written by BOSS
-    through the connection's own create/repoint/rotate flow, which records
-    ``metadata.connection_slot = {connection_id, project_id}`` at write time. Every other
-    credential is the install's (``""``), with no exceptions: any named reference (database,
-    local_vault, vault, infisical, platform, env, local_runner), any scope, and anything that
-    existed before this rule — such a connection's token is re-saved through the connection."""
+    """THE RULE (BOSSAPP-1286, BOSSAPP-1490): the REST base a resolved credential belongs to.
+    A connection's non-install base ONLY for a credential in a slot BOUND TO THAT CONNECTION AND
+    HOST — written by BOSS through the connection's own create/repoint/rotate flow, which records
+    ``metadata.connection_slot = {connection_id, project_id, api_base}`` at write time."""
     if not isinstance(record, dict) or not connection_id or not project_id:
         return ""
     if not _in_slot_form(record):
@@ -2324,7 +2356,11 @@ def credential_host_for(record: Any, conn_base: Any, project_id: Optional[str],
             str(record.get("project_id") or "") != str(project_id) or \
             str(record.get("scope_type") or "project").lower() != "project":
         return ""
-    return github_urls.api_base(conn_base)
+    target_base = github_urls.api_base(conn_base)
+    if slot.get("api_base") and github_urls.api_base(slot["api_base"]) != target_base:
+        # BOSSAPP-1490: slot is bound to a different host -> refuse sending to conn_base.
+        return ""
+    return target_base
 
 
 def _ref_origin(ref: Any) -> tuple[str, str]:

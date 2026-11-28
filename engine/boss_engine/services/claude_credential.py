@@ -566,13 +566,17 @@ def retire_legacy_token(connection: Any, settings: Any, *, actor: str) -> int:
 
     from .cli_harness import SUBSCRIPTION_SECRET_SCOPE
     from .secret_backends import SecretNotFound, backend_for, pick_default_backend
-    from .secrets_service import ref_key_for
+    from .secrets_service import legacy_ref_key_for, ref_key_for
 
     if boss_obtained_token_stored(settings):
         # A TOKEN BOSS OBTAINED ITSELF (`claude setup-token` run by the console's Sign in) is
         # the subscription, never a legacy import: Connect proves it and nothing retires it.
         return 0
-    keys = (TOKEN_NAME, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, TOKEN_NAME))
+    keys = (
+        TOKEN_NAME,
+        ref_key_for(SUBSCRIPTION_SECRET_SCOPE, TOKEN_NAME),
+        legacy_ref_key_for(SUBSCRIPTION_SECRET_SCOPE, TOKEN_NAME),
+    )
     rows = connection.execute(text(
         "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), revoked_by = :a "
         "WHERE ref_key = ANY(:k) AND status <> 'revoked' "

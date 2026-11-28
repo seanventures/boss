@@ -488,6 +488,21 @@ class LocalVaultBackend:
         safe = "".join(c if c.isalnum() or c in "._-@" else "_" for c in key)[:200]
         return os.path.join(self._root, f"{safe}.enc")
 
+    def _owner_path(self, key: str) -> str:
+        return f"{self._path(key)}.owner"
+
+    def owner_of(self, key: str, *, connection: Any = None) -> Optional[str]:
+        del connection
+        owner_path = self._owner_path(key)
+        if not os.path.isfile(owner_path):
+            return None
+        try:
+            with open(owner_path, "r", encoding="utf-8") as handle:
+                val = handle.read().strip()
+                return val or None
+        except OSError:
+            return None
+
     def get(self, key: str) -> str:
         path = self._path(key)
         if not os.path.isfile(path):
@@ -501,13 +516,51 @@ class LocalVaultBackend:
         except Exception as exc:  # noqa: BLE001
             raise SecretUnavailable(f"local_vault decrypt failed for {key}") from None
 
-    def put(self, key: str, value: str) -> None:
+    def put(self, key: str, value: str, *, owner_scope: str = "system") -> None:
         os.makedirs(self._root, mode=0o700, exist_ok=True)
         path = self._path(key)
+        owner_path = self._owner_path(key)
+        scope = (owner_scope or "system").strip() or "system"
+        # Atomic owner claim via O_CREAT | O_EXCL (BOSSAPP-1489): two concurrent scopes
+        # racing on a new key cannot both claim it, and a non-system scope cannot overwrite
+        # an existing unowned legacy vault file or another scope's key.
+        try:
+            owner_fd = os.open(owner_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            existing = self.owner_of(key)
+            if existing != scope:
+                raise SecretUnavailable(f"secret key {key!r} is owned by another scope") from None
+        else:
+            try:
+                if os.path.exists(path) and scope != "system":
+                    os.close(owner_fd)
+                    owner_fd = -1
+                    try:
+                        os.unlink(owner_path)
+                    except OSError:
+                        pass
+                    raise SecretUnavailable(
+                        f"secret key {key!r} has an unverified legacy owner; re-save under a new key"
+                    )
+                with os.fdopen(owner_fd, "w", encoding="utf-8") as handle:
+                    owner_fd = -1
+                    handle.write(scope + "\n")
+            finally:
+                if owner_fd >= 0:
+                    os.close(owner_fd)
         blob = _aes_gcm_encrypt(self._key, (value or "").encode("utf-8"))
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(blob)
+        tmp_path = f"{path}.{uuid.uuid4().hex}.tmp"
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(blob)
+            os.replace(tmp_path, path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def list_keys(self) -> list[str]:
         if not os.path.isdir(self._root):
@@ -519,10 +572,11 @@ class LocalVaultBackend:
         return sorted(out)
 
     def delete(self, key: str) -> None:
-        try:
-            os.unlink(self._path(key))
-        except FileNotFoundError:
-            pass
+        for target in (self._path(key), self._owner_path(key)):
+            try:
+                os.unlink(target)
+            except FileNotFoundError:
+                pass
 
     def health(self) -> dict[str, Any]:
         try:
@@ -740,6 +794,34 @@ class DatabaseBackend:
             self._key = self._ensure_provisioned_key()
         return self._key
 
+    @staticmethod
+    def _has_owner_scope(c: Any) -> bool:
+        dialect = getattr(getattr(c, "dialect", None), "name", "")
+        if dialect == "sqlite":
+            cols = [r[1] for r in c.execute(sql("PRAGMA table_info(secret_material)")).all()]
+            return "owner_scope" in cols
+        return True
+
+    def owner_of(self, key: str, *, connection: Any = None) -> Optional[str]:
+        if connection is not None:
+            if not self._has_owner_scope(connection):
+                return None
+            row = connection.execute(
+                sql("SELECT owner_scope FROM secret_material WHERE ref_key = :k"),
+                {"k": key},
+            ).mappings().first()
+            val = str(row["owner_scope"] or "").strip() if row else ""
+            return val or None
+        with self._conn() as c:
+            if not self._has_owner_scope(c):
+                return None
+            row = c.execute(
+                sql("SELECT owner_scope FROM secret_material WHERE ref_key = :k"),
+                {"k": key},
+            ).mappings().first()
+        val = str(row["owner_scope"] or "").strip() if row else ""
+        return val or None
+
     def _ensure_provisioned_key(self) -> bytes:
         import base64
 
@@ -749,10 +831,16 @@ class DatabaseBackend:
             if row:
                 return base64.urlsafe_b64decode(bytes(row["ciphertext"]))
             generated = os.urandom(32)
-            c.execute(sql(
-                "INSERT INTO secret_material (ref_key, ciphertext) "
-                "VALUES ('__boss_master_key__', :v) ON CONFLICT (ref_key) DO NOTHING"),
-                {"v": base64.urlsafe_b64encode(generated)})
+            if self._has_owner_scope(c):
+                c.execute(sql(
+                    "INSERT INTO secret_material (ref_key, ciphertext, owner_scope) "
+                    "VALUES ('__boss_master_key__', :v, 'system') ON CONFLICT (ref_key) DO NOTHING"),
+                    {"v": base64.urlsafe_b64encode(generated)})
+            else:
+                c.execute(sql(
+                    "INSERT INTO secret_material (ref_key, ciphertext) "
+                    "VALUES ('__boss_master_key__', :v) ON CONFLICT (ref_key) DO NOTHING"),
+                    {"v": base64.urlsafe_b64encode(generated)})
             row = c.execute(sql("SELECT ciphertext FROM secret_material "
                                 "WHERE ref_key = '__boss_master_key__'")).mappings().first()
         return base64.urlsafe_b64decode(bytes(row["ciphertext"]))
@@ -801,15 +889,33 @@ class DatabaseBackend:
                                 "WHERE ref_key = '__boss_master_key__'")).mappings().first()
         return base64.urlsafe_b64decode(bytes(row["ciphertext"])) if row else None
 
-    def put(self, key: str, value: str) -> None:
+    def put(self, key: str, value: str, *, owner_scope: str = "system") -> None:
+        scope = (owner_scope or "system").strip() or "system"
         blob = _aes_gcm_encrypt(self._write_key(), value.encode("utf-8"))
         with self._conn() as c:
-            c.execute(sql(
-                "INSERT INTO secret_material (ref_key, ciphertext, updated_at) "
-                "VALUES (:k, :v, CURRENT_TIMESTAMP) "
-                "ON CONFLICT (ref_key) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, "
-                "                                    updated_at = CURRENT_TIMESTAMP"),
-                {"k": key, "v": blob})
+            if self._has_owner_scope(c):
+                # Atomic owner claim (BOSSAPP-1489): new keys belong to `scope`; updates
+                # succeed only for the same owner (or `system` adopting a legacy unowned row).
+                claimed = c.execute(sql(
+                    "INSERT INTO secret_material (ref_key, ciphertext, owner_scope, updated_at) "
+                    "VALUES (:k, :v, :owner, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT (ref_key) DO UPDATE "
+                    "  SET ciphertext = EXCLUDED.ciphertext, "
+                    "      owner_scope = COALESCE(secret_material.owner_scope, EXCLUDED.owner_scope), "
+                    "      updated_at = CURRENT_TIMESTAMP "
+                    "WHERE secret_material.owner_scope = EXCLUDED.owner_scope "
+                    "   OR (secret_material.owner_scope IS NULL AND EXCLUDED.owner_scope = 'system') "
+                    "RETURNING ref_key, owner_scope"),
+                    {"k": key, "v": blob, "owner": scope}).first()
+                if claimed is None:
+                    raise SecretUnavailable(f"secret key {key!r} is owned by another scope")
+            else:
+                c.execute(sql(
+                    "INSERT INTO secret_material (ref_key, ciphertext, updated_at) "
+                    "VALUES (:k, :v, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT (ref_key) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, "
+                    "                                    updated_at = CURRENT_TIMESTAMP"),
+                    {"k": key, "v": blob})
 
     def list_keys(self) -> list[str]:
         # The provisioned master key shares this table but is not a secret anyone stored,
@@ -852,12 +958,27 @@ class DatabaseBackend:
                 )).mappings().first()
                 self._key = base64.urlsafe_b64decode(bytes(row["ciphertext"]))
         blob = _aes_gcm_encrypt(self._key, value.encode("utf-8"))
-        connection.execute(sql(
-            "INSERT INTO secret_material (ref_key, ciphertext, updated_at) "
-            "VALUES (:k, :v, CURRENT_TIMESTAMP) "
-            "ON CONFLICT (ref_key) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, "
-            "                                    updated_at = CURRENT_TIMESTAMP"
-        ), {"k": ref_key, "v": blob})
+        owner = f"project:{project_id}"
+        if self._has_owner_scope(connection):
+            claimed = connection.execute(sql(
+                "INSERT INTO secret_material (ref_key, ciphertext, owner_scope, updated_at) "
+                "VALUES (:k, :v, :owner, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (ref_key) DO UPDATE "
+                "  SET ciphertext = EXCLUDED.ciphertext, "
+                "      owner_scope = COALESCE(secret_material.owner_scope, EXCLUDED.owner_scope), "
+                "      updated_at = CURRENT_TIMESTAMP "
+                "WHERE secret_material.owner_scope = EXCLUDED.owner_scope "
+                "RETURNING ref_key"
+            ), {"k": ref_key, "v": blob, "owner": owner}).first()
+            if claimed is None:
+                raise SecretUnavailable(f"secret key {ref_key!r} is owned by another scope")
+        else:
+            connection.execute(sql(
+                "INSERT INTO secret_material (ref_key, ciphertext, updated_at) "
+                "VALUES (:k, :v, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (ref_key) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, "
+                "                                    updated_at = CURRENT_TIMESTAMP"
+            ), {"k": ref_key, "v": blob})
         connection.execute(sql(
             "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
             "secret_kind, storage_backend, status, created_by) "
@@ -1220,20 +1341,194 @@ def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
 #: db/<id> slot only for its own reference (BOSSAPP-1286).
 _GLOBAL_KEY_STORES = frozenset({"database", "local_vault"})
 
+#: Key prefixes reserved for install/system writers (BOSSAPP-1489). Never readable through
+#: a project-scoped `secret_refs` row.
+_SYSTEM_KEY_PREFIXES = (
+    "BOSS_SUBSCRIPTION_",
+    "BOSS_LLM_GATEWAY_",
+    "boss_host_jobs_seed",
+    "trace_payload/",
+)
+
+
+def put_owned(backend: Any, key: str, value: str, *, owner_scope: str = "system") -> None:
+    """Write material recording its owning scope on global-key-space backends (BOSSAPP-1489)."""
+    if isinstance(backend, (DatabaseBackend, LocalVaultBackend)):
+        backend.put(key, value, owner_scope=owner_scope)
+    else:
+        backend.put(key, value)
+
+
+def _is_system_key_name(key: str) -> bool:
+    if key == "__boss_master_key__":
+        return True
+    return any(key.startswith(prefix) for prefix in _SYSTEM_KEY_PREFIXES)
+
+
+def _allowed_owners_for_ref(row: Any) -> set[str]:
+    scope_type = str(row.get("scope_type") or "project").strip().lower()
+    scope_id = str(row.get("scope_id") or "").strip()
+    project_id = str(row.get("project_id") or "").strip()
+    allowed: set[str] = set()
+    if scope_type and scope_id:
+        allowed.add(f"{scope_type}:{scope_id}")
+    if project_id and scope_type in ("", "project", "user", "agent"):
+        allowed.add(f"project:{project_id}")
+    return allowed
+
 
 def _material_belongs_to(row: Any, secret_ref_id: str) -> bool:
-    """The master key never; a db/<id> or connection slot (ghconn-<id>) only for the reference it
-    was written for."""
+    """The master key never; aliasing keys (.. or embedded ghconn-) never (BOSSAPP-1490);
+    a db/<id> or connection slot (ghconn-<id>) only for the reference it was written for."""
     key = str(row.get("ref_key") or "")
-    if key.startswith("ghconn-") and key != f"ghconn-{secret_ref_id}":
+    if ".." in key:
+        return False
+    if "ghconn-" in key.lower() and key != f"ghconn-{secret_ref_id}":
         return False
     backend = str(row.get("storage_backend") or row.get("ref_kind") or "").lower()
     if backend not in _GLOBAL_KEY_STORES:
         return True
-    key = str(row.get("ref_key") or "")
     if key == "__boss_master_key__":
         return False
     return not key.startswith("db/") or key == f"db/{secret_ref_id}"
+
+
+def _material_owner_admits(connection: Any, row: Any, secret_ref_id: str,
+                           backend: Any) -> Optional[str]:
+    """Check recorded material ownership for global-key-space stores (BOSSAPP-1489).
+
+    Returns a short refusal reason if access must be denied, else None.
+    """
+    kind = str(getattr(backend, "kind", "") or "").lower()
+    if kind not in _GLOBAL_KEY_STORES:
+        return None
+    key = str(row.get("ref_key") or "")
+    owner_fn = getattr(backend, "owner_of", None)
+    owner = owner_fn(key, connection=connection) if callable(owner_fn) else None
+    if owner == "system":
+        return "material is owned by system"
+    if owner:
+        if owner not in _allowed_owners_for_ref(row):
+            return "material owned by another scope"
+        return None
+    # Pre-BOSSAPP-1489 legacy row with no recorded owner_scope yet.
+    if key in (f"db/{secret_ref_id}", f"ghconn-{secret_ref_id}"):
+        return None
+    if _is_system_key_name(key):
+        return "legacy system material cannot be read through a project reference"
+    meta = row.get("metadata") or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = {}
+    if not isinstance(meta, dict) or meta.get("raw_secret_stored") is not False:
+        return "legacy unowned secret must be re-saved in Setup"
+    # Refuse if multiple scopes/projects reference the same unowned key.
+    distinct_scopes = connection.execute(
+        sql(
+            "SELECT COUNT(DISTINCT COALESCE(scope_type, 'project') || ':' || "
+            "       COALESCE(NULLIF(scope_id, ''), project_id)) "
+            "FROM secret_refs "
+            "WHERE ref_key = :k AND COALESCE(storage_backend, ref_kind) = :b "
+            "  AND status <> 'revoked'"
+        ),
+        {"k": key, "b": kind},
+    ).scalar()
+    if int(distinct_scopes or 0) > 1:
+        return "legacy cross-scope secret must be re-saved in Setup"
+    return None
+
+
+def backfill_secret_material_owners(connection: Any) -> dict[str, int]:
+    """One-shot idempotent migration assigning `secret_material.owner_scope` ONLY where the
+    original writer is provable (BOSSAPP-1489). Never guesses from bare or cross-scope refs."""
+    counts = {"system": 0, "slots": 0, "write_through": 0, "unowned_remaining": 0}
+    res_sys = connection.execute(sql(
+        "UPDATE secret_material SET owner_scope = 'system' "
+        "WHERE owner_scope IS NULL AND ("
+        "  ref_key = '__boss_master_key__' "
+        "  OR ref_key LIKE 'BOSS_SUBSCRIPTION_%' "
+        "  OR ref_key LIKE 'BOSS_LLM_GATEWAY_%' "
+        "  OR ref_key = 'boss_host_jobs_seed' "
+        "  OR ref_key LIKE 'trace_payload/%'"
+        ")"
+    ))
+    counts["system"] = int(getattr(res_sys, "rowcount", 0) or 0)
+
+    res_db = connection.execute(sql(
+        "UPDATE secret_material sm "
+        "SET owner_scope = 'project:' || sr.project_id "
+        "FROM secret_refs sr "
+        "WHERE sm.owner_scope IS NULL "
+        "  AND sm.ref_key = 'db/' || sr.id"
+    ))
+    res_gh = connection.execute(sql(
+        "UPDATE secret_material sm "
+        "SET owner_scope = 'project:' || sr.project_id "
+        "FROM secret_refs sr "
+        "WHERE sm.owner_scope IS NULL "
+        "  AND sm.ref_key = 'ghconn-' || sr.id"
+    ))
+    counts["slots"] = int(getattr(res_db, "rowcount", 0) or 0) + int(
+        getattr(res_gh, "rowcount", 0) or 0
+    )
+
+    res_wt = connection.execute(sql(
+        "WITH provable AS ("
+        "  SELECT ref_key, "
+        "         MIN(COALESCE(scope_type, 'project') || ':' || "
+        "             COALESCE(NULLIF(scope_id, ''), project_id)) AS owner_scope "
+        "  FROM secret_refs "
+        "  WHERE COALESCE(storage_backend, ref_kind) = 'database' "
+        "    AND status <> 'revoked' "
+        "  GROUP BY ref_key "
+        "  HAVING COUNT(DISTINCT COALESCE(scope_type, 'project') || ':' || "
+        "                COALESCE(NULLIF(scope_id, ''), project_id)) = 1 "
+        "     AND BOOL_AND(COALESCE(metadata->>'raw_secret_stored', '') = 'false') "
+        ") "
+        "UPDATE secret_material sm "
+        "SET owner_scope = p.owner_scope "
+        "FROM provable p "
+        "WHERE sm.owner_scope IS NULL AND sm.ref_key = p.ref_key"
+    ))
+    counts["write_through"] = int(getattr(res_wt, "rowcount", 0) or 0)
+    counts["unowned_remaining"] = int(connection.execute(sql(
+        "SELECT COUNT(*) FROM secret_material WHERE owner_scope IS NULL"
+    )).scalar() or 0)
+    return counts
+
+
+def flagged_legacy_secret_refs(connection: Any, project_id: str,
+                               settings: Optional[Settings] = None) -> list[dict[str, Any]]:
+    """Active database/local_vault refs in `project_id` that must be re-saved in Setup
+    because their material is unowned, ambiguous, or owned by another scope (BOSSAPP-1489)."""
+    cfg = settings or Settings()
+    rows = connection.execute(sql(
+        "SELECT id, project_id, scope_type, scope_id, ref_kind, ref_key, "
+        "       storage_backend, status, metadata "
+        "FROM secret_refs "
+        "WHERE project_id = :p AND status IN ('active', 'rotating', 'rotation_due') "
+        "  AND COALESCE(storage_backend, ref_kind) IN ('database', 'local_vault') "
+        "ORDER BY created_at"
+    ), {"p": project_id}).mappings().all()
+    flagged: list[dict[str, Any]] = []
+    for row in rows:
+        kind = str(row["storage_backend"] or row["ref_kind"] or "").lower()
+        try:
+            backend = backend_for(kind, cfg)
+        except SecretUnavailable:
+            continue
+        reason = _material_owner_admits(connection, row, str(row["id"]), backend)
+        if reason:
+            flagged.append({
+                "secret_ref_id": row["id"],
+                "ref_key": row["ref_key"],
+                "storage_backend": kind,
+                "reason": reason,
+                "action_required": "resave_in_setup",
+            })
+    return flagged
 
 
 def _tag_github_by_origin(value: Any, row: Any) -> Any:
@@ -1299,6 +1594,10 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
         raise _refuse("material of another scope",
                       f"secret ref {secret_ref_id} names material it was not written for")
     backend = backend_for(row["storage_backend"] or row["ref_kind"], settings)
+    owner_refusal = _material_owner_admits(connection, row, secret_ref_id, backend)
+    if owner_refusal is not None:
+        raise _refuse(owner_refusal,
+                      f"secret ref {secret_ref_id} refused: {owner_refusal}")
     try:
         value = backend.get(row["ref_key"])
     except SecretUnavailable as exc:

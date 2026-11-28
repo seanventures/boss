@@ -1775,7 +1775,8 @@ def _onboard_steps() -> list[dict[str, Any]]:
          "expression": {"not": {"path": "steps.fix.output.checks_passed", "op": "eq",
                                 "value": False}},
          "on_true": "merge", "on_false": "not_passing", "next": []},
-        tell("not_passing", "Report the rejection", ONBOARD_REPORTS["rejected"]),
+        {**tell("not_passing", "Report the rejection", ONBOARD_REPORTS["rejected"]),
+         "run_outcome": "rejected"},
         {**_step("merge", "merge", nxt=["staging"]), "on_error": "rejected"},
         # Staging follows its policy: where a person set staging to ship without asking, it
         # asks nobody (the merge was the person's answer); production always asks.
@@ -1798,7 +1799,8 @@ def _onboard_steps() -> list[dict[str, Any]]:
         tell("report_rollback", "Report the rollback", ONBOARD_REPORTS["rolled_back"]),
         tell("report_rollback_failed", "Report the failed rollback",
              ONBOARD_REPORTS["rollback_failed"]),
-        tell("rejected", "Report the rejection", ONBOARD_REPORTS["rejected"]),
+        {**tell("rejected", "Report the rejection", ONBOARD_REPORTS["rejected"]),
+         "run_outcome": "rejected"},
     ]
 
 
