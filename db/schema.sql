@@ -17381,6 +17381,12 @@ CREATE TABLE IF NOT EXISTS area_agent_goals (
   cadence_hours INTEGER NOT NULL DEFAULT 24 CHECK (cadence_hours >= 1),
   last_heartbeat_at TIMESTAMPTZ,
   next_heartbeat_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_area_agent_goals_project
+  ON area_agent_goals (project_id, area_key, status);
 
 -- ZERO-TOKEN RECURRING JOBS & CHANGE-ONLY MONITORS (BOSSAPP-939; Kiro gap 6):
 -- Script/command jobs run with zero model calls; change monitors wake an agent only when
@@ -17405,8 +17411,6 @@ CREATE TABLE IF NOT EXISTS zero_token_jobs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_area_agent_goals_project
-  ON area_agent_goals (project_id, area_key, status);
 
 CREATE TABLE IF NOT EXISTS area_agent_milestones (
   id TEXT PRIMARY KEY,
