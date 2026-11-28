@@ -292,6 +292,7 @@ def _cols(cols: Iterable[str], alias: str = "") -> str:
 
 
 def _select_cols(cols: Iterable[str], alias: str = "") -> str:
+    """Column list for SELECT inside an IN (SELECT ...) subquery (no tuple parens)."""
     pre = f"{alias}." if alias else ""
     return ", ".join(pre + _q(c) for c in cols)
 
@@ -722,11 +723,12 @@ def purge(connection: Any, settings: Any, project_id: str, *, actor: str,
     # Nothing else writes this project while it goes.
     connection.execute(text("SELECT id FROM projects WHERE id = :p FOR UPDATE"), {"p": project_id})
     connection.execute(text("SET LOCAL boss.ledger_purge = 'on'"))
-    # Subscription pools (BOSSAPP-1343): the org's pool anchored here moves to another project
-    # of the org; a pool that goes deletes its seats' stored logins (no orphaned credentials).
+    # Subscription pools (BOSSAPP-1343, BOSSAPP-1483): the org's pool anchored here moves to the
+    # org's model home (or another project of the org); stored logins for deleted project pools
+    # are returned in pending_pool_logins and deleted ONLY after the purge commits.
     from .subscription_pools import before_project_purge
 
-    before_project_purge(connection, settings, project_id)
+    pool_cleanup = before_project_purge(connection, settings, project_id, delete_now=False)
     cat = catalog(connection)
     preds = _Preds(cat)
     kept = _keep_others(connection, cat, preds, project_id, _rehome_target(connection, settings, project))
@@ -764,7 +766,8 @@ def purge(connection: Any, settings: Any, project_id: str, *, actor: str,
     _audit(connection, auth, project, summary)
     return {"id": project_id, "name": project["name"], "org_id": project["org_id"],
             "counts": counts, "per_table": per_table, "rows": summary["rows"],
-            "graph_dropped": graph_dropped, "identity": scopes, "kept_for_others": kept}
+            "graph_dropped": graph_dropped, "identity": scopes, "kept_for_others": kept,
+            "pending_pool_logins": list(pool_cleanup.get("pending_login_deletes") or [])}
 
 
 def _audit(connection: Any, auth: Any, project: dict, details: dict[str, Any]) -> None:
@@ -945,8 +948,12 @@ def delete_project(engine: Any, settings: Any, project_id: str, *, actor: str,
                      extra={"apps_removed": [f"{a['app_name']} ({a['environment']})" for a in removed
                                              if a["result"] == "removed"],
                             "stopped": stopped})
-    # The rows are gone (committed): now its files — a local project's bare repositories, its
-    # retained workspaces, preview trees and logs, artifacts, and a mirror no one else uses.
+    # The rows are gone (committed): now its stored pool logins (BOSSAPP-1483) and its files —
+    # a local project's bare repositories, retained workspaces, preview trees, and artifacts.
+    from .subscription_pools import delete_purged_pool_logins
+
+    delete_purged_pool_logins(settings, done.get("pending_pool_logins") or [],
+                              project_id=project_id)
     files = project_files.remove(settings, files_plan)
     return {**done, "removed_apps": removed, "stopped": stopped, "deleted": True,
             "files": project_files.describe(files), "files_refused": files["refused"]}

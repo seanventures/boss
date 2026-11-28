@@ -188,6 +188,10 @@ class _Session:
     #: True for "Add another account" (BOSSAPP-1343): its token becomes a new pool member, so it
     #: never signs the install's login out and is never handed to a plain sign-in (or back).
     add_account: bool = False
+    #: Which pool an add-account sign-in targets (e.g. ``org:<org_id>`` or ``project:<pid>``),
+    #: keyed with ``actor`` so a second caller never inherits or cancels another person's add
+    #: (BOSSAPP-1483).
+    target_pool: Optional[str] = None
     #: The organisation the sign-in is for: its token lands in that org's model home, so only
     #: that org's projects may see, answer or cancel it (identity.object_kinds), and a start from
     #: another org is refused while it is live (start).
@@ -841,6 +845,7 @@ def _cannot_keep_token(provider: str, settings: Any) -> Optional[str]:
 def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
           org_id: Optional[str] = None,
           login_rejected: bool = False, fresh: bool = False, add_account: bool = False,
+          target_pool: Optional[str] = None,
           signed_in: Optional[Callable[[], bool]] = None,
           argv: Optional[tuple[str, ...]] = None,
           logout_argv: Optional[tuple[str, ...]] = None,
@@ -884,6 +889,15 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
             raise SignInError(
                 409, f"{login.label} sign-in is busy right now",
                 f"A {login.label} sign-in is already in progress. Try again in a few minutes.")
+        effective_pool = (target_pool or f"project:{project_id}") if add_account else None
+        if live is not None and add_account:
+            live_pool = live.target_pool or f"project:{live.project_id}"
+            if live.actor != actor or live_pool != effective_pool:
+                # BOSSAPP-1483: key in-progress add-account sign-ins by actor + target pool so a
+                # second caller never inherits or cancels another person's add-account flow.
+                raise SignInError(
+                    409, f"{login.label} sign-in is busy right now",
+                    f"A {login.label} sign-in is already in progress. Try again in a few minutes.")
         if live is not None:
             with live.lock:
                 # NEVER HAND BACK A STUCK SESSION. A code that went in and got no answer, or an
@@ -899,7 +913,7 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
         session = _Session(sign_in_id=f"si_{secrets.token_hex(10)}", provider=name,
                            project_id=project_id, actor=actor, started=now,
                            expires=now + SESSION_TTL_SECONDS, org_id=org_id,
-                           add_account=add_account)
+                           add_account=add_account, target_pool=effective_pool)
         if not replace and not add_account and _safe(check):
             session.state = "signed_in"
             session.expires = None

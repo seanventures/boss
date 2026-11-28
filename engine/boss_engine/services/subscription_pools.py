@@ -619,22 +619,51 @@ def delete_pool(connection: Connection, project_id: str, pool_id: str, *,
     return {"deleted": pool_id}
 
 
-def before_project_purge(connection: Connection, settings: Any, project_id: str) -> dict[str, int]:
+def delete_purged_pool_logins(settings: Any, secret_names: Any, *,
+                              project_id: str = "") -> int:
+    """Delete stored pool logins AFTER the project purge transaction has committed
+    (BOSSAPP-1483). Never called before commit so a rolled-back purge never orphans pool rows."""
+    deleted = 0
+    for name in list(secret_names or []):
+        if not name:
+            continue
+        try:
+            _store(settings).delete(_store_key(str(name)))
+            deleted += 1
+        except Exception:  # noqa: BLE001 — the purge already committed; the log says which one
+            _log.warning("could not delete a pool login after deleting project %s", project_id)
+    return deleted
+
+
+def before_project_purge(connection: Connection, settings: Any, project_id: str, *,
+                         delete_now: bool = False) -> dict[str, Any]:
     """A project is about to be deleted (projects_delete.purge), and its pools would go with it
     by cascade, leaving their seats' stored logins behind with nothing pointing at them.
-    The ORG's pool anchored here moves to another project of the org (the org keeps its seats);
-    every pool that goes deletes its seats' own logins first. An adopted install login is never
+    The ORG's pool anchored here moves to the org's model home project first (else the oldest
+    other project of the org, BOSSAPP-1483); every pool that goes returns its seats' own login
+    names in ``pending_login_deletes`` so the caller deletes them AFTER commit (pass
+    ``delete_now=True`` only outside a rollbackable purge). An adopted install login is never
     deleted (it is the install's, see remove_member)."""
-    out = {"moved": 0, "logins_deleted": 0}
+    from . import org_models
+
+    out: dict[str, Any] = {"moved": 0, "logins_deleted": 0, "pending_login_deletes": []}
     pools = connection.execute(text(
         "SELECT id, engine, scope, org_id FROM subscription_pools WHERE project_id = :p"),
         {"p": project_id}).mappings().all()
     for pool in pools:
         if pool["scope"] == "org" and pool["org_id"]:
-            other = connection.execute(text(
-                "SELECT p.id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
-                "WHERE w.org_id = :o AND p.id <> :p ORDER BY p.created_at, p.id LIMIT 1"),
-                {"o": pool["org_id"], "p": project_id}).scalar()
+            other = None
+            try:
+                home = org_models.home_project(connection, str(pool["org_id"]))
+                if home and str(home) != str(project_id):
+                    other = str(home)
+            except Exception:  # noqa: BLE001 — fallback to oldest remaining project
+                other = None
+            if not other:
+                other = connection.execute(text(
+                    "SELECT p.id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                    "WHERE w.org_id = :o AND p.id <> :p ORDER BY p.created_at, p.id LIMIT 1"),
+                    {"o": pool["org_id"], "p": project_id}).scalar()
             if other:
                 connection.execute(text(
                     "UPDATE subscription_pools SET project_id = :n, updated_at = now() "
@@ -646,11 +675,11 @@ def before_project_purge(connection: Connection, settings: Any, project_id: str)
                 {"i": pool["id"]}).scalars():
             if name == BASE_SECRET.get(pool["engine"]):
                 continue
-            try:
-                _store(settings).delete(_store_key(name))
-                out["logins_deleted"] += 1
-            except Exception:  # noqa: BLE001 — the purge goes on; the log says which one
-                _log.warning("could not delete a pool login while deleting project %s", project_id)
+            out["pending_login_deletes"].append(str(name))
+    if delete_now and out["pending_login_deletes"]:
+        out["logins_deleted"] = delete_purged_pool_logins(
+            settings, out["pending_login_deletes"], project_id=project_id
+        )
     return out
 
 

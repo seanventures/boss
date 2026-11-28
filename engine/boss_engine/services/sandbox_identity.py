@@ -508,13 +508,22 @@ def held_identity(owner_id: str) -> Optional[SandboxIdentity]:
         st = os.lstat(run_dir)
     except OSError:
         return None
-    if not (stat.S_ISDIR(st.st_mode) and UID_BASE <= st.st_uid < UID_BASE + UID_COUNT):
+    if not stat.S_ISDIR(st.st_mode):
+        return None
+    # BOSSAPP-1486: run_dir is boss:<uid> 01770 (sticky, BOSS-owned, group-writable to the run
+    # uid so the run uid cannot rename BOSS-created entries). Also recognise pre-upgrade
+    # <uid>:boss run_dirs during a rolling upgrade.
+    if UID_BASE <= st.st_gid < UID_BASE + UID_COUNT:
+        run_uid = st.st_gid
+    elif UID_BASE <= st.st_uid < UID_BASE + UID_COUNT:
+        run_uid = st.st_uid
+    else:
         return None
     with _ACTIVE_LOCK:
         for active in _ACTIVE.values():
-            if active.uid == st.st_uid:
+            if active.uid == run_uid:
                 return None
-    lock_path = os.path.join(SHIM_ROOT, f"uid-{st.st_uid}.lock")
+    lock_path = os.path.join(SHIM_ROOT, f"uid-{run_uid}.lock")
     if os.path.exists(lock_path):
         try:
             fd = os.open(lock_path, os.O_RDWR)
@@ -538,7 +547,7 @@ def held_identity(owner_id: str) -> Optional[SandboxIdentity]:
         finally:
             with contextlib.suppress(OSError):
                 os.close(fd)
-    return SandboxIdentity(key=run_dir.name, uid=st.st_uid, run_dir=run_dir)
+    return SandboxIdentity(key=run_dir.name, uid=run_uid, run_dir=run_dir)
 
 
 def stop_owner(owner_id: str) -> Optional[SandboxIdentity]:
