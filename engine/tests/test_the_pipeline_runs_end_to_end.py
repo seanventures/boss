@@ -353,6 +353,41 @@ def test_a_small_build_writes_is_judged_and_opens_its_pull_request(pipeline, bui
                for c in pipeline.cards(run["pull_request_url"])), "no merge card"
 
 
+@pytest.mark.parametrize("recover", [True, False], ids=["recovered", "exhausted"])
+def test_a_single_model_corrects_empty_test_output_once(pipeline, monkeypatch, recover):
+    from boss_engine.services.scripted_engine import ScriptedEngine
+
+    play = ScriptedEngine._play
+    prompts = []
+    observation = "No runnable test has been written for the slug requirement."
+
+    def empty_first(self, stage, prompt, root, app, read_only, state, turns):
+        if stage == "write_tests" and not read_only:
+            prompts.append(prompt)
+            if len(prompts) == 1 or not recover:
+                return observation, []
+        return play(self, stage, prompt, root, app, read_only, state, turns)
+
+    monkeypatch.setattr(ScriptedEngine, "_play", empty_first)
+    run_id, repo = pipeline.build(tag="empty-tests")
+    error = pipeline.run(run_id, repo)
+    result = pipeline.result(run_id)
+    assert len(prompts) == 2, (result["run"]["status"], error, result["events"])
+    assert observation in prompts[1]
+    assert "code_task.step_retry" in result["events"]
+    completed = result["run"]["finalize_ctx"].get("completed_stages") or []
+    assert ("write_tests" in completed) == recover
+    if recover:
+        assert result["run"]["status"] == "completed", (result["run"].get("error"), error)
+        assert result["run"]["pull_request_url"]
+        assert "code_task.step_recovered" in result["events"]
+    else:
+        assert result["run"]["status"] == "failed"
+        assert result["run"]["finalize_ctx"]["reason_code"] == "no_test_files"
+        assert "implement" not in result["stages"]
+        assert "code_task.step_recovered" not in result["events"]
+
+
 # ── a follow-up on that change ───────────────────────────────────────────────────────────────
 
 def test_a_follow_up_builds_on_the_same_branch_and_pull_request(pipeline, built, tmp_path):
@@ -440,6 +475,92 @@ def _latest_with_pr(pipeline: Pipeline, pr: str) -> str:
 
 
 # ── the no-write agent ───────────────────────────────────────────────────────────────────────
+
+def _pushed_documentation(pipeline, monkeypatch, tmp_path, files):
+    """A local project whose person pushed a branch of `files` onto the seeded README tree, and
+    the review BOSS queues for it, as the push hook queues one. Returns (run_id, repo name)."""
+    from boss_engine.config import get_settings
+    from boss_engine.identity import consent
+    from boss_engine.services import local_git_hooks, local_projects, local_repo, local_review
+    from boss_engine.services.local_repo_host import LocalGitAdapter
+
+    root = tmp_path / "repos"
+    root.mkdir()
+    monkeypatch.setattr(local_repo, "root", lambda settings=None: root)
+    monkeypatch.setattr(consent, "require_authority", lambda **kw: None)
+    # The scripted panel reads (and names) the fixture tree it is pointed at: the pushed files.
+    fixture = tmp_path / "fixture"
+    for rel, body in files.items():
+        (fixture / rel).parent.mkdir(parents=True, exist_ok=True)
+        (fixture / rel).write_text(body)
+    pipeline._engine_env("", fixture=fixture)
+    with pipeline.engine.begin() as c:
+        bound = local_projects.create_for_project(c, get_settings(), pipeline.project,
+                                                  name=f"docs-{uuid.uuid4().hex[:6]}", actor="t")
+    bare = local_repo.bare_path(bound["owner"], bound["repo"])
+    branch = "docs/guide"
+    local_repo.ensure_branch(bare, branch)
+    local_repo.commit_files(bare, branch, files, "add the guide")
+    LocalGitAdapter(get_settings(), owner=bound["owner"], repo=bound["repo"],
+                    project_id=pipeline.project).create_pull_request(branch, "Add a guide", "")
+    with pipeline.engine.begin() as c:
+        number = c.execute(pipeline.text(
+            "SELECT max(number) FROM local_change_sets WHERE project_id = :p AND branch = :b"),
+            {"p": pipeline.project, "b": branch}).scalar()
+        row = local_review.change_row(c, pipeline.project, int(number))
+        run_id = local_git_hooks.queue_review_of(c, get_settings(), change=row, pusher="ada",
+                                                 jobs=pipeline.jobs(bound["repo"]))
+    assert run_id, "the push queued no review"
+    return run_id, bound["repo"]
+
+
+def test_a_pushed_documentation_change_is_reviewed_read_only_and_met(pipeline, monkeypatch,
+                                                                      tmp_path):
+    """Enterprise validation: a pushed documentation-only change failed with "no test files".
+    Through the real governed runner it is now the documentation review: the route fires, is
+    never revoked (BOSS writes nothing into the checkout), and the acceptance check is met from
+    the Git check and the panel's verdict."""
+    run_id, repo = _pushed_documentation(
+        pipeline, monkeypatch, tmp_path,
+        {"docs/guide.md": "# Guide\n\nInstall it.  \nThen run it.\n"})
+    error = pipeline.run(run_id, repo)
+    result = pipeline.result(run_id)
+    events = result["events"]
+    assert "code_task.pushed_documents_review" in events, (error, events)
+    assert "code_task.pushed_documents_review_revoked" not in events
+    state = result["run"]["state"] or {}
+    assert state["documentation_review"]["application_tests"] == "not_applicable"
+    assert state["documentation_review"]["exit_code"] == 0
+    assert (state.get("acceptance") or {}).get("verdict") == "met", (
+        result["run"]["status"], error, state.get("acceptance"))
+    assert not result["writes"], "a documentation review writes nothing"
+
+
+def test_a_documentation_review_whose_checkout_moves_after_its_verdict_fails(pipeline,
+                                                                            monkeypatch, tmp_path):
+    """The document check answered for the tree, then the tree moved: the acceptance check
+    swallows the first DocumentRouteBroken, and the record still refuses, so the run fails
+    instead of carrying the normal suite's record (or a PR body) about another tree."""
+    from boss_engine.services import pushed_review
+
+    run_id, repo = _pushed_documentation(pipeline, monkeypatch, tmp_path,
+                                         {"docs/guide.md": "# Guide\n"})
+    real = pushed_review.tree_is_the_reviewed_head
+    seen = []
+
+    def moves_after_the_first_look(root, head):
+        seen.append(head)
+        return real(root, head) if len(seen) == 1 else False
+
+    monkeypatch.setattr(pushed_review, "tree_is_the_reviewed_head", moves_after_the_first_look)
+    error = pipeline.run(run_id, repo)
+    result = pipeline.result(run_id)
+    assert "code_task.pushed_documents_review_revoked" in result["events"]
+    assert result["run"]["status"] == "failed", (result["run"]["status"], error)
+    assert "documentation review" in str(result["run"].get("error") or error or "")
+    assert not (result["run"]["state"] or {}).get("documentation_review")
+    assert not result["run"]["pull_request_url"]
+
 
 def test_the_no_write_agent_has_only_the_knobs_it_declares():
     from boss_engine.services.change_recheck import NoWriteAgent

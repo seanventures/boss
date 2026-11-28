@@ -11,6 +11,10 @@ So a card may wait for a person outside production only when it is:
   * ask_spend        — spend beyond the budget a person set
   * explicit_stop    — a stop a PERSON set ("Review the plan first", a tool set to ask,...)
   * ask_prod_release — a release to production or the public by construction
+  * ask_product_choice — a blocking product choice the spec panel could not settle from the
+    brief (public or administrators only?), asked BEFORE the build starts. Enterprise
+    validation, ENT-REC-49: the dev product manager approved a spec whose panel had asked
+    exactly that, and the build guessed. Only a parsed `BUILD READINESS: ASK` sets it.
 ADDING A CLASS TO THAT SET MEANS EDITING THIS TEST, next to the operator's words.
 
 This reads every card BOSS writes (the producer scan of
@@ -30,7 +34,7 @@ from boss_engine.services import (autonomy_gate, autonomy_policy, decision_actio
 from . import test_every_decision_boss_raises_has_its_buttons_decided as scan
 
 PINNED_ALLOWED_DEV_WAITS = frozenset({"ask_credential", "ask_spend", "explicit_stop",
-                                      "ask_prod_release"})
+                                      "ask_prod_release", "ask_product_choice"})
 
 
 def test_the_allowed_waits_are_exactly_the_operators_four_plus_explicit_stops():
@@ -72,6 +76,8 @@ PINNED_WAITS = {
         "review_model_spend_and_receipts_before_retry", "typed_decision_lease_expired",
         "typed_decision_reconciliation", "verify_provider_outcome_before_retry"},
     "explicit_stop": {"review_always_on_build"},
+    # Decided per card, not per action (autonomy_gate._product_choice): no action waits for it.
+    "ask_product_choice": set(),
 }
 PINNED_GATE_WAITS = {"agent_work": "explicit_stop", "promote_config": "ask_prod_release",
                      "social_publish": "ask_prod_release",
@@ -403,3 +409,20 @@ def test_a_message_gate_asks_unless_it_goes_to_the_teams_own_channel(monkeypatch
                                                "recommendation": {"capability": capability,
                                                                   "channel": channel}})
             assert found.acts is acts, (capability, channel, found)
+
+
+def test_only_a_parsed_panel_question_waits_as_a_product_choice():
+    """ask_product_choice is decided per card: a PRD card carrying the panel's parsed question
+    waits under Agents act; the same card without one (ready, or assumed ready) acts."""
+    policy = autonomy_policy.coerce({"dev": "act"})
+    card = {"project_id": "", "risk_tier": 2, "recommendation": {
+        "action": "execute_agent_tool", "tool": "publish_document",
+        "args": {"title": "PRD: x", "markdown": "# PRD"}}}
+    assert autonomy_gate.route(None, card, policy=policy).acts
+    asked = {**card, "recommendation": {**card["recommendation"],
+                                         "build_readiness_question": "Public or admins only?"}}
+    found = autonomy_gate.route(None, asked, policy=policy)
+    assert (found.acts, found.cls) == (False, "ask_product_choice")
+    assert "Public or admins only?" in found.why and found.what_to_do
+    other = {**asked, "recommendation": {**asked["recommendation"], "tool": "send_email"}}
+    assert autonomy_gate.route(None, other, policy=policy).cls != "ask_product_choice"

@@ -137,7 +137,7 @@ def engine_agent(max_steps: int = 6, *, budget: Any = None,
 # ── agent_decision._ask_reading (AgentService.decide with a read phase) ───────────────────────
 
 def decision(*, max_turns: int = 4, max_usd_micros: int = 300_000, result_chars: int = 8_000,
-             accept: Callable[[Any, RunState], Acceptance]) -> Policies:
+             accept: Callable[[Any, RunState], Acceptance], reserve_format_retry: bool = False) -> Policies:
     """Reads for up to `max_turns` turns and `max_usd_micros`; the last turn answers with no
     tools; a refused answer is asked once more. `accept(raw, state)` is the caller's check
     (agent_decision._accept against the corpus plus `state.rendered`)."""
@@ -146,7 +146,8 @@ def decision(*, max_turns: int = 4, max_usd_micros: int = 300_000, result_chars:
     return Policies(
         stop=Caps(max_steps=int(max_turns), answer="within", max_usd_micros=int(max_usd_micros),
                   on_cost="answer", answer_prompt_text=ANSWER_NOW,
-                  answer_prompt_when="after_tool", version="stop.decision@1"),
+                  answer_prompt_when="after_tool", reserve_format_retry=reserve_format_retry,
+                  version="stop.decision.recovery@2" if reserve_format_retry else "stop.decision@1"),
         context=ClipContext(clip=int(result_chars), redact=True, version="ctx.decision@1"),
         tools=ScopedTools(version="tools.decision.scoped@1"),
         verify=ParsedAnswer(parse=parse, accept=accept, reask_text=_refused_again, max_reasks=1,

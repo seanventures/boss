@@ -2581,6 +2581,9 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or None,
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          **({key: fctx_prev[key] for key in ("local_review_of_push",
+                              "local_change_branch", "local_change_set_id") if key in fctx_prev}
+                             if fctx_prev.get("local_review_of_push") and not fix_note else {}),
                           # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
                           # after the job is queued (a fast-failing attempt read it as 0).
                           **({"auto_infra_retry": int(auto_retry_attempt)}

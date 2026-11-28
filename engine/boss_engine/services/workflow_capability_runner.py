@@ -4027,6 +4027,11 @@ def _perform_capability(
         return {"capability": key, "tool": None, "status": "skipped", "skipped": "no_deploy_ask",
                 "reason": NO_DEPLOY_ASK_WORDS, "note": NO_DEPLOY_ASK_WORDS,
                 "summary": NO_DEPLOY_ASK_WORDS}
+    if key == "preview":
+        build_id = inputs.get("run_id") or _nearest_build_run_id(connection, context, step)
+        documents = _document_review_preview(connection, project_id, build_id)
+        if documents:
+            return documents
     # EASY MODE'S OWN RULES apply only on a run of the catalogue's Easy Mode MVP workflow (never
     # a copy, never a binding someone else wrote, never a caller's input).
     easy_mode = key == "deploy" and _is_easy_mode_run(connection, str(context.get("run_id") or ""))
@@ -6054,6 +6059,21 @@ def _preview_not_permitted(key: str, output: dict[str, Any],
             "note": f"skipped: {reason}"}
 
 
+def _document_review_preview(connection, project_id, build_run_id):
+    if not build_run_id or connection is None:
+        return None
+    reviewed = connection.execute(text(
+        "SELECT 1 FROM code_task_runs WHERE id=:id AND project_id=:project "
+        "AND finalize_ctx->'local_review_of_push' = 'true'::jsonb "
+        "AND state->'documentation_review'->>'application_tests'='not_applicable'"),
+        {"id": build_run_id, "project": project_id}).scalar()
+    if reviewed != 1:
+        return None
+    note = "Preview skipped. BOSS reviewed the submitted documentation. This tree has no browser application."
+    return {"capability": "preview", "tool": None, "ok": True, "status": "not_applicable",
+            "skipped": "documentation", "note": note, "reason": note, "build_run_id": build_run_id}
+
+
 def _service_preview_skipped(connection: Any, *, build_run_id: str, why: str,
                              output: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
     """A Preview step whose build is a SERVICE OR A LIBRARY and whose preview did not come up is
@@ -6336,7 +6356,8 @@ def _terminal_evidence(
             # THE PANEL'S PRD, now approved: the same evidence the meeting gives, plus who
             # approved it, so the build is briefed from the spec a person signed.
             row = connection.execute(
-                text("SELECT m.id AS meeting_run_id, d.approved_by FROM decisions d "
+                text("SELECT m.id AS meeting_run_id, d.approved_by, d.resolution_note, "
+                     "m.state->>'build_readiness_question' AS readiness_question FROM decisions d "
                      "LEFT JOIN meeting_runs m ON m.decision_id = d.id WHERE d.id = :d "
                      "ORDER BY m.created_at DESC LIMIT 1"),
                 {"d": awaited_id},
@@ -6345,6 +6366,13 @@ def _terminal_evidence(
                 return {}
             evidence = (_terminal_evidence(connection, "meeting", row["meeting_run_id"])
                         if row["meeting_run_id"] else {})
+            # THE REQUESTER'S ANSWER TO THE PANEL'S BLOCKING QUESTION travels with the spec.
+            if evidence.get("prd_markdown"):
+                from .meeting_service import with_requester_answer
+
+                evidence["prd_markdown"] = with_requester_answer(
+                    evidence["prd_markdown"], row["readiness_question"],
+                    row["resolution_note"])[:_PRD_CHARS]
             return {**evidence, "spec_decision_id": awaited_id,
                     "spec_approved_by": row["approved_by"]}
         if kind == "meeting":

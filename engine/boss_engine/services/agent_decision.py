@@ -170,6 +170,7 @@ class ReadPhase:
     max_turns: int = 4
     max_usd_micros: int = 300_000
     result_chars: int = 8_000
+    reserve_format_retry: bool = False
 
 
 @dataclass(frozen=True)
@@ -693,7 +694,11 @@ def _ask_reading(adapter: Any, system: str, prompt: str, *, read: ReadPhase,
         # The LAST turn is always an answer without tools: the turn cap, or the spend cap
         # reached by the reads. A read phase that spent its budget used to end with no answer
         # at all (boss-dogfood 2026-11-07: a squad lead read, ran past $0.15, and "passed").
-        final = turns == read.max_turns - 1 or spent >= read.max_usd_micros
+        if read.reserve_format_retry and asked_again and spent >= read.max_usd_micros:
+            break
+        answer_at = read.max_turns - (2 if read.reserve_format_retry else 1)
+        correcting = read.reserve_format_retry and asked_again > 0
+        final = turns >= answer_at or spent >= read.max_usd_micros or correcting
         if final and messages[-1].get("role") == "tool":
             messages.append({"role": "user", "content": ANSWER_NOW})
         try:
@@ -802,7 +807,8 @@ def _ask_reading_on_kernel(adapter: Any, system: str, prompt: str, *, read: Read
     result = kernel.run(kernel.RunSpec(
         engine=engine, tools=tools,
         policies=decision_preset(max_turns=read.max_turns, max_usd_micros=read.max_usd_micros,
-                                 result_chars=read.result_chars, accept=accept),
+                                 result_chars=read.result_chars, accept=accept,
+                                 reserve_format_retry=read.reserve_format_retry),
         project_id=project_id or "", system=system,
         messages=[{"role": "user", "content": prompt}],
         actor="agent_decision", stage=ROUTE_STEP, gate=gate, sink=sink,

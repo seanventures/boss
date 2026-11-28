@@ -4808,7 +4808,7 @@ def existing_suite_stands(app_tests: list[str]) -> list[str]:
     return [str(p) for p in (app_tests or []) if str(p).strip()]
 
 
-def write_tests_exhausted_message(*, stronger_lane: bool, last_words: str = "",
+def write_tests_exhausted_message(*, stronger_lane: bool, same_lane_retry: bool = False, last_words: str = "",
                                   changed: Optional[Sequence[str]] = None) -> str:
     """What the operator reads when the test author wrote nothing.
 
@@ -4823,6 +4823,8 @@ def write_tests_exhausted_message(*, stronger_lane: bool, last_words: str = "",
     lead = ("The test author wrote no test files, even after escalating to a frontier model."
             if stronger_lane else
             "The test author wrote no test files, and no stronger lane is configured to try.")
+    if same_lane_retry and not stronger_lane:
+        lead = "The test author wrote no test files after a correction attempt on the same model."
     said = short(last_words, 160).replace("'", "’")
     words = f" It ended by saying: '{said}'." if said else " It ended without a summary."
     paths = [str(p) for p in (changed or []) if str(p).strip()]
@@ -6439,7 +6441,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # nothing — no checkpoint, rescue, partial PR, preview declaration or PRD record —
         # whatever gate preparation left in the checkout (change_recheck.push_hold_reason).
         reason = _change_recheck.push_hold_reason(
-            _recheck, template_push_hold(_tpl_applies, _tpl_gates))
+            _recheck, template_push_hold(_tpl_applies, _tpl_gates),
+            submitted_review=bool(fctx.get("local_review_of_push")), where=where)
         if reason is None:
             return False
         try:
@@ -7342,11 +7345,58 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            {"brief_said": _stack_ctx["verdict"].message[:300],
                             "repository_ok": True})
         root = sandbox.path
+        submitted_paths = []
+        document_route = None
+        reviewed_document_head = None
+        if fctx.get("local_review_of_push") and _is_local_owner(owner):
+            from . import local_repo, local_review, pushed_review
+
+            with _transaction(engine) as c:
+                change = local_review.change_by_id(c, str(fctx.get("local_change_set_id") or ""))
+            if (not change or change["project_id"] != project_id
+                    or change["repository"] != f"{owner}/{repo}" or change["state"] != "open"
+                    or change["branch"] != work_branch
+                    or change["head_sha"] != getattr(sandbox, "base_sha", None)):
+                raise RuntimeError("The pushed change or its head has moved. Request a review of its current head.")
+            repo_base_branch = change["base_branch"]
+            submitted = pushed_review.inspect(local_repo.bare_path(owner, repo, settings),
+                                              change["base_sha"], change["head_sha"])
+            submitted_paths = submitted.paths
+            if submitted.documents_only and not use_microvm:
+                reviewed_document_head = change["head_sha"]
+                _recheck = True
+                # Check the full submitted range, including intermediate commits in a shallow
+                # worktree. The bare repository is BOSS's and both revisions are stored SHAs.
+                from .sandbox import CommandResult
+                check_args = ["diff", "--check", "--no-ext-diff",
+                              f"{change['base_sha']}...{change['head_sha']}", "--"]
+                started_check = time.monotonic()
+                check_ok, message = pushed_review.check_documents(
+                    local_repo.bare_path(owner, repo, settings), change["base_sha"],
+                    change["head_sha"])
+                _document_check = CommandResult(command="git diff --check", argv=["git", *check_args],
+                    exit_code=0 if check_ok else 1, duration_ms=int((time.monotonic()-started_check)*1000),
+                    timed_out=False, stdout=message if check_ok else "", stderr="" if check_ok else message)
+
+                def _documents_revoked(head=change["head_sha"]):
+                    # THE CHECKOUT MOVED OFF THE REVIEWED DOCUMENTS (anything written, added,
+                    # ignored or hidden from git during the run): the classification no longer
+                    # describes the tree.
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.pushed_documents_review_revoked",
+                                   "boss", "code_task_run", run_id, {"head": head})
+
+                document_route = pushed_review.DocumentRoute(
+                    root, change["head_sha"], _document_check, on_revoked=_documents_revoked)
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.pushed_documents_review", "boss",
+                               "code_task_run", run_id, {"head": change["head_sha"],
+                               "files": len(submitted_paths)})
         # NEVER BUILD A SECOND APP FROM SCRATCH (AR-54, build_checkout): a checkout with no app
         # files in a repository BOSS already built an app in (a workflow's build step that
         # carried no base branch cloned the README-only mainline) fails here with the branches
         # that hold it, before any model call.
-        if not use_microvm and not _is_repair and not fctx.get("seed_workspace_from"):
+        if not use_microvm and not _is_repair and not submitted_paths and not fctx.get("seed_workspace_from"):
             from . import app_scope as _which_app
             from . import build_checkout as _build_checkout
 
@@ -7699,7 +7749,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         def _changed_paths() -> list[str]:
             """Every path this run has changed: what is checkpointed plus the live tree."""
-            paths = set(accumulated)
+            paths = set(accumulated).union(submitted_paths)
             # A REPAIR SEEDED FROM A SAVED WORKSPACE: the seeded files are this lineage's work
             # against the base branch, even when the live diff reports nothing (crun_cc365333
             # planned its tests at the repository root: changed was empty, so the app folder
@@ -8174,6 +8224,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         def _run_verify_once(*, record: bool = True):
             nonlocal last_verify_cwd, last_verify_output, last_verify_command
+            # Re-proven at every use (pushed_review.DocumentRoute): a checkout that moved before
+            # the check answered falls through to the full suite below.
+            document_check = document_route.current() if document_route is not None else None
+            if document_check is not None:
+                if record:
+                    last_verify_command = document_check.command
+                    last_verify_output = document_check.stdout or document_check.stderr
+                    last_verify_cwd = "."
+                return document_check
             tampered_manifest = verification_target.verify_manifest_tampered(
                 _pinned_manifest, root)
             if tampered_manifest:
@@ -8821,16 +8880,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # The operator-facing failure reads this (BOSSAPP-1032).
             _tests_escalation = {"stronger": False, "skipped": False}
 
-            def _attempt_write_tests(escalate: bool):
+            def _attempt_write_tests(escalate: bool, prior_summary: str = ""):
                 """One QA/write-tests pass → (r1, test_files, test_changes|None). escalate
-                retries on a stronger lane when one is configured. The same engine and
-                model is not run again and is not called a frontier pass."""
+                requests a stronger route, or one correction on the available route
+                when there is no existing suite."""
                 nonlocal cost
                 prompt = _qa_prompt(
                     title, instructions, criteria, test_cmd,
                     iac=iac_task, web=_web_verify, app_root=_app_id, stack_note=_stack_note,
                 ) + _placed_tests_note(_placed_tpl_tests) + _brief_tests.brief_note(_named_tests) \
                     + _items_note
+                prompt += ("\nFor a new app, inspect the brief for independently testable behavior. "
+                           "Write tests for agreed cases even if another case needs clarification. "
+                           "Do not invent an authorization policy, route, or success criterion. "
+                           "Identify remaining decisions in the summary.")
                 # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
                 # the working tree (the retry clones the lineage branch), and the review names the
                 # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
@@ -8887,18 +8950,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "whole suite green. Touch as few files as possible."
                                 + _items_note)
                 if escalate:
+                    from .failure_words import short
+
                     prompt = (
-                        "Your previous attempt produced NO recognizable test files. Author "
-                        "real, runnable tests NOW as actual FILES in this project's test "
-                        "convention and directory (e.g. *.test.ts, *_test.py, tests/…), not a "
-                        "description or plan.\n\n" + prompt
+                        "Your previous attempt produced no recognizable test files. Inspect the "
+                        "checkout and the accepted criteria. Choose the smallest specified "
+                        "observable behavior and write one executable test for it in the "
+                        "project's test directory. It may fail until implementation. If the only "
+                        "remaining case needs an undefined identity or authorization contract, "
+                        "identify that missing decision. Never invent permissions or add a "
+                        "placeholder test.\n"
+                        f"Prior test-author observation: {short(prior_summary, 600) or 'none recorded'}"
+                        "\n\n" + prompt
                     )
                 if use_microvm:
                     before = dict(stage_routes.get("write_tests") or {})
                     override = ""
                     if escalate and not stage_router.is_smart():
                         # Fixed mode names the hard-problems engine here. The same
-                        # engine and model is not a second lane — skip it.
+                        # engine and model can still make one focused correction.
                         override = str(settings.code_agent_strong_engine or "").strip()
                         strong_model = str(settings.code_agent_strong_model or "").strip() or None
                         if (override and override.lower()
@@ -8909,12 +8979,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                      "model": strong_model or before.get("model")}
                         else:
                             after = before
-                        if not escalation_reached_a_stronger_lane(before, after):
-                            _tests_escalation["stronger"] = False
+                        moved = escalation_reached_a_stronger_lane(before, after)
+                        if not moved and _app_tests:
                             _tests_escalation["skipped"] = True
                             return {"escalation": "skipped", "route": after}, [], None
-                        _tests_escalation["stronger"] = True
-                        _tests_escalation["skipped"] = False
+                        _tests_escalation["stronger"] = moved
                     elif escalate:
                         override = _vm_escalation("write_tests", True, "no_output")
                     res = _guest_stage(
@@ -8926,7 +8995,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         after = dict(stage_routes.get("write_tests") or {})
                         moved = escalation_reached_a_stronger_lane(before, after)
                         _tests_escalation["stronger"] = moved
-                        _tests_escalation["skipped"] = not moved
+                        _tests_escalation["skipped"] = False
                     r = {"cost_usd_micros": res.cost_usd_micros, "summary": res.summary,
                          "usage": res.usage, "model": stage_routes["write_tests"]["model"]}
                     changes = [fc for fc in res.diff if _is_test_path(fc.path)]
@@ -8937,12 +9006,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     decision = _await_route(
                         "write_tests", signal="no_output", previous=before)
                     after = {"engine": decision.engine, "model": decision.model}
-                    if not escalation_reached_a_stronger_lane(before, after):
-                        _tests_escalation["stronger"] = False
+                    moved = escalation_reached_a_stronger_lane(before, after)
+                    if not moved and _app_tests:
                         _tests_escalation["skipped"] = True
                         return {"escalation": "skipped", "route": after}, [], None
-                    _tests_escalation["stronger"] = True
-                    _tests_escalation["skipped"] = False
+                    _tests_escalation["stronger"] = moved
                     a, m = _routed_agent("write_tests", decision)
                 else:
                     a, m = _route("write_tests")
@@ -9005,31 +9073,33 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     "why": "a config-only change needs no test that pins the "
                                            "file's contents"})
             if not test_files and not _remediation:
-                # SELF-HEAL once, on a stronger lane when one is configured. The same
-                # engine and model is not a frontier retry (BOSSAPP-1032).
+                # Retry once with feedback while the budget and harness still permit it.
                 # (A config-only change: writing no new test file is the expected outcome.)
-                r1, test_files, test_changes = _attempt_write_tests(escalate=True)
-                if _tests_escalation["stronger"]:
-                    with _transaction(engine) as c:
-                        emit_event(c, project_id, "code_task.step_escalating", "boss",
-                                   "code_task_run", run_id,
-                                   {"step": "write_tests", "reason": "no_test_files",
-                                    "action": "retry_on_frontier"})
-                    if test_files:
-                        with _transaction(engine) as c:
-                            emit_event(c, project_id, "code_task.step_recovered", "boss",
-                                       "code_task_run", run_id,
-                                       {"step": "write_tests",
-                                        "recovered_by": "frontier_retry"})
-                else:
-                    with _transaction(engine) as c:
+                _stop_on_harness_failure("write_tests")
+                _abort_if_cancelled("write_tests correction")
+                retry_result, test_files, test_changes = _attempt_write_tests(
+                    escalate=True, prior_summary=str(r1.get("summary") or ""))
+                if retry_result.get("escalation") != "skipped":
+                    r1 = retry_result
+                with _transaction(engine) as c:
+                    route = escalation_route_record(stage_routes.get("write_tests"), r1)
+                    if _tests_escalation["skipped"]:
                         emit_event(c, project_id, "code_task.escalation_skipped", "boss",
-                                   "code_task_run", run_id,
-                                   {"step": "write_tests", "reason": "no_stronger_lane",
-                                    "engine": (stage_routes.get("write_tests") or {}).get(
-                                        "engine"),
-                                    "model": (stage_routes.get("write_tests") or {}).get(
-                                        "model")})
+                                   "code_task_run", run_id, {"step": "write_tests",
+                                   "reason": "no_stronger_lane", **route})
+                    else:
+                        method = ("frontier_retry" if _tests_escalation["stronger"]
+                                  else "same_model_correction")
+                        event = ("code_task.step_escalating" if _tests_escalation["stronger"]
+                                 else "code_task.step_retry")
+                        action = "retry_on_frontier" if _tests_escalation["stronger"] else method
+                        emit_event(c, project_id, event, "boss", "code_task_run", run_id,
+                                   {"step": "write_tests", "reason": "no_test_files",
+                                    "action": action, **route})
+                        if test_files:
+                            emit_event(c, project_id, "code_task.step_recovered", "boss",
+                                       "code_task_run", run_id, {"step": "write_tests",
+                                       "recovered_by": method})
             # THE ENGINE COULD NOT RUN (harness_failures): a test author whose sandbox did not
             # start, or whose organisation's policy held it to read-only, wrote nothing because
             # it COULD not. That ends the build with the harness verdict and its evidence — never
@@ -9119,13 +9189,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     "left": _left[:10]})
                 except Exception:  # noqa: BLE001 — the gate still judges what QA left
                     _log_caught(logger)
-            if use_microvm:
-                # Commit ONLY test files — anything else the QA role wrote is discarded.
-                _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
-                _replan_microvm()
-            else:
-                _checkpoint("write_tests")
-            _mark_stage_done("write_tests")
             if not test_files:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_exhausted", "boss",
@@ -9133,7 +9196,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"step": "write_tests",
                                 "reason": ("no_test_files_after_escalation"
                                            if _tests_escalation["stronger"]
-                                           else "no_test_files_no_stronger_lane")})
+                                           else "no_test_files_after_same_model_correction"
+                                           if not _remediation else "no_test_files")})
                     _release(budget, c, project_id, reservation_id, "no independent tests authored", run_id=run_id)
                 _rescue_pr("the test author produced no test files")
                 # WHAT WAS OBSERVED, for the sentence: the author's last words and what it did
@@ -9148,9 +9212,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         c, run_id, project_id,
                         write_tests_exhausted_message(
                             stronger_lane=_tests_escalation["stronger"],
+                            same_lane_retry=not _tests_escalation["skipped"] and not _remediation,
                             last_words=str((r1 or {}).get("summary") or ""),
                             changed=_author_changed),
                         failure_class="needs_human", reason_code="no_test_files")
+            if use_microvm:
+                # Commit ONLY test files — anything else the QA role wrote is discarded.
+                _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
+                _replan_microvm()
+            else:
+                _checkpoint("write_tests")
+            _mark_stage_done("write_tests")
             if not use_microvm:
                 # The placed template tests are frozen with QA's own.
                 test_files = list(test_files) + [p for p in _placed_tpl_tests
@@ -10647,7 +10719,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         gates = {
             "code_written": (bool(impl_files) or (_is_repair_iteration and tests_passed)
                              # A re-check writes nothing; the change is the lineage's.
-                             or (_recheck and bool(_lineage_paths))),
+                             or (_recheck and bool(_lineage_paths or submitted_paths))),
             "written_tests_pass": tests_passed,
             # An existing test that was edited or deleted is the one way a green suite can
             # still mean "we broke something" — so this gate holds at tier 0 too.
@@ -11057,6 +11129,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _items = _acceptance_gate.acceptance_items(_acc_spec)
                     _dropped = _acceptance_gate.items_dropped(_acc_spec)
                     _stack = _acceptance_gate.stack_manifest_check(review_root, _acc_spec)
+                    document_check = (document_route.current()
+                                      if document_route is not None else None)
+                    if document_check is not None and not _source.get("ticket_id"):
+                        record = pushed_review.documentation_acceptance(
+                            _items, stack=_stack, source=_source, dropped=_dropped,
+                            head=reviewed_document_head, paths=submitted_paths, check=document_check,
+                            verdict=verdict, votes=votes, suspect=_suspect_seats)
+                        if record is not None:
+                            return record, 0
                     if not _items:
                         return _acceptance_gate.judge([], None, _stack, root=review_root,
                                                       source=_source), 0
@@ -11133,6 +11214,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _reviewer_independence = {'passed': False, 'level': 'unknown',
                                        'required': 'family', 'reasons': ['not measured']}
 
+        # The document route is re-proven for the record too: a checkout that moved after the
+        # check answered fails the run here (DocumentRouteBroken), never a PR body about it.
+        document_check = document_route.current() if document_route is not None else None
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
@@ -11253,7 +11337,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # WHAT THE APP IS, from its own tree (preview_service.app_tree_kind): a service or
             # library's failed workflow Preview is skipped, never an app's (BOSSAPP-1308).
             "app_kind": _app_kind_of(root, _app_scope),
-            "test_command": test_cmd, "test_exit_code": official_test_exit,
+            **({"documentation_review": {"submitted_paths": submitted_paths,
+                                         "check": document_check.command,
+                                         "exit_code": document_check.exit_code,
+                                         "application_tests": "not_applicable"}}
+               if document_check is not None else {}),
+            "test_command": document_check.command if document_check is not None else test_cmd,
+            "test_exit_code": official_test_exit,
             "verify_cwd": last_verify_cwd,
             "last_verify_output": official_verify_output or last_verify_output,
             "tests": (
