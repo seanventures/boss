@@ -747,6 +747,34 @@ class Settings(BaseSettings):
     bitbucket_webhook_secret: Optional[str] = Field(
         default=None, alias="BOSS_BITBUCKET_WEBHOOK_SECRET"
     )
+    # --- GitLab + Azure DevOps Repos behind RepoHost (BOSSAPP-937 / Kiro gap 4) ------------
+    target_gitlab_namespace: Optional[str] = Field(
+        default=None, alias="BOSS_TARGET_GITLAB_NAMESPACE"
+    )
+    target_gitlab_repo: Optional[str] = Field(
+        default=None, alias="BOSS_TARGET_GITLAB_REPO"
+    )
+    gitlab_webhook_secret: Optional[str] = Field(
+        default=None, alias="BOSS_GITLAB_WEBHOOK_SECRET"
+    )
+    azure_devops_base_url: str = Field(
+        default="https://dev.azure.com", alias="BOSS_AZURE_DEVOPS_BASE_URL"
+    )
+    azure_devops_org: Optional[str] = Field(
+        default=None, alias="BOSS_AZURE_DEVOPS_ORG"
+    )
+    azure_devops_project: Optional[str] = Field(
+        default=None, alias="BOSS_AZURE_DEVOPS_PROJECT"
+    )
+    azure_devops_repo: Optional[str] = Field(
+        default=None, alias="BOSS_AZURE_DEVOPS_REPO"
+    )
+    azure_devops_pat: Optional[str] = Field(
+        default=None, alias="BOSS_AZURE_DEVOPS_PAT"
+    )
+    azure_devops_webhook_secret: Optional[str] = Field(
+        default=None, alias="BOSS_AZURE_DEVOPS_WEBHOOK_SECRET"
+    )
     # --- MCP-backed repo host (BOSS-269): enterprise SSO/OAuth identity path ---------------
     # URL of the MCP server that fronts the SCM with the USER's identity (SSO/OAuth at the
     # gateway) — repo operations become MCP tool calls; no raw API keys in BOSS.
@@ -1306,19 +1334,19 @@ class Settings(BaseSettings):
     # THE CODE GRAPH OF A REGISTERED REPOSITORY (services/knowledge/repo_index.py): every repository
     # registered in a project is cloned (BOSS's own clone path) and parsed into the graph, and its
     # base branch is re-checked; parsing only, no model is called. 0 turns it off install-wide.
-    # AUTONOMOUS AGENTS' TICK (services/ambient/chief_of_staff.py, BOSSAPP-904): the worker's
-    # periodic sweep of every signal adapter (1 on, 0 off) and the Chief of Staff's triage mode:
-    # `off` (the default in v1.0-rc10.11: the feature is a preview) triages nothing, works no
-    # squad item and runs no learning tick; `propose` asks a person on a Needs-you card before
-    # ANY item is handed to an agent, whatever a class's level; `route` honours each class's
-    # autonomy level (A2+ hands straight to the owning agent). The kill switch
+    # AUTONOMOUS AGENTS' TICK (services/ambient/chief_of_staff.py, BOSSAPP-904, BOSSAPP-935):
+    # the worker's periodic sweep of every signal adapter (1 on, 0 off) and the Chief of Staff's
+    # triage mode: blank (default) resolves to `route` (active by default inside the compliance
+    # boundary, with new projects starting in `propose` grace until onboarding is reviewed);
+    # `propose` asks a person on a Needs-you card before ANY item is handed to an agent; `off`
+    # triages nothing, works no squad item and runs no learning tick. The kill switch
     # (BOSS_AMBIENT_DISABLED, Stop all, a project's Stop) wins over all three.
     # BOSS_AMBIENT_SIGNALS (the sweep and Discovery's automatic dossier) and BOSS_AMBIENT_LEARNING
     # (the Recommended-roadmap tick) follow the mode when unset: on unless the mode is `off`.
     # Set either to 1 to run it while the Chief of Staff stays off, or 0 to stop it.
     ambient_signals: Optional[str] = Field(default=None, alias="BOSS_AMBIENT_SIGNALS")
     # Blank (the default) = not pinned here: the mode a person chose in Govern › Autonomy ›
-    # Always-on (system_state 'ambient_mode'), else off. A value pins it (policy.mode_state).
+    # Always-on (system_state 'ambient_mode'), else DEFAULT_COS_MODE ('route'). A value pins it.
     ambient_cos_mode: str = Field(default="", alias="BOSS_AMBIENT_COS")
     ambient_learning: Optional[str] = Field(default=None, alias="BOSS_AMBIENT_LEARNING")
     # Model calls the Chief of Staff may make per project per tick for judgement (an ambiguous

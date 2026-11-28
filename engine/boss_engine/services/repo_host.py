@@ -29,7 +29,7 @@ from .github_adapter import (
     PullRequestResult,
 )
 
-KNOWN_REPO_HOSTS = ("github", "bitbucket", "mcp", "local")
+KNOWN_REPO_HOSTS = ("github", "bitbucket", "gitlab", "azure_devops", "mcp", "local")
 
 
 @runtime_checkable
@@ -107,12 +107,20 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "", *, web_base
             return f"https://x-token-auth:{token}@bitbucket.org/{owner}/{repo}.git"
         return f"https://bitbucket.org/{owner}/{repo}.git"
     if kind == "gitlab":
-        origin = _gitlab_origin()
-        if origin is not None:
-            if token:
-                parts = urlsplit(origin)
-                return f"{parts.scheme}://oauth2:{token}@{parts.netloc}/{owner}/{repo}.git"
-            return f"{origin}/{owner}/{repo}.git"
+        # BOSSAPP-937 + self-hosted GitLab: explicit web_base wins, else _gitlab_origin(), else gitlab.com.
+        base = (str(web_base or "").strip().rstrip("/")) or _gitlab_origin() or "https://gitlab.com"
+        scheme, _, rest = base.partition("://")
+        if token:
+            return f"{scheme}://oauth2:{token}@{rest}/{owner}/{repo}.git"
+        return f"{base}/{owner}/{repo}.git"
+    if kind == "azure_devops":
+        # BOSSAPP-937: Azure DevOps Repos (https://dev.azure.com/{org}/{project}/_git/{repo}).
+        base = (str(web_base or "").strip().rstrip("/")) or "https://dev.azure.com"
+        scheme, _, rest = base.partition("://")
+        org_proj = owner if "/" in owner else f"{owner}/{owner}"
+        if token:
+            return f"{scheme}://pat:{token}@{rest}/{org_proj}/_git/{repo}"
+        return f"{base}/{org_proj}/_git/{repo}"
     if kind == "local":
         # BOSSAPP-918: a bare repository BOSS keeps on this machine; no credential exists.
         from . import local_repo
@@ -132,8 +140,17 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "", *, web_base
 # principal in context, `identity.runs.repo_access` routes the clone through boss-egress instead
 # and no GitHub token exists on this side at all.
 
-_BASIC_USER = {"github": "x-access-token", "bitbucket": "x-token-auth", "gitlab": "oauth2"}
-_HOST_ORIGIN = {"bitbucket": "https://bitbucket.org/"}   # GitHub's comes from github_urls
+_BASIC_USER = {
+    "github": "x-access-token",
+    "bitbucket": "x-token-auth",
+    "gitlab": "oauth2",
+    "azure_devops": "",
+}
+_HOST_ORIGIN = {
+    "bitbucket": "https://bitbucket.org/",
+    "gitlab": "https://gitlab.com/",
+    "azure_devops": "https://dev.azure.com/",
+}   # GitHub's comes from github_urls; self-hosted GitLab/AzDO override via web_base / _gitlab_origin
 
 
 class GitAccess:
@@ -223,8 +240,10 @@ def git_access(host: str, owner: str, repo: str, token: str = "", *, web_base: s
         github_urls.check_send(token, _github_web(web_base), where="git")
     basic = base64.b64encode(f"{_BASIC_USER.get(kind, 'x-access-token')}:{token}".encode()).decode()
     if kind == "gitlab":
-        gl = _gitlab_origin()
+        gl = (str(web_base or "").strip().rstrip("/")) or _gitlab_origin()
         origin = f"{gl}/" if gl else "https://gitlab.com/"
+    elif kind == "azure_devops" and str(web_base or "").strip():
+        origin = str(web_base).strip().rstrip("/") + "/"
     else:
         origin = _HOST_ORIGIN.get(kind) or _github_web(web_base) + "/"
     return GitAccess(url, git_config_env([(f"http.{origin}.extraheader", f"AUTHORIZATION: basic {basic}")]),
@@ -260,6 +279,12 @@ def make_repo_host(settings, *, host: Optional[str] = None,
     if kind == "bitbucket":
         from .bitbucket_adapter import BitbucketAdapter
         return BitbucketAdapter(settings, workspace=owner, repo_slug=repo)
+    if kind == "gitlab":
+        from .gitlab_adapter import GitLabAdapter
+        return GitLabAdapter(settings, owner=owner, repo=repo)
+    if kind == "azure_devops":
+        from .azure_devops_adapter import AzureDevOpsAdapter
+        return AzureDevOpsAdapter(settings, owner=owner, repo=repo)
     if kind == "mcp":
         # SSO/OAuth identity path (BOSS-269): operations via the user's MCP gateway.
         from .mcp_repo_host import McpRepoHost

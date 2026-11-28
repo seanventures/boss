@@ -7162,6 +7162,52 @@ async def receive_bitbucket_webhook(request: Request):
     )
 
 
+@app.post("/v1/webhooks/gitlab", status_code=202)
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
+async def receive_gitlab_webhook(request: Request):
+    """GitLab ingress (BOSSAPP-937): X-Gitlab-Token or HMAC verified, MR/note/pipeline/push
+    normalized to canonical repo-host events."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(connection, "gitlab", raw_body, headers)
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] in {"unrouted", "ignored"}:
+        return Response(status_code=204)
+    return JSONResponse(
+        status_code=202,
+        content=InboundWebhookResponse(**result).model_dump(mode="json"),
+    )
+
+
+@app.post("/v1/webhooks/azure-devops", status_code=202)
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
+async def receive_azure_devops_webhook(request: Request):
+    """Azure DevOps Repos ingress (BOSSAPP-937): HMAC or X-Azure-DevOps-Token verified,
+    git.pullrequest.* and git.push normalized to canonical repo-host events."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(connection, "azure_devops", raw_body, headers)
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] in {"unrouted", "ignored"}:
+        return Response(status_code=204)
+    return JSONResponse(
+        status_code=202,
+        content=InboundWebhookResponse(**result).model_dump(mode="json"),
+    )
+
+
 @app.post("/v1/webhooks/plane", status_code=202)
 @public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.plane_webhook_hmac)
 async def receive_plane_webhook(request: Request):
